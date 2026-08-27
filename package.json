@@ -25,6 +25,7 @@
     "db:seed": "npm run db:seed --workspace=apps/backend",
     "db:seed:scenarios": "npm run db:seed:scenarios --workspace=apps/backend",
     "scenarios:generate": "npm run scenarios:generate --workspace=apps/backend --",
+    "cards:build": "python3 scripts/build-demo-cards.py",
     "codes": "tsx scripts/demo-access-codes.ts",
     "codes:generate": "tsx scripts/demo-access-codes.ts generate",
     "codes:stats": "tsx scripts/demo-access-codes.ts stats",
