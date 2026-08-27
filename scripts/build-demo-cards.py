@@ -119,12 +119,6 @@ def load_reference(path):
     return {"films": films, "films_terse": films_terse, "cinemas_summary": cinemas_summary}
 
 
-def load_catalog(path):
-    with open(path, encoding="utf-8") as handle:
-        catalog = json.load(handle)
-    return {entry["id"]: entry for entry in catalog.get("scenarios", [])}
-
-
 def wrapped(c, text, font, size, width):
     return simpleSplit(text, font, size, width)
 
@@ -161,7 +155,7 @@ def draw_star(c, cx, cy, radius):
     c.drawPath(path, stroke=0, fill=1)
 
 
-def draw_card(c, origin_y, scenario, extras, reference):
+def draw_card(c, origin_y, extras, reference):
     """Draws one half-letter card with its bottom-left corner at (0, origin_y)."""
     left = MARGIN
     right = PAGE_W - MARGIN
@@ -290,24 +284,15 @@ def draw_cut_line(c):
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--catalog", default="apps/backend/scenarios/catalog.json")
     parser.add_argument("--dataset", default="apps/backend/scenarios/data/demo_uist2026_detroit.json")
     parser.add_argument("--out", default="docs/scenarios/uist2026-demo-cards.pdf")
     args = parser.parse_args()
 
-    scenarios = load_catalog(args.catalog)
     reference = load_reference(args.dataset)
-    printed = [card for page in CARD_PAGES for card in page]
-    missing = [card for card in printed if card not in scenarios]
-    if missing:
-        print(f"[cards] catalog is missing: {', '.join(missing)}", file=sys.stderr)
-        return 1
 
-    # A demo scenario with no card would go undemonstrated; a card with no
-    # scenario would send someone to a session that cannot be started.
-    uncarded = [key for key in scenarios if key.startswith("demo_") and key not in printed]
-    if uncarded:
-        print(f"[cards] catalog has demo scenarios with no card: {', '.join(uncarded)}", file=sys.stderr)
+    missing = [card for page in CARD_PAGES for card in page if card not in CARD_EXTRAS]
+    if missing:
+        print(f"[cards] no copy written for: {', '.join(missing)}", file=sys.stderr)
         return 1
 
     os.makedirs(os.path.dirname(args.out) or ".", exist_ok=True)
@@ -316,15 +301,13 @@ def main():
     c.setAuthor("MAESTRO")
 
     for page_index, page in enumerate(CARD_PAGES):
-        for slot, scenario_id in enumerate(page):
+        for slot, card_id in enumerate(page):
             # slot 0 is the top half of the sheet, slot 1 the bottom.
             origin_y = CARD_H if slot == 0 else 0
-            slack = draw_card(
-                c, origin_y, scenarios[scenario_id], CARD_EXTRAS[scenario_id], reference
-            )
-            print(f"[cards] {scenario_id:<28} vertical slack {slack:6.1f} pt")
+            slack = draw_card(c, origin_y, CARD_EXTRAS[card_id], reference)
+            print(f"[cards] {card_id:<28} vertical slack {slack:6.1f} pt")
             if slack < 0:
-                print(f"[cards] {scenario_id} overflows by {-slack:.1f} pt", file=sys.stderr)
+                print(f"[cards] {card_id} overflows by {-slack:.1f} pt", file=sys.stderr)
         draw_cut_line(c)
         if page_index < len(CARD_PAGES) - 1:
             c.showPage()

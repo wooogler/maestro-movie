@@ -120,6 +120,12 @@ export const CONDITION_SELECTION_OPTIONS: readonly ConditionSelectionOption[] =
 
 export const DEFAULT_STUDY_MODE: StudyModeId = 'basic-tuning-voice-off';
 
+/**
+ * The demo runs one open world. There is no picker: the printed cards carry the
+ * suggested scenarios, and a visitor is free to ignore them.
+ */
+export const DEMO_SCENARIO_ID = 'demo_open_booking';
+
 export function sanitizeSetupStudyMode(mode: StudyModeId): StudyModeId {
   return mode;
 }

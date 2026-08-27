@@ -620,8 +620,12 @@ export function FullTuningSplitView({
     voiceError,
     inputDisabled,
   });
-  const containerClass =
-    'mx-auto grid h-full w-full max-w-6xl min-h-0 grid-cols-1 grid-rows-[minmax(0,3fr)_minmax(0,2fr)] gap-4 lg:grid-cols-[minmax(0,3fr)_minmax(0,2fr)] lg:grid-rows-1';
+  // Collapsing the conversation has to hand its space back. Leaving an empty
+  // column beside the booking UI is worse than leaving the conversation open,
+  // and on a phone the booking UI needs the whole screen.
+  const containerClass = conversationCollapsed
+    ? 'mx-auto grid h-full w-full max-w-6xl min-h-0 grid-cols-1 grid-rows-[minmax(0,1fr)_auto] gap-4'
+    : 'mx-auto grid h-full w-full max-w-6xl min-h-0 grid-cols-1 grid-rows-[minmax(0,3fr)_minmax(0,2fr)] gap-4 lg:grid-cols-[minmax(0,3fr)_minmax(0,2fr)] lg:grid-rows-1';
   const handleTimelineScroll = useCallback(() => {
     syncActiveSnapshotToScroll();
   }, [syncActiveSnapshotToScroll]);
@@ -827,7 +831,9 @@ export function FullTuningSplitView({
               <button
                 type="button"
                 onClick={() => setConversationCollapsed((current) => !current)}
-                className="flex items-center gap-4 border-b border-dark-border px-4 py-3 text-left"
+                className={`flex items-center justify-between gap-4 px-4 py-3 text-left ${
+                  conversationCollapsed ? '' : 'border-b border-dark-border'
+                }`}
                 aria-expanded={!conversationCollapsed}
                 aria-controls="full-tuning-conversation-panel"
               >
@@ -846,6 +852,9 @@ export function FullTuningSplitView({
                     </div>
                   ) : null}
                 </div>
+                <span className="shrink-0 text-xs font-medium text-fg-muted">
+                  {conversationCollapsed ? 'Show' : 'Hide'}
+                </span>
               </button>
 
               <div className={conversationCollapsed ? 'hidden' : 'relative min-h-0 flex-1'}>

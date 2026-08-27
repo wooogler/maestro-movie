@@ -18,7 +18,7 @@ import { api, describeApiErrorCode, STUDY_SESSION_INVALID_EVENT } from './api/cl
 import {
   clearStoredStudySession,
   getStoredApiKey,
-  getStoredDemoMode,
+  getStoredDemoModePreference,
   getStoredStudySession,
   setStoredApiKey,
   setStoredDemoMode,
@@ -83,9 +83,13 @@ function DemoModeEntry({ onEnter }: { onEnter: () => void }) {
 
 function App() {
   const [theme, setTheme] = useState<Theme>(getInitialTheme);
-  const [demoMode, setDemoMode] = useState<boolean>(
-    () => getStoredDemoMode() || isDemoStudyMode(getStoredStudySession()?.studyMode)
-  );
+  // The booth is the common case, so the app opens in demo mode unless a session
+  // is already running as a study condition or the visitor deliberately left it.
+  const [demoMode, setDemoMode] = useState<boolean>(() => {
+    const session = getStoredStudySession();
+    if (session) return isDemoStudyMode(session.studyMode);
+    return getStoredDemoModePreference() ?? true;
+  });
   const [apiKey, setApiKey] = useState<string>(() => getStoredApiKey());
   // Deliberately not persisted: an access code is single-use, so restoring one
   // from a previous visit would only ever produce "already used".

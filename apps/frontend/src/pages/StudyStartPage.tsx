@@ -8,6 +8,7 @@ import {
 } from '../api/client';
 import {
   CONDITION_SELECTION_OPTIONS,
+  DEMO_SCENARIO_ID,
   getInterfaceCondition,
   getInteractionMode,
   getStudyModeFromConditionSelection,
@@ -224,6 +225,14 @@ export function StudyStartPage({
   }, [micCheckStatus, speakerCheckStatus]);
 
   const navigateToTaskReview = () => {
+    // A demo visitor picks nothing: there is one world, and the printed card in
+    // their hand is the scenario. Selecting it here lets the review page start
+    // the session immediately instead of showing a briefing nobody reads.
+    if (demoMode) {
+      onScenarioChange(DEMO_SCENARIO_ID);
+      navigate('/task-review');
+      return;
+    }
     if (!selectedScenarioId) return;
     navigate('/task-review');
   };

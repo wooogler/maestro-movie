@@ -2027,7 +2027,20 @@ export function ChatPage({
   const carouselTransition =
     'transform 860ms cubic-bezier(0.22, 1, 0.36, 1), opacity 760ms cubic-bezier(0.22, 1, 0.36, 1)';
   const hasScenarioBriefing = scenarioStory.length > 0 || scenarioPreferenceTypes.length > 0;
-  const showScenarioBriefing = hasScenarioBriefing && scenarioBriefingVisible;
+  // In the demo the side slot is not a briefing: the visitor's scenario is on
+  // paper in their hand. The panel shows what the agent has understood instead,
+  // which is the half of the system that is otherwise invisible.
+  const sidePanelAvailable = showMemoryPanel || hasScenarioBriefing;
+  const sidePanelVisible = sidePanelAvailable && scenarioBriefingVisible;
+  const showScenarioBriefing = !showMemoryPanel && sidePanelVisible;
+  const copyGuarded = SCENARIO_BRIEFING_COPY_GUARD_ENABLED && !showMemoryPanel;
+  const sidePanelToggleLabel = showMemoryPanel
+    ? sidePanelVisible
+      ? 'Hide Memory'
+      : 'Show Memory'
+    : sidePanelVisible
+    ? 'Hide Scenario'
+    : 'Show Scenario';
   const canDownloadLog = Boolean(studySession?.interactionLogFile);
   const canDownloadTrace = Boolean(studySession?.interactionLogFile);
 
@@ -2093,17 +2106,15 @@ export function ChatPage({
   return (
     <div className="relative h-screen bg-dark">
       <div className="flex h-full min-h-0">
-      {showScenarioBriefing && (
+      {sidePanelVisible && (
         <aside
           className="relative hidden shrink-0 border-r border-dark-border bg-dark-light lg:block"
           style={{ width: scenarioPanelWidthPx }}
         >
           <div
-            className={`relative h-full overflow-y-auto p-4 ${
-              SCENARIO_BRIEFING_COPY_GUARD_ENABLED ? 'select-none' : ''
-            }`}
+            className={`relative h-full overflow-y-auto p-4 ${copyGuarded ? 'select-none' : ''}`}
             style={
-              SCENARIO_BRIEFING_COPY_GUARD_ENABLED
+              copyGuarded
                 ? {
                     WebkitTouchCallout: 'none',
                     WebkitUserSelect: 'none',
@@ -2111,28 +2122,24 @@ export function ChatPage({
                   }
                 : undefined
             }
-            onCopyCapture={
-              SCENARIO_BRIEFING_COPY_GUARD_ENABLED ? preventDefault : undefined
-            }
-            onCutCapture={
-              SCENARIO_BRIEFING_COPY_GUARD_ENABLED ? preventDefault : undefined
-            }
-            onContextMenu={
-              SCENARIO_BRIEFING_COPY_GUARD_ENABLED ? preventDefault : undefined
-            }
-            onDragStart={
-              SCENARIO_BRIEFING_COPY_GUARD_ENABLED ? preventDefault : undefined
-            }
+            onCopyCapture={copyGuarded ? preventDefault : undefined}
+            onCutCapture={copyGuarded ? preventDefault : undefined}
+            onContextMenu={copyGuarded ? preventDefault : undefined}
+            onDragStart={copyGuarded ? preventDefault : undefined}
           >
-            <ScenarioBriefing
-              title={scenarioTitle}
-              background={scenarioBackground}
-              story={scenarioStory}
-              stepBriefs={scenarioStepBriefs}
-              narratorPreferenceTypes={scenarioPreferenceTypes}
-              seatRows={scenarioSeatRows}
-            />
-            {SCENARIO_BRIEFING_COPY_GUARD_ENABLED ? (
+            {showMemoryPanel ? (
+              <AgentMemoryPanel snapshot={agentMemory} currentStage={currentStage} />
+            ) : (
+              <ScenarioBriefing
+                title={scenarioTitle}
+                background={scenarioBackground}
+                story={scenarioStory}
+                stepBriefs={scenarioStepBriefs}
+                narratorPreferenceTypes={scenarioPreferenceTypes}
+                seatRows={scenarioSeatRows}
+              />
+            )}
+            {copyGuarded ? (
               <div
                 aria-hidden="true"
                 className="pointer-events-none absolute inset-0 z-10 bg-transparent"
@@ -2171,13 +2178,13 @@ export function ChatPage({
             >
               Reset
             </button>
-            {hasScenarioBriefing ? (
+            {sidePanelAvailable ? (
               <button
                 type="button"
                 onClick={handleScenarioBriefingToggle}
-                className="px-3 py-1 text-xs rounded border border-dark-border text-fg hover:text-fg-strong hover:border-primary"
+                className="hidden px-3 py-1 text-xs rounded border border-dark-border text-fg hover:text-fg-strong hover:border-primary lg:inline-block"
               >
-                {showScenarioBriefing ? 'Hide Scenario' : 'Show Scenario'}
+                {sidePanelToggleLabel}
               </button>
             ) : null}
             <button
@@ -2240,6 +2247,16 @@ export function ChatPage({
           have needed them.
         */}
         <div ref={interactionScopeRef} className="flex min-h-0 flex-1 flex-col">
+        {showMemoryPanel && (
+          <details className="shrink-0 border-b border-dark-border bg-dark-light px-4 py-2 lg:hidden">
+            <summary className="cursor-pointer text-sm font-semibold text-fg-strong">
+              What the agent remembers
+            </summary>
+            <div className="mt-3 max-h-[45vh] overflow-y-auto overscroll-contain pr-1">
+              <AgentMemoryPanel snapshot={agentMemory} currentStage={currentStage} />
+            </div>
+          </details>
+        )}
         {showScenarioBriefing && (
           <div className="shrink-0 border-b border-dark-border bg-dark-light px-4 py-3 lg:hidden">
             <ScenarioBriefing
@@ -2255,8 +2272,7 @@ export function ChatPage({
         )}
 
         {usesSplitInterface ? (
-          <div className={showMemoryPanel ? 'flex min-h-0 flex-1' : 'contents'}>
-            <FullTuningSplitView
+          <FullTuningSplitView
               messages={messages}
               activeSpec={activeSpec}
               isAgentTyping={isAgentTyping}
@@ -2278,12 +2294,6 @@ export function ChatPage({
               onBack={handleBack}
               onConfirm={handleConfirm}
             />
-            {showMemoryPanel && (
-              <aside className="hidden w-[21rem] shrink-0 overflow-y-auto border-l border-dark-border bg-dark px-4 py-4 xl:block">
-                <AgentMemoryPanel snapshot={agentMemory} currentStage={currentStage} />
-              </aside>
-            )}
-          </div>
         ) : viewMode === 'chat' ? (
           <MessageList
             messages={messages}

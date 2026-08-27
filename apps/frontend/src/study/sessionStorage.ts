@@ -159,6 +159,21 @@ export function clearStoredApiKey(): void {
   }
 }
 
+/**
+ * Tri-state: null means the visitor has never chosen, which lets the app open in
+ * demo mode by default without overriding someone who deliberately left it.
+ */
+export function getStoredDemoModePreference(): boolean | null {
+  if (typeof window === 'undefined') return null;
+  try {
+    const raw = window.sessionStorage.getItem(DEMO_MODE_STORAGE_KEY);
+    if (raw === null) return null;
+    return raw === '1';
+  } catch {
+    return null;
+  }
+}
+
 export function getStoredDemoMode(): boolean {
   if (typeof window === 'undefined') return false;
   try {
