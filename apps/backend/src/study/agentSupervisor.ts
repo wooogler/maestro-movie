@@ -4,12 +4,31 @@ import { spawn, type ChildProcess } from 'child_process';
 import { DEMO_STUDY_MODE } from './modes';
 import type { StudyModeConfig, StudyModeId } from './types';
 
+type StartAgentParams = Parameters<typeof startAgentForSession>[0];
+
 interface AgentProcessHandle {
   child: ChildProcess;
   relaySessionId: string;
+  /** Kept so a crashed agent can be respawned with identical configuration. */
+  params: StartAgentParams;
+  restartCount: number;
+  startedAt: number;
+  restartTimer?: NodeJS.Timeout;
+  stopping?: boolean;
 }
 
 const handles = new Map<string, AgentProcessHandle>();
+/**
+ * A crashed agent used to be a dead end: `child.on('exit')` wrote one stderr
+ * line and nothing restarted it, nothing told the host, and the participant was
+ * left with a session whose agent would never answer again. Restarts are
+ * bounded so a deterministic startup failure (port conflict, missing binary)
+ * fails loudly instead of looping forever.
+ */
+const MAX_AGENT_RESTARTS = 3;
+const AGENT_RESTART_BASE_DELAY_MS = 1_000;
+/** Past this, the process is considered to have started successfully. */
+const AGENT_HEALTHY_UPTIME_MS = 60_000;
 const WORKSPACE_ROOT = path.resolve(__dirname, '../../../..');
 const AGENT_ENTRYPOINT = path.resolve(WORKSPACE_ROOT, 'apps/tuning-agent/src/index.ts');
 const AGENT_DIST_ENTRYPOINT = path.resolve(WORKSPACE_ROOT, 'apps/tuning-agent/dist/index.js');
@@ -101,6 +120,8 @@ export function startAgentForSession(
     studyMode: StudyModeId;
     modeConfig: StudyModeConfig;
     apiKey?: string;
+    /** Internal: how many times this session's agent has already been respawned. */
+    restartCount?: number;
   }
 ): void {
   const {
@@ -167,24 +188,68 @@ export function startAgentForSession(
   child.on('exit', (code, signal) => {
     const handle = handles.get(sessionId);
     const wasCurrent = handle?.child === child;
-    if (wasCurrent) {
-      handles.delete(sessionId);
-    }
-    // A crash on startup (port conflict, missing dependency) would otherwise
-    // leave the session with a silently dead agent.
-    if (wasCurrent && code !== 0 && code !== null) {
+    if (!wasCurrent) return;
+
+    const intentional = handle?.stopping === true || signal === 'SIGTERM';
+    const cleanExit = code === 0;
+    if (code !== 0 && code !== null) {
       process.stderr.write(`${prefix} Agent process exited with code ${code}\n`);
-    } else if (wasCurrent && signal && signal !== 'SIGTERM') {
+    } else if (signal && signal !== 'SIGTERM') {
       process.stderr.write(`${prefix} Agent process was killed by ${signal}\n`);
     }
+
+    if (intentional || cleanExit) {
+      handles.delete(sessionId);
+      return;
+    }
+
+    // A process that stayed up long enough is treated as having started
+    // successfully, so a late crash gets a fresh restart budget.
+    const ranHealthily = Date.now() - handle.startedAt >= AGENT_HEALTHY_UPTIME_MS;
+    const restartCount = ranHealthily ? 0 : handle.restartCount;
+
+    if (restartCount >= MAX_AGENT_RESTARTS) {
+      process.stderr.write(
+        `${prefix} Agent process failed ${restartCount} times; giving up. ` +
+          'The session will have no agent until it is reset.\n'
+      );
+      handles.delete(sessionId);
+      return;
+    }
+
+    const delayMs = AGENT_RESTART_BASE_DELAY_MS * 2 ** restartCount;
+    process.stderr.write(
+      `${prefix} Restarting agent process in ${delayMs}ms ` +
+        `(attempt ${restartCount + 1}/${MAX_AGENT_RESTARTS})\n`
+    );
+    const restartTimer = setTimeout(() => {
+      const current = handles.get(sessionId);
+      // Only restart if this handle is still the live one and nothing asked us
+      // to stop in the meantime.
+      if (current?.child !== child || current?.stopping) return;
+      handles.delete(sessionId);
+      startAgentForSession({ ...handle.params, restartCount: restartCount + 1 });
+    }, delayMs);
+    restartTimer.unref?.();
+    handles.set(sessionId, { ...handle, restartTimer });
   });
 
-  handles.set(sessionId, { child, relaySessionId });
+  handles.set(sessionId, {
+    child,
+    relaySessionId,
+    params,
+    restartCount: params.restartCount ?? 0,
+    startedAt: Date.now(),
+  });
 }
 
 export function stopAgentForSession(sessionId: string): void {
   const handle = handles.get(sessionId);
   if (!handle) return;
+  // Mark before deleting so an exit event racing with this call does not read
+  // the stop as a crash and respawn the process we just asked to go away.
+  handle.stopping = true;
+  if (handle.restartTimer) clearTimeout(handle.restartTimer);
   handles.delete(sessionId);
   if (handle.child.exitCode === null && handle.child.signalCode === null) {
     handle.child.kill('SIGTERM');

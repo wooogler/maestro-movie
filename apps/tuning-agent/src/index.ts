@@ -1803,6 +1803,30 @@ async function main(): Promise<void> {
   });
 
   relay.messages.subscribe(handleInbound);
+  relay.lifecycle.subscribe((event) => {
+    monitor.pushEvent(`relay.${event.type}`, event);
+    if (event.type === 'reconnected') {
+      // The socket is new, so the host's view and ours may have diverged while
+      // we were away. Re-establish the session rather than resuming blind.
+      sessionReady = false;
+      monitor.updateState({ relayConnected: true, sessionReady: false, phase: 'relay-connected' });
+      void ensureSessionReady('relay-reconnected').catch((error) => {
+        monitor.pushEvent('relay.resync_failed', {
+          message: error instanceof Error ? error.message : String(error),
+        });
+      });
+      return;
+    }
+    if (event.type === 'disconnected') {
+      monitor.updateState({ relayConnected: false });
+      // Nothing will report playback over a dead socket.
+      speechBarrier.release('relay-disconnected');
+      return;
+    }
+    if (event.type === 'reconnect-failed') {
+      enterFatalState('relay-reconnect-failed', new Error(event.message));
+    }
+  });
   await ensureRelayConnected();
   monitor.updateState({
     waitingForHost: !hostConnectionAvailable,
