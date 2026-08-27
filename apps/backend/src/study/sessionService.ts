@@ -47,6 +47,12 @@ interface CreateSessionInput {
    * (see `sessionApiKeys`); never persisted, logged, or returned to the client.
    */
   apiKey?: string;
+  /**
+   * Session id reserved by the caller. Access-code redemption binds a code to an
+   * id before the session exists, so that a bad code costs no agent process and
+   * no database clone.
+   */
+  presetSessionId?: string;
 }
 
 export class StudySessionCapacityError extends Error {
@@ -539,6 +545,18 @@ function normalizeLoggingParticipantId(raw: unknown): string | undefined {
   return normalized;
 }
 
+/**
+ * Mints a study session id without creating the session.
+ *
+ * Access-code redemption needs an id to bind the code to *before* the session
+ * exists, so that a bad code is rejected without having spawned an agent
+ * process or cloned a database. The caller passes the reserved id back in as
+ * `presetSessionId`.
+ */
+export function allocateStudySessionId(): string {
+  return `st_${randomUUID().replace(/-/g, '')}`;
+}
+
 export function createStudySession(input: CreateSessionInput): CreateSessionResult {
   const scenario = getScenarioById(input.scenarioId);
   if (!scenario) {
@@ -585,7 +603,7 @@ export function createStudySession(input: CreateSessionInput): CreateSessionResu
   }
 
   const templateDbPath = ensureScenarioTemplateDb(scenario);
-  const sessionId = `st_${randomUUID().replace(/-/g, '')}`;
+  const sessionId = input.presetSessionId ?? allocateStudySessionId();
   const relaySessionId = `relay_${sessionId}`;
   const createdAt = now().toISOString();
   const ttlMs = studyMode === DEMO_STUDY_MODE ? DEMO_SESSION_TTL_MS : SESSION_TTL_MS;

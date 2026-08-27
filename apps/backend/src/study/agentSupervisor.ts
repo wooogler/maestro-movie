@@ -19,6 +19,13 @@ interface AgentProcessHandle {
 
 const handles = new Map<string, AgentProcessHandle>();
 /**
+ * Opt-in for a private lab deployment, where every session is created by the
+ * researcher and inheriting the operator key is intended. Public deployments
+ * leave this off; see the OPENAI_API_KEY note in the spawn env below.
+ */
+const ALLOW_OPERATOR_KEY_FALLBACK =
+  process.env.ALLOW_OPERATOR_KEY_FALLBACK?.trim() === 'true';
+/**
  * A crashed agent used to be a dead end: `child.on('exit')` wrote one stderr
  * line and nothing restarted it, nothing told the host, and the participant was
  * left with a session whose agent would never answer again. Restarts are
@@ -164,9 +171,19 @@ export function startAgentForSession(
       AGENT_MONITOR_ENABLED: isMonitorEnabledForSession(studyMode) ? 'true' : 'false',
       // User-provided key for public demo sessions. Never log this value.
       AGENT_OPENAI_API_KEY: apiKey ?? '',
-      // A demo session runs on the visitor's key only: drop the inherited
-      // operator key so the agent cannot silently fall back to it.
-      ...(studyMode === DEMO_STUDY_MODE ? { OPENAI_API_KEY: apiKey ?? '' } : {}),
+      // A session runs on the key it earned: the visitor's own, or the operator
+      // key attached server-side by a redeemed access code. The inherited
+      // operator key is dropped so the agent cannot silently fall back to it.
+      //
+      // This used to apply to demo sessions only. That was safe while the
+      // operator key was kept out of the container, but the access-code flow
+      // puts OPENAI_API_KEY in the backend environment, and `POST
+      // /study/sessions` is unauthenticated — so an anonymous caller could ask
+      // for a non-demo studyMode and get an agent spending the operator key.
+      // A private lab deployment opts back in with ALLOW_OPERATOR_KEY_FALLBACK.
+      ...(studyMode === DEMO_STUDY_MODE || !ALLOW_OPERATOR_KEY_FALLBACK
+        ? { OPENAI_API_KEY: apiKey ?? '' }
+        : {}),
     },
     stdio: ['ignore', 'pipe', 'pipe'],
   });

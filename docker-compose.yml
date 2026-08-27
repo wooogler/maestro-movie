@@ -20,11 +20,36 @@ services:
       - AGENT_ENABLE_OPENAI=${AGENT_ENABLE_OPENAI:-true}
       - AGENT_OPENAI_MODEL=${AGENT_OPENAI_MODEL:-gpt-5.4}
       - AGENT_OPENAI_API_MODE=${AGENT_OPENAI_API_MODE:-responses}
-      # OPENAI_API_KEY is intentionally NOT passed to the backend. In a public
-      # demo every visitor supplies their own key, and an operator key would be
-      # drainable through the unauthenticated /speech/synthesize-preview route.
-      # Uncomment only for a private lab deployment:
-      # - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+      # OPENAI_API_KEY is only needed when conference access codes are enabled:
+      # redeeming a single-use code attaches this key to that one session,
+      # server-side, so the visitor never sees it. Leave it empty and every
+      # visitor must bring their own key.
+      #
+      # Before setting it, read the guard rails, because an operator key here is
+      # otherwise drainable:
+      #   - use a key minted for the demo alone, in its own OpenAI project with
+      #     a hard budget limit set in the dashboard. That project cap is the
+      #     only ceiling that survives a bug in this application.
+      #   - keep SPEECH_PREVIEW_ALLOW_ENV_KEY unset: it would let the
+      #     unauthenticated /speech/synthesize-preview route spend this key.
+      #   - keep ALLOW_OPERATOR_KEY_FALLBACK unset: POST /study/sessions is
+      #     unauthenticated and only demo sessions require a key, so with the
+      #     fallback on, anyone could create a non-demo session and spend it.
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+      - DEMO_ACCESS_CODES_ENABLED=${DEMO_ACCESS_CODES_ENABLED:-false}
+      - DEMO_ACCESS_CODE_TTL_HOURS=${DEMO_ACCESS_CODE_TTL_HOURS:-24}
+      - DEMO_ACCESS_MAX_FAILURES_PER_IP=${DEMO_ACCESS_MAX_FAILURES_PER_IP:-10}
+      - DEMO_ACCESS_MAX_GLOBAL_FAILURES=${DEMO_ACCESS_MAX_GLOBAL_FAILURES:-100}
+      # Realtime voice configuration. Baked into the ephemeral client secret the
+      # backend mints; the browser never sees the real key.
+      - OPENAI_REALTIME_MODEL=${OPENAI_REALTIME_MODEL:-gpt-realtime-2.1}
+      - OPENAI_REALTIME_VOICE=${OPENAI_REALTIME_VOICE:-alloy}
+      - OPENAI_REALTIME_SPEED=${OPENAI_REALTIME_SPEED:-1.5}
+      - OPENAI_REALTIME_STT_MODEL=${OPENAI_REALTIME_STT_MODEL:-gpt-4o-mini-transcribe}
+      - OPENAI_REALTIME_VAD_THRESHOLD=${OPENAI_REALTIME_VAD_THRESHOLD:-0.5}
+      - OPENAI_REALTIME_VAD_SILENCE_MS=${OPENAI_REALTIME_VAD_SILENCE_MS:-900}
+      - OPENAI_REALTIME_VAD_PREFIX_MS=${OPENAI_REALTIME_VAD_PREFIX_MS:-300}
+      - REALTIME_TOKEN_TTL_SECONDS=${REALTIME_TOKEN_TTL_SECONDS:-600}
       # Relay session logs stay off; demo mode writes no logs of any kind.
       - AGENT_RELAY_LOG_ENABLED=${AGENT_RELAY_LOG_ENABLED:-false}
       # Max simultaneous public demo sessions. Demo sessions never evict each
@@ -38,6 +63,9 @@ services:
       - AGENT_MONITOR_ENABLED=${AGENT_MONITOR_ENABLED:-false}
     volumes:
       - ./apps/backend/data:/app/apps/backend/data:z
+      # Access codes live here; without this a rebuild would invalidate every
+      # printed card mid-event.
+      - ./apps/backend/.runtime:/app/apps/backend/.runtime:z
       - ./logs/interaction:/app/logs/interaction:z
       - ./logs/trace:/app/logs/trace:z
       - ./logs/survey:/app/logs/survey:z

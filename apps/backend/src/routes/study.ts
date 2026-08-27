@@ -6,12 +6,22 @@ import {
   listScenarios,
   StudySessionCapacityError,
 } from '../study/sessionService';
+import { allocateStudySessionId } from '../study/sessionService';
 import {
   getStudyModeConfig,
   isStudyModeId,
   isDemoStudyMode,
   DEFAULT_STUDY_MODE,
 } from '../study/modes';
+import {
+  DEMO_ACCESS_CODES_ENABLED,
+  redeemAccessCode,
+} from '../study/demoAccessCodes';
+import {
+  checkRedemptionAllowed,
+  recordRedemptionFailure,
+  recordRedemptionSuccess,
+} from '../study/redemptionLimiter';
 import {
   appendInteractionLog,
   hasInteractionLogging,
@@ -221,6 +231,7 @@ export async function studyRoutes(fastify: FastifyInstance): Promise<void> {
       participantId?: unknown;
       loggingParticipantId?: unknown;
       apiKey?: unknown;
+      accessCode?: unknown;
     };
     const scenarioId = typeof body.scenarioId === 'string' ? body.scenarioId.trim() : '';
     const studyModeInput = typeof body.studyMode === 'string' ? body.studyMode.trim() : undefined;
@@ -231,7 +242,11 @@ export async function studyRoutes(fastify: FastifyInstance): Promise<void> {
         ? body.loggingParticipantId.trim()
         : undefined;
     // Visitor-supplied OpenAI key. Held in memory only and never echoed back.
-    const apiKey = typeof body.apiKey === 'string' && body.apiKey.trim() ? body.apiKey.trim() : undefined;
+    let apiKey = typeof body.apiKey === 'string' && body.apiKey.trim() ? body.apiKey.trim() : undefined;
+    const accessCode =
+      typeof body.accessCode === 'string' && body.accessCode.trim()
+        ? body.accessCode.trim()
+        : undefined;
 
     if (!scenarioId) {
       return reply.code(400).send({ error: 'scenarioId is required' });
@@ -239,16 +254,88 @@ export async function studyRoutes(fastify: FastifyInstance): Promise<void> {
     if (studyModeInput && !isStudyModeId(studyModeInput)) {
       return reply.code(400).send({ error: 'Invalid studyMode' });
     }
-    // A demo session must run on the visitor's own key. Without this guard an
+    const isDemo = isDemoStudyMode(studyModeInput ?? '');
+    let presetSessionId: string | undefined;
+
+    // A conference access code is the second way into a demo session: it grants
+    // the operator key for exactly one session, server-side, so the visitor
+    // never sees it. The code is consumed here and nowhere else.
+    let redeemedAccessCode: string | undefined;
+    if (accessCode) {
+      if (!isDemo) {
+        return reply.code(400).send({
+          error: 'ACCESS_CODE_NOT_APPLICABLE',
+          message: 'Access codes only apply to demo sessions.',
+        });
+      }
+      if (!DEMO_ACCESS_CODES_ENABLED) {
+        return reply.code(403).send({
+          error: 'ACCESS_CODES_DISABLED',
+          message: 'Access codes are not enabled on this deployment.',
+        });
+      }
+      const operatorKey = process.env.OPENAI_API_KEY?.trim();
+      if (!operatorKey) {
+        return reply.code(503).send({
+          error: 'OPERATOR_KEY_UNAVAILABLE',
+          message: 'This deployment has no operator key configured.',
+        });
+      }
+
+      const ip = request.ip;
+      const gate = checkRedemptionAllowed(ip);
+      if (gate.blocked) {
+        const retryAfterSeconds = Math.ceil(gate.retryAfterMs / 1000);
+        reply.header('retry-after', String(retryAfterSeconds));
+        return reply.code(429).send({
+          error: 'ACCESS_CODE_RATE_LIMITED',
+          message:
+            gate.scope === 'global'
+              ? 'Too many failed code attempts right now. Please ask the presenter for help.'
+              : 'Too many incorrect codes from this device. Please wait a few minutes.',
+          retryAfterSeconds,
+        });
+      }
+
+      // A session id is needed to bind the redemption, and the redemption must
+      // happen before the session is created so a failed code costs nothing.
+      // Pre-allocating the id keeps both true.
+      const pendingSessionId = allocateStudySessionId();
+      const redemption = redeemAccessCode(accessCode, pendingSessionId);
+      if (!redemption.ok) {
+        recordRedemptionFailure(ip);
+        const messages: Record<string, string> = {
+          unknown: 'That code is not valid.',
+          already_redeemed: 'That code has already been used.',
+          expired: 'That code has expired.',
+          revoked: 'That code is no longer active.',
+        };
+        return reply.code(400).send({
+          error: 'ACCESS_CODE_INVALID',
+          reason: redemption.reason,
+          message: messages[redemption.reason] ?? 'That code is not valid.',
+        });
+      }
+      recordRedemptionSuccess(ip);
+      redeemedAccessCode = redemption.code;
+      presetSessionId = pendingSessionId;
+      apiKey = operatorKey;
+    }
+
+    // A demo session must run on a key it earned: the visitor's own, or the
+    // operator key unlocked by a single-use access code. Without this guard an
     // anonymous caller could create a demo session and spend the operator key
     // through the agent and the speech routes.
-    if (isDemoStudyMode(studyModeInput ?? '') && !apiKey) {
+    if (isDemo && !apiKey) {
       return reply.code(400).send({
         error: 'OPENAI_API_KEY_MISSING',
-        message: 'Demo sessions require your own OpenAI API key.',
+        message: 'Demo sessions require your own OpenAI API key or an access code.',
       });
     }
-    if (apiKey && !(await isOpenAiApiKeyUsable(apiKey))) {
+    // The operator key is validated at startup, not per request: re-checking it
+    // on every redemption would add a round trip to OpenAI for no new
+    // information and would leak redemption timing.
+    if (apiKey && !redeemedAccessCode && !(await isOpenAiApiKeyUsable(apiKey))) {
       return reply.code(400).send({
         error: 'INVALID_OPENAI_API_KEY',
         message: 'OpenAI rejected this API key. Check the key and try again.',
@@ -262,6 +349,7 @@ export async function studyRoutes(fastify: FastifyInstance): Promise<void> {
         participantId,
         loggingParticipantId,
         apiKey,
+        presetSessionId,
       });
       return {
         sessionId: created.record.sessionId,
