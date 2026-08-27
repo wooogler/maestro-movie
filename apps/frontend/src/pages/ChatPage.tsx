@@ -2253,7 +2253,11 @@ export function ChatPage({
               What the agent remembers
             </summary>
             <div className="mt-3 max-h-[45vh] overflow-y-auto overscroll-contain pr-1">
-              <AgentMemoryPanel snapshot={agentMemory} currentStage={currentStage} />
+              <AgentMemoryPanel
+                snapshot={agentMemory}
+                currentStage={currentStage}
+                showHeading={false}
+              />
             </div>
           </details>
         )}

@@ -18,6 +18,8 @@ interface AgentMemoryPanelProps {
   currentStage?: string | null;
   /** `mirror` is the second-screen layout: larger type, no scroll container. */
   variant?: 'rail' | 'mirror';
+  /** Off where the container already names the panel, e.g. inside a disclosure. */
+  showHeading?: boolean;
 }
 
 const FLASH_MS = 1600;
@@ -122,6 +124,7 @@ export function AgentMemoryPanel({
   snapshot,
   currentStage,
   variant = 'rail',
+  showHeading = true,
 }: AgentMemoryPanelProps) {
   const preferences = snapshot?.preferences ?? [];
   const deadEnds = snapshot?.deadEnds ?? [];
@@ -189,16 +192,18 @@ export function AgentMemoryPanel({
 
   return (
     <div className={`flex h-full flex-col gap-4 ${isMirror ? 'text-base' : 'text-sm'}`}>
-      <header className="flex items-baseline justify-between gap-2">
-        <h2 className={`font-semibold text-fg-strong ${isMirror ? 'text-2xl' : 'text-base'}`}>
-          What the agent remembers
-        </h2>
-        {snapshot?.updatedAt && (
-          <span className="text-[11px] tabular-nums text-fg-faint">
-            {formatUpdatedAt(snapshot.updatedAt)}
-          </span>
-        )}
-      </header>
+      {showHeading && (
+        <header className="flex items-baseline justify-between gap-2">
+          <h2 className={`font-semibold text-fg-strong ${isMirror ? 'text-2xl' : 'text-base'}`}>
+            What the agent remembers
+          </h2>
+          {snapshot?.updatedAt && (
+            <span className="text-[11px] tabular-nums text-fg-faint">
+              {formatUpdatedAt(snapshot.updatedAt)}
+            </span>
+          )}
+        </header>
+      )}
 
       {!snapshot && (
         <p className="rounded-lg border border-dashed border-dark-border px-3 py-6 text-center text-sm text-fg-muted">

@@ -425,7 +425,7 @@ export function StudyStartPage({
               </h1>
               <p className="mt-1 text-sm text-fg-muted">
                 {demoMode
-                  ? 'Enter an access code from the presenter, or paste your own OpenAI API key, then pick a scenario. Nothing is recorded.'
+                  ? 'Enter the access code from the presenter, or paste your own OpenAI API key. Nothing is recorded.'
                   : 'Select your assigned condition and one scenario before starting.'}
               </p>
             </div>
@@ -715,6 +715,7 @@ export function StudyStartPage({
             </section>
             )}
 
+            {!demoMode && (
             <section className="space-y-3">
               <h2 className="text-sm font-semibold uppercase tracking-wide text-fg-muted">
                 Scenario
@@ -757,6 +758,7 @@ export function StudyStartPage({
                 </div>
               )}
             </section>
+            )}
           </div>
 
           {error && (
@@ -770,10 +772,11 @@ export function StudyStartPage({
               type="button"
               onClick={handleStartTask}
               disabled={
-                loadingScenarios ||
-                !selectedScenarioId ||
-                // Demo has no participant ID; the visitor's own key gates it instead.
-                (demoMode ? apiKeyMissing : pidMissing)
+                demoMode
+                  // The demo has no participant ID and nothing to choose: the
+                  // access code (or the visitor's own key) is the whole setup.
+                  ? apiKeyMissing
+                  : loadingScenarios || !selectedScenarioId || pidMissing
               }
               className="rounded-lg bg-primary px-4 py-2 text-sm font-medium text-primary-fg transition-colors hover:bg-primary-hover disabled:cursor-not-allowed disabled:opacity-60"
             >
