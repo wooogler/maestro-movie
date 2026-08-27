@@ -86,6 +86,10 @@ function App() {
     () => getStoredDemoMode() || isDemoStudyMode(getStoredStudySession()?.studyMode)
   );
   const [apiKey, setApiKey] = useState<string>(() => getStoredApiKey());
+  // Deliberately not persisted: an access code is single-use, so restoring one
+  // from a previous visit would only ever produce "already used".
+  const [accessCode, setAccessCode] = useState<string>('');
+  const [demoCredentialMode, setDemoCredentialMode] = useState<'code' | 'key'>('code');
   const [sessionNotice, setSessionNotice] = useState<string | null>(null);
   // `studyMode` only ever holds a real study condition. Demo is tracked separately
   // through `demoMode` so entering/leaving the demo never rewrites the persisted
@@ -290,6 +294,10 @@ function App() {
                     onLoggingParticipantIdChange={setLoggingParticipantId}
                     apiKey={apiKey}
                     onApiKeyChange={setApiKey}
+                    accessCode={accessCode}
+                    onAccessCodeChange={setAccessCode}
+                    demoCredentialMode={demoCredentialMode}
+                    onDemoCredentialModeChange={setDemoCredentialMode}
                     demoMode={demoMode}
                     onDemoModeChange={handleDemoModeChange}
                     sessionNotice={sessionNotice}
@@ -306,6 +314,8 @@ function App() {
                     selectedScenarioId={selectedScenarioId}
                     loggingParticipantId={loggingParticipantId}
                     apiKey={apiKey}
+                    accessCode={accessCode}
+                    demoCredentialMode={demoCredentialMode}
                     demoMode={demoMode}
                     onSessionCreated={handleStudySessionCreated}
                   />

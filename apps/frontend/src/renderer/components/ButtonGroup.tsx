@@ -323,7 +323,15 @@ export function ButtonGroup({
             : 'ring-[4px] ring-blue-500 gui-highlight-wave'
           : '';
 
-        const isDisabled = disabled || item.isDisabled || isFilteredOut;
+        // A filtered-out item stays clickable once the participant has opened
+        // "Show all". Leaving it inert was the only affordance for escaping an
+        // over-narrow filter, and it did nothing: across the study 495 stage
+        // states in 77 sessions were reduced to one option or none with no way
+        // back except resetting the whole session. Selecting one now clears the
+        // filters hiding it (handled upstream in the select handler).
+        const isFilteredOutButReachable = isFilteredOut && isExpanded;
+        const isDisabled =
+          disabled || item.isDisabled || (isFilteredOut && !isFilteredOutButReachable);
 
         return (
           <div
@@ -349,6 +357,11 @@ export function ButtonGroup({
             <button
               onClick={() => !isDisabled && onSelect(item.id)}
               disabled={isDisabled || item.phase === 'exiting'}
+              title={
+                isFilteredOutButReachable
+                  ? 'Hidden by a filter. Selecting it will clear that filter.'
+                  : undefined
+              }
               className={`
                 relative w-full rounded-xl border text-left transition-all ${
                   density === 'compact' ? 'px-5 py-3 text-[15px] leading-snug' : 'px-6 py-4'
@@ -363,7 +376,15 @@ export function ButtonGroup({
                     : 'border-dark-border bg-dark-light text-fg-strong hover:border-dark-border hover:bg-dark-lighter'
                 }
                 ${highlightClass}
-                ${isDisabled ? (isFilteredOut ? 'cursor-not-allowed opacity-65' : 'cursor-not-allowed opacity-50') : 'cursor-pointer'}
+                ${
+                  isDisabled
+                    ? isFilteredOut
+                      ? 'cursor-not-allowed opacity-65'
+                      : 'cursor-not-allowed opacity-50'
+                    : isFilteredOutButReachable
+                    ? 'cursor-pointer opacity-65'
+                    : 'cursor-pointer'
+                }
                 ${item.textChanged ? 'gui-item-text-shift' : ''}
               `}
             >

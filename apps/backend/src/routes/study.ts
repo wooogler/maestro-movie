@@ -306,7 +306,8 @@ export async function studyRoutes(fastify: FastifyInstance): Promise<void> {
         recordRedemptionFailure(ip);
         const messages: Record<string, string> = {
           unknown: 'That code is not valid.',
-          already_redeemed: 'That code has already been used.',
+          not_yet_valid: 'That code is not active yet. Check the dates on the card.',
+          exhausted: 'That code has reached its usage limit.',
           expired: 'That code has expired.',
           revoked: 'That code is no longer active.',
         };

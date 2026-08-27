@@ -36,6 +36,10 @@ interface StudyStartPageProps {
   onLoggingParticipantIdChange: (participantId: string) => void;
   apiKey: string;
   onApiKeyChange: (apiKey: string) => void;
+  accessCode: string;
+  onAccessCodeChange: (accessCode: string) => void;
+  demoCredentialMode: 'code' | 'key';
+  onDemoCredentialModeChange: (mode: 'code' | 'key') => void;
   demoMode: boolean;
   onDemoModeChange: (demoMode: boolean) => void;
   sessionNotice?: string | null;
@@ -77,6 +81,10 @@ export function StudyStartPage({
   onLoggingParticipantIdChange,
   apiKey,
   onApiKeyChange,
+  accessCode,
+  onAccessCodeChange,
+  demoCredentialMode,
+  onDemoCredentialModeChange,
   demoMode,
   onDemoModeChange,
   sessionNotice = null,
@@ -101,7 +109,18 @@ export function StudyStartPage({
         getInteractionMode(selectedMode)
       );
   const pidMissing = !demoMode && !loggingParticipantId.trim();
-  const apiKeyMissing = !apiKey.trim();
+  // In demo mode the visitor supplies one of two credentials: a single-use
+  // access code from the presenter, or their own OpenAI key. Everything that
+  // used to gate on "no API key" now gates on "no credential of either kind".
+  const usingAccessCode = demoCredentialMode === 'code';
+  const apiKeyMissing = usingAccessCode ? !accessCode.trim() : !apiKey.trim();
+  // /speech/synthesize-preview runs before any session exists, so it is
+  // unauthenticated and can only use a key the caller supplies. An access-code
+  // visitor has no key at this point — their credential is redeemed server-side
+  // when the session starts — so the speaker preview is genuinely unavailable
+  // to them. Enabling the operator-key fallback for it instead would reopen the
+  // unauthenticated drain path that flag exists to keep closed.
+  const speakerPreviewUnavailable = demoMode && usingAccessCode;
   const tutorialSelected = selectedScenarioId === TUTORIAL_SCENARIO_ID;
   const perTrialSurveyEnabled = isHardTaskScenario({ scenarioId: selectedScenarioId });
   const conditionCode = CONDITION_SELECTION_OPTIONS.find((o) => o.id === selectedConditionMode)?.code ?? selectedConditionMode;
@@ -223,7 +242,11 @@ export function StudyStartPage({
   const handleStartTask = () => {
     if (!selectedScenarioId) return;
     if (demoMode && apiKeyMissing) {
-      setError('Enter your OpenAI API key to start the demo.');
+      setError(
+        usingAccessCode
+          ? 'Enter the access code from the presenter to start the demo.'
+          : 'Enter your OpenAI API key to start the demo.'
+      );
       return;
     }
     onDismissSessionNotice?.();
@@ -329,6 +352,13 @@ export function StudyStartPage({
     if (voiceCheckLoading !== 'none') return;
     // In the lab flow the key lives on the server, so let the request go out and
     // let the backend answer; only a demo visitor must supply a key here.
+    if (speakerPreviewUnavailable) {
+      setSpeakerCheckStatus('error');
+      setVoiceCheckError(
+        'The speaker test needs your own OpenAI key. With an access code, voice starts working once the demo begins.'
+      );
+      return;
+    }
     if (demoMode && apiKeyMissing) {
       setSpeakerCheckStatus('error');
       setVoiceCheckError(describeApiErrorCode(OPENAI_API_KEY_MISSING));
@@ -386,7 +416,7 @@ export function StudyStartPage({
               </h1>
               <p className="mt-1 text-sm text-fg-muted">
                 {demoMode
-                  ? 'Paste your own OpenAI API key and pick a scenario. Nothing is recorded.'
+                  ? 'Enter an access code from the presenter, or paste your own OpenAI API key, then pick a scenario. Nothing is recorded.'
                   : 'Select your assigned condition and one scenario before starting.'}
               </p>
             </div>
@@ -434,8 +464,8 @@ export function StudyStartPage({
                   />
                 </label>
               )}
-              <label
-                className={`flex h-11 items-center gap-2 rounded-lg border px-3 transition-colors ${
+              <div
+                className={`flex h-11 items-center gap-2 rounded-lg border pl-3 pr-1 transition-colors ${
                   demoMode && apiKeyMissing
                     ? 'border-rose-400/70 bg-rose-500/10'
                     : 'border-dark-border bg-dark'
@@ -450,22 +480,86 @@ export function StudyStartPage({
                 >
                   {demoMode ? '1' : '2'}
                 </span>
-                <span className="text-sm font-medium text-fg-strong">API Key</span>
-                <input
-                  type="password"
-                  autoComplete="off"
-                  spellCheck={false}
-                  value={apiKey}
-                  onChange={(event) => onApiKeyChange(event.target.value)}
-                  placeholder="sk-..."
-                  aria-label="OpenAI API key"
-                  className={`h-8 w-40 rounded-md border px-2.5 text-sm text-fg-strong outline-none transition-colors placeholder:text-fg-faint ${
-                    demoMode && apiKeyMissing
-                      ? 'border-rose-400/70 bg-dark focus:border-rose-300'
-                      : 'border-dark-border bg-dark-light focus:border-primary'
-                  }`}
-                />
-              </label>
+                {demoMode && usingAccessCode ? (
+                  <>
+                    <label className="text-sm font-medium text-fg-strong" htmlFor="demo-access-code">
+                      Code
+                    </label>
+                    <input
+                      type="text"
+                      autoComplete="off"
+                      spellCheck={false}
+                      autoCapitalize="characters"
+                      maxLength={12}
+                      value={accessCode}
+                      // Uppercase as the visitor types so what they see matches
+                      // the printed card. The backend normalizes again anyway.
+                      onChange={(event) => onAccessCodeChange(event.target.value.toUpperCase())}
+                      id="demo-access-code"
+                      placeholder="ABC123"
+                      className={`h-8 w-32 rounded-md border px-2.5 font-mono text-sm tracking-[0.2em] text-fg-strong outline-none transition-colors placeholder:tracking-normal placeholder:text-fg-faint ${
+                        apiKeyMissing
+                          ? 'border-rose-400/70 bg-dark focus:border-rose-300'
+                          : 'border-dark-border bg-dark-light focus:border-primary'
+                      }`}
+                    />
+                  </>
+                ) : (
+                  <>
+                    <label className="text-sm font-medium text-fg-strong" htmlFor="demo-api-key">
+                      API Key
+                    </label>
+                    <input
+                      type="password"
+                      autoComplete="off"
+                      spellCheck={false}
+                      value={apiKey}
+                      onChange={(event) => onApiKeyChange(event.target.value)}
+                      id="demo-api-key"
+                      placeholder="sk-..."
+                      className={`h-8 w-40 rounded-md border px-2.5 text-sm text-fg-strong outline-none transition-colors placeholder:text-fg-faint ${
+                        demoMode && apiKeyMissing
+                          ? 'border-rose-400/70 bg-dark focus:border-rose-300'
+                          : 'border-dark-border bg-dark-light focus:border-primary'
+                      }`}
+                    />
+                  </>
+                )}
+                {demoMode && (
+                  <div
+                    className="ml-1 flex h-9 items-center rounded-md bg-dark-light p-0.5"
+                    role="radiogroup"
+                    aria-label="How to authorize this demo"
+                  >
+                    {(
+                      [
+                        ['code', 'Code'],
+                        ['key', 'Key'],
+                      ] as const
+                    ).map(([mode, label]) => (
+                      <button
+                        key={mode}
+                        type="button"
+                        role="radio"
+                        aria-checked={demoCredentialMode === mode}
+                        onClick={() => onDemoCredentialModeChange(mode)}
+                        title={
+                          mode === 'code'
+                            ? 'Use a single-use access code from the presenter'
+                            : 'Use your own OpenAI API key'
+                        }
+                        className={`h-full rounded px-2.5 text-xs font-semibold transition-colors ${
+                          demoCredentialMode === mode
+                            ? 'bg-dark text-fg-strong shadow-sm'
+                            : 'text-fg-muted hover:text-fg-strong'
+                        }`}
+                      >
+                        {label}
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </div>
               <button
                 type="button"
                 onClick={() => {
@@ -473,12 +567,12 @@ export function StudyStartPage({
                   setVoiceCheckError(null);
                   setVoiceCheckOpen(true);
                 }}
-                disabled={demoMode && apiKeyMissing}
-                title={
-                  demoMode && apiKeyMissing
-                    ? 'Enter your OpenAI API key to run the speaker preview.'
-                    : undefined
-                }
+                // Deliberately not gated on having a credential. The dialog's
+                // microphone step is pure getUserMedia and is the more useful
+                // half — a visitor should be able to grant mic permission before
+                // the task starts no matter how they are authorizing. Only the
+                // speaker sample needs a key, and it disables itself.
+                title="Check microphone permission and speaker output"
                 className="inline-flex h-11 items-center gap-2 rounded-lg border border-sky-500/35 bg-sky-500/10 px-4 text-sm font-semibold text-sky-700 transition-colors hover:border-sky-500/60 hover:bg-sky-500/15 disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:border-sky-500/35 disabled:hover:bg-sky-500/10"
               >
                 <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-sky-500/15 text-xs font-semibold text-sky-700">
@@ -719,14 +813,19 @@ export function StudyStartPage({
                   <div>
                     <div className="text-sm font-medium text-fg-strong">2. Speaker playback</div>
                     <div className="mt-1 text-xs text-fg-muted">
-                      Play a short sample to confirm speaker output and that your OpenAI API key
-                      works.
+                      {speakerPreviewUnavailable
+                        ? 'Needs your own OpenAI key. With an access code the agent starts speaking once the demo begins — the microphone check above is the part that matters here.'
+                        : 'Play a short sample to confirm speaker output and that your OpenAI API key works.'}
                     </div>
                   </div>
                   <button
                     type="button"
                     onClick={() => void handlePlaySpeakerSample()}
-                    disabled={voiceCheckLoading !== 'none' || (demoMode && apiKeyMissing)}
+                    disabled={
+                      voiceCheckLoading !== 'none' ||
+                      (demoMode && apiKeyMissing) ||
+                      speakerPreviewUnavailable
+                    }
                     className="rounded-lg border border-dark-border px-3 py-2 text-sm font-medium text-fg transition-colors hover:border-primary hover:text-fg-strong disabled:cursor-not-allowed disabled:opacity-50"
                   >
                     {voiceCheckLoading === 'speaker'

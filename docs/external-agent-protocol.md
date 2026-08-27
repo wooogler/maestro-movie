@@ -241,6 +241,47 @@ Forwarded user text input from the host chat input to the external agent.
 }
 ```
 
+#### `voice.mode`
+Announces whether the participant has voice mode turned on. Sent on every toggle.
+Agents that pace themselves against spoken output should use this to decide
+whether to wait for `tts.playback.complete` or to estimate reading time.
+
+```json
+{
+  "v": "mvp-0.2",
+  "type": "voice.mode",
+  "payload": {
+    "enabled": true
+  }
+}
+```
+
+#### `tts.playback.complete`
+Sent when spoken playback of the agent's most recent `agent.message` ends. In
+voice mode the host speaks each `agent.message` through an OpenAI Realtime
+session, so this is the signal that the user has actually heard the line and the
+agent may take its next action.
+
+`interrupted` is `true` when the user barged in over the speech or playback was
+stopped programmatically, meaning the utterance was only partially heard. The
+payload fields are informational: an agent may ignore them and treat any
+`tts.playback.complete` as "the floor is free" (the reference agent does).
+
+Agents should not block indefinitely on this message — playback can fail, and
+the host may drop the connection mid-utterance. The reference agent releases
+itself after 15 seconds.
+
+```json
+{
+  "v": "mvp-0.2",
+  "type": "tts.playback.complete",
+  "payload": {
+    "interrupted": false,
+    "messageId": "m-20260213-014"
+  }
+}
+```
+
 #### `session.ended`
 
 ```json
@@ -324,5 +365,6 @@ Current host integration points:
 - Visible state source (`uiSpec`): `apps/frontend/src/components/DevToolsContext.tsx`
 - Chat state source (`messageHistory`): `apps/frontend/src/store/chatStore.ts`
 - User input source (`user.message`): `apps/frontend/src/components/chat/ChatInput.tsx`
+- Voice session, speech in and out (`voice.mode`, `tts.playback.complete`): `apps/frontend/src/hooks/useRealtimeVoice.ts`
 
 `backendData` from the devtools context must not be serialized to external snapshots in this MVP.

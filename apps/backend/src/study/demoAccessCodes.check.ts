@@ -50,18 +50,80 @@ async function main(): Promise<void> {
     check('codes are unique', new Set(batch).size === batch.length);
   }
 
-  section('2. SINGLE USE — a code works exactly once');
+  section('2. REUSABLE — a code keeps working until something stops it');
   {
-    const [code] = codes.generateAccessCodes({ count: 1, ttlHours: 24 });
-    const first = codes.redeemAccessCode(code, 'st_session_a');
-    check('first redemption succeeds', first.ok === true);
-    const second = codes.redeemAccessCode(code, 'st_session_b');
-    check('second redemption fails', second.ok === false);
+    const [code] = codes.generateAccessCodes({ count: 1 });
+    for (let i = 1; i <= 3; i += 1) {
+      check(`redemption ${i} succeeds`, codes.redeemAccessCode(code, `st_reuse_${i}`).ok === true);
+    }
+    check('use count is tracked', codes.getAccessCodeStats().redemptions >= 3);
+  }
+
+  section('2b. MAX USES — an explicit cap still stops it');
+  {
+    const [code] = codes.generateAccessCodes({ count: 1, maxRedemptions: 2 });
+    check('use 1', codes.redeemAccessCode(code, 'st_cap_1').ok === true);
+    check('use 2', codes.redeemAccessCode(code, 'st_cap_2').ok === true);
+    const third = codes.redeemAccessCode(code, 'st_cap_3');
+    check('use 3 refused', third.ok === false);
     check(
-      'and says why',
-      second.ok === false && second.reason === 'already_redeemed',
-      second.ok === false ? second.reason : 'unexpectedly ok',
+      'reported as exhausted',
+      third.ok === false && third.reason === 'exhausted',
+      third.ok === false ? third.reason : 'unexpectedly ok',
     );
+  }
+
+  section('2c. NO EXPIRY — ttlHours 0 means it never expires');
+  {
+    const [code] = codes.generateAccessCodes({ count: 1, ttlHours: 0 });
+    await new Promise((r) => setTimeout(r, 20));
+    check('still redeemable', codes.redeemAccessCode(code, 'st_forever').ok === true);
+  }
+
+  section('2d. WINDOW — a code scheduled for later is not usable yet');
+  {
+    const soon = new Date(Date.now() + 60_000).toISOString();
+    const later = new Date(Date.now() + 120_000).toISOString();
+    const [code] = codes.generateAccessCodes({ count: 1, validFrom: soon, validUntil: later });
+    const early = codes.redeemAccessCode(code, 'st_too_early');
+    check('refused before the window opens', early.ok === false);
+    check(
+      'reported as not_yet_valid',
+      early.ok === false && early.reason === 'not_yet_valid',
+      early.ok === false ? early.reason : 'unexpectedly ok',
+    );
+    check('counted as pending', codes.getAccessCodeStats().pending >= 1);
+  }
+
+  section('2e. WINDOW — inside the window it works, after it does not');
+  {
+    const open = new Date(Date.now() - 60_000).toISOString();
+    const closesSoon = new Date(Date.now() + 25).toISOString();
+    const [code] = codes.generateAccessCodes({ count: 1, validFrom: open, validUntil: closesSoon });
+    check('works inside the window', codes.redeemAccessCode(code, 'st_in_window').ok === true);
+    await new Promise((r) => setTimeout(r, 40));
+    const after = codes.redeemAccessCode(code, 'st_after');
+    check('refused after it closes', after.ok === false);
+    check(
+      'reported as expired',
+      after.ok === false && after.reason === 'expired',
+      after.ok === false ? after.reason : 'unexpectedly ok',
+    );
+  }
+
+  section('2f. WINDOW — an inverted window is rejected at generation');
+  {
+    let threw = false;
+    try {
+      codes.generateAccessCodes({
+        count: 1,
+        validFrom: new Date(Date.now() + 60_000).toISOString(),
+        validUntil: new Date(Date.now() - 60_000).toISOString(),
+      });
+    } catch {
+      threw = true;
+    }
+    check('generation refuses end-before-start', threw);
   }
 
   section('3. NORMALIZATION — as printed vs as typed');
@@ -115,12 +177,13 @@ async function main(): Promise<void> {
     );
   }
 
-  section('7. RELEASE — a crashed session returns its code to the pool');
+  section('7. RELEASE — a crashed session gives back the use it consumed');
   {
-    const [code] = codes.generateAccessCodes({ count: 1, ttlHours: 24 });
+    const [code] = codes.generateAccessCodes({ count: 1, maxRedemptions: 1 });
     codes.redeemAccessCode(code, 'st_crashed');
+    check('cap reached', codes.redeemAccessCode(code, 'st_blocked').ok === false);
     codes.releaseAccessCode('st_crashed');
-    check('released code can be redeemed again', codes.redeemAccessCode(code, 'st_retry').ok === true);
+    check('usable again after release', codes.redeemAccessCode(code, 'st_retry').ok === true);
   }
 
   section('8. UNKNOWN CODE — a guess is refused');
@@ -177,11 +240,11 @@ async function main(): Promise<void> {
     check('blocked by global scope', fresh.blocked === true && fresh.scope === 'global');
   }
 
-  section('12. STATS — the presenter can see what is left');
+  section('12. STATS — the presenter can see what is live');
   {
     const stats = codes.getAccessCodeStats('check');
     check('counts the generated batch', stats.total === 20, JSON.stringify(stats));
-    check('all still available', stats.available === 20, JSON.stringify(stats));
+    check('all still usable', stats.usable === 20, JSON.stringify(stats));
   }
 
   console.log(

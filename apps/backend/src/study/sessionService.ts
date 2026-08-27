@@ -7,6 +7,7 @@ import {
   destroySessionDb,
   getSessionDbHandle,
   resolveRuntimeDbDir,
+  resolveSessionDbPath,
 } from './dbManager';
 import {
   getScenarioById,
@@ -411,6 +412,23 @@ function restartAgentsForActiveSessions(): boolean {
     if (record.status !== 'active') continue;
     const scenario = getScenarioById(record.scenarioId);
     if (!scenario) continue;
+    // Expiry is lazy and request-driven, so a record can still say `active`
+    // long after its TTL. Respawning an agent for one produces a process that
+    // busy-polls the relay for a host that will never arrive, and it comes back
+    // on every restart because nothing ever marks the record dead.
+    if (Date.parse(record.expiresAt) <= now().getTime()) {
+      deactivateSession(record, 'expired');
+      changed = true;
+      continue;
+    }
+    // The per-session database is the session's whole world. If it is gone —
+    // cleaned up, or lost with the runtime directory — the session cannot be
+    // served, so retire it instead of starting an agent that cannot work.
+    if (!fs.existsSync(resolveSessionDbPath(record.sessionId))) {
+      deactivateSession(record, 'expired');
+      changed = true;
+      continue;
+    }
     const apiKey = sessionApiKeys.get(record.sessionId);
     // `sessionApiKeys` is memory-only, so a session created with a visitor key
     // cannot be resumed after a restart. Expire it rather than respawning an

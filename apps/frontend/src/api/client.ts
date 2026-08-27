@@ -30,6 +30,10 @@ export const OPENAI_AUTH_FAILED = 'OPENAI_AUTH_FAILED';
 export const INVALID_OPENAI_API_KEY = 'INVALID_OPENAI_API_KEY';
 export const DEMO_SESSION_CAPACITY_REACHED = 'DEMO_SESSION_CAPACITY_REACHED';
 export const STUDY_SESSION_UNAUTHORIZED = 'STUDY_SESSION_UNAUTHORIZED';
+export const ACCESS_CODE_INVALID = 'ACCESS_CODE_INVALID';
+export const ACCESS_CODE_RATE_LIMITED = 'ACCESS_CODE_RATE_LIMITED';
+export const ACCESS_CODES_DISABLED = 'ACCESS_CODES_DISABLED';
+export const OPERATOR_KEY_UNAVAILABLE = 'OPERATOR_KEY_UNAVAILABLE';
 
 /** Fired when the backend rejects the stored study session token. */
 export const STUDY_SESSION_INVALID_EVENT = 'tuning-movie:study-session-invalid';
@@ -62,6 +66,16 @@ export function describeApiErrorCode(code: string | null): string | null {
       return 'The demo is at capacity right now. Please wait a minute and try again.';
     case STUDY_SESSION_UNAUTHORIZED:
       return 'This session has ended. Please start again from the beginning.';
+    case ACCESS_CODE_INVALID:
+      // The backend also returns a `reason`, which the start page surfaces
+      // verbatim; this is the fallback when only the code is available.
+      return 'That access code is not valid. Ask the presenter for a new one.';
+    case ACCESS_CODE_RATE_LIMITED:
+      return 'Too many incorrect codes. Please wait a few minutes, or ask the presenter.';
+    case ACCESS_CODES_DISABLED:
+      return 'Access codes are not enabled right now. Use your own OpenAI API key instead.';
+    case OPERATOR_KEY_UNAVAILABLE:
+      return 'The demo key is unavailable right now. Use your own OpenAI API key instead.';
     default:
       return null;
   }
@@ -140,28 +154,6 @@ function parseContentDispositionFileName(value: string | null): string | null {
   return basicMatch?.[1] ?? null;
 }
 
-function blobToBase64(blob: Blob): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-
-    reader.onload = () => {
-      if (typeof reader.result !== 'string') {
-        reject(new Error('Failed to encode audio payload'));
-        return;
-      }
-
-      const separatorIndex = reader.result.indexOf(',');
-      resolve(separatorIndex >= 0 ? reader.result.slice(separatorIndex + 1) : reader.result);
-    };
-
-    reader.onerror = () => {
-      reject(new Error('Failed to read audio payload'));
-    };
-
-    reader.readAsDataURL(blob);
-  });
-}
-
 async function fetchApiResponse(endpoint: string, options?: FetchApiOptions): Promise<Response> {
   const {
     includeStudyToken = true,
@@ -170,7 +162,13 @@ async function fetchApiResponse(endpoint: string, options?: FetchApiOptions): Pr
     ...requestInit
   } = options ?? {};
   const headers: Record<string, string> = {
-    'Content-Type': 'application/json',
+    // Only declare a JSON body when one is actually being sent. Fastify's JSON
+    // content-type parser rejects an empty body with FST_ERR_CTP_EMPTY_JSON_BODY
+    // *before* the route handler runs, so a bodyless POST that still advertises
+    // application/json can never reach its handler.
+    ...(requestInit.body === undefined || requestInit.body === null
+      ? {}
+      : { 'Content-Type': 'application/json' }),
     ...getStudyRequestHeaders(includeStudyToken ? explicitStudyToken : undefined),
     ...(optionHeaders as Record<string, string> | undefined),
   };
@@ -243,6 +241,12 @@ export const api = {
      * can hold it in memory for this session; it is never echoed back.
      */
     apiKey?: string;
+    /**
+     * Single-use conference access code. Redeemed server-side to attach the
+     * operator's key to this one session; the operator key never reaches the
+     * browser. Mutually exclusive with `apiKey` in practice.
+     */
+    accessCode?: string;
   }) =>
     fetchApi<StudySessionState>('/study/sessions', {
       method: 'POST',
@@ -384,26 +388,23 @@ export const api = {
       method: 'PUT',
       body: JSON.stringify({ enabled }),
     }),
-  transcribeSpeech: async (audio: Blob, language: 'en', prompt?: string) => {
-    const audioBase64 = await blobToBase64(audio);
-    return fetchApi<{ text: string; language: 'en' }>('/speech/transcribe', {
-      method: 'POST',
-      body: JSON.stringify({
-        audioBase64,
-        mimeType: audio.type || 'audio/webm',
-        language,
-        ...(prompt?.trim() ? { prompt: prompt.trim() } : {}),
-      }),
-    });
-  },
-  synthesizeSpeech: async (text: string, signal?: AbortSignal) => {
-    const response = await fetchApiResponse('/speech/synthesize', {
-      method: 'POST',
-      body: JSON.stringify({ text }),
-      signal,
-    });
-    return response.blob();
-  },
+  /**
+   * Mints a short-lived OpenAI Realtime client secret for voice mode. The
+   * browser opens the WebRTC session with this secret; the real OpenAI key
+   * stays on the backend.
+   */
+  createRealtimeVoiceSession: () =>
+    fetchApi<{
+      clientSecret: string;
+      expiresAt: number | null;
+      model: string;
+      transcriptionModel: string;
+    }>('/speech/realtime-session',
+      {
+        method: 'POST',
+        body: JSON.stringify({}),
+      }
+    ),
   /**
    * Unauthenticated key check / speaker sample. This is the only call that carries
    * the inline key header: it runs before any study session exists, so there is no

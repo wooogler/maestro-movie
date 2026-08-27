@@ -221,9 +221,10 @@ function getCollapsedConversationStatus(params: {
   const normalizedVoiceStatus = voiceStatusLabel?.toLowerCase() ?? '';
 
   if (voiceModeEnabled) {
+    // Must stay in sync with getVoiceStatusLabel in ChatPage.
     if (
-      normalizedVoiceStatus.includes('speaking the agent reply') ||
-      normalizedVoiceStatus.includes('generating the agent voice')
+      normalizedVoiceStatus.includes('playing reply') ||
+      normalizedVoiceStatus.includes('generating voice')
     ) {
       return {
         badge: 'Speaking',
@@ -243,9 +244,8 @@ function getCollapsedConversationStatus(params: {
     }
 
     if (
-      normalizedVoiceStatus.includes('listening automatically') ||
-      normalizedVoiceStatus.includes('listening to your turn') ||
-      normalizedVoiceStatus.includes('voice mode is ready')
+      normalizedVoiceStatus.includes('listening') ||
+      normalizedVoiceStatus.includes('voice ready')
     ) {
       return {
         badge: 'Speak',

@@ -279,7 +279,8 @@ study bookkeeping.
   browser. It is kept in `sessionStorage` for that browser session only (so it
   is not re-entered on every page), sent to the backend when the session is
   created, and held **in server memory only** for the lifetime of that session —
-  it is used for speech (STT/TTS) and passed to that session's agent process.
+  it backs the voice session (the backend mints short-lived OpenAI Realtime
+  client secrets from it) and is passed to that session's agent process.
   It is never written to disk, never logged, never returned in an API response,
   and never sent over the relay. It is dropped when the session ends.
 

@@ -4,12 +4,31 @@ import { getSessionContextByToken } from '../study/sessionService';
 const PROTECTED_PREFIXES = ['/movies', '/theaters', '/showings', '/seats', '/bookings', '/speech'];
 const PUBLIC_PATH_EXCEPTIONS = new Set(['/speech/synthesize-preview']);
 
-function isProtectedPath(url: string): boolean {
-  const pathname = url.split('?')[0] ?? url;
+/**
+ * The path to authorize against. Prefers the matched route pattern, which is the
+ * canonical registered path: matching on the raw `request.url` instead lets a
+ * caller disguise a protected path with percent-encoding (`/%73peech/...`) and
+ * skip this hook entirely, since Fastify's router decodes before matching.
+ */
+function resolveRoutePath(request: FastifyRequest): string {
+  const routeUrl = request.routeOptions?.url;
+  if (typeof routeUrl === 'string' && routeUrl) return routeUrl;
+
+  const pathname = request.url.split('?')[0] ?? request.url;
+  try {
+    return decodeURIComponent(pathname);
+  } catch {
+    return pathname;
+  }
+}
+
+function isProtectedPath(pathname: string): boolean {
   if (PUBLIC_PATH_EXCEPTIONS.has(pathname)) {
     return false;
   }
-  return PROTECTED_PREFIXES.some((prefix) => url === prefix || url.startsWith(`${prefix}/`) || url.startsWith(`${prefix}?`));
+  return PROTECTED_PREFIXES.some(
+    (prefix) => pathname === prefix || pathname.startsWith(`${prefix}/`)
+  );
 }
 
 function extractToken(request: FastifyRequest): string | null {
@@ -30,7 +49,7 @@ function deny(reply: FastifyReply, message: string): void {
 
 export async function studyContextPlugin(fastify: FastifyInstance): Promise<void> {
   fastify.addHook('onRequest', async (request, reply) => {
-    if (!isProtectedPath(request.url)) return;
+    if (!isProtectedPath(resolveRoutePath(request))) return;
 
     const token = extractToken(request);
     if (!token) {

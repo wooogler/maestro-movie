@@ -28,6 +28,7 @@ import {
   selectItem,
   selectItems,
   toggleItem,
+  clearModification,
   isBookingCompleteMeta,
   type ConfirmMeta,
   type DataItem,
@@ -42,9 +43,9 @@ import {
   useToolHandler,
   useAgentBridge,
   useStudyInteractionLogger,
-  useVoiceInput,
-  useVoiceOutput,
+  useRealtimeVoice,
 } from '../hooks';
+import type { VoiceSpeakItem } from '../hooks/useRealtimeVoice';
 import { agentTools, type ToolDefinition } from '../agent/tools';
 import { getStudyModeConfig, normalizeStudyMode, type StudyModeId } from './studyOptions';
 import type { Movie, Theater, Showing, Booking } from '../types';
@@ -85,7 +86,13 @@ const DEFAULT_SCENARIO_PANEL_WIDTH_PX = 620;
 const MIN_SCENARIO_PANEL_WIDTH_PX = 280;
 const MAX_SCENARIO_PANEL_WIDTH_PX = 620;
 const MIN_MAIN_CONTENT_WIDTH_PX = 700;
-const SHORT_VOICE_INPUT_MAX_DURATION_MS = 850;
+// Guards against a voice-activity blip that transcribes to a stray character.
+// The threshold is in *speech* milliseconds: the realtime session reports the
+// tight span between speech start and stop, where the old recorder-based
+// pipeline reported the span plus its 1.4s trailing-silence hold. A real short
+// answer ("C1", "7B") runs 350ms and up, so this has to stay well under that or
+// it swallows seat labels.
+const SHORT_VOICE_INPUT_MAX_DURATION_MS = 300;
 const SHORT_VOICE_INPUT_MAX_CHARS = 2;
 const MEANINGFUL_SHORT_VOICE_TOKENS = new Set(['no', 'ok']);
 const guiAdaptationToolsByStage: Record<Stage, readonly string[]> = {
@@ -1167,6 +1174,21 @@ export function ChatPage({
   const handleSelect = useCallback(
     (id: string) => {
       if (!activeSpec) return;
+      // The participant can reach a filtered-out item through "Show all".
+      // Choosing one is an explicit request for an option the agent's filter
+      // hid, so drop the filter rather than selecting something that is not
+      // visible — previously this was the dead end that left 495 stage states
+      // showing one option or none with no way back but a full session reset.
+      const isHidden = !activeSpec.visibleItems.some((item) => item.id === id);
+      const baseSpec = isHidden ? clearModification(activeSpec, 'filter') : activeSpec;
+      if (isHidden) {
+        logGuiAction('clearFilter', {
+          source: 'participant',
+          stage: activeSpec.stage,
+          itemId: id,
+          extra: { reason: 'selected-filtered-out-item' },
+        });
+      }
       logGuiAction('select', {
         source: 'participant',
         stage: activeSpec.stage,
@@ -1176,8 +1198,9 @@ export function ChatPage({
         stage: activeSpec.stage,
         interaction: 'select',
         itemId: id,
+        ...(isHidden ? { clearedFilter: true } : {}),
       });
-      const newSpec = setSelectionRestoredFlag(selectItem(activeSpec, id), false);
+      const newSpec = setSelectionRestoredFlag(selectItem(baseSpec, id), false);
       updateActiveSpec(newSpec);
       setUiSpec(newSpec);
     },
@@ -1574,23 +1597,16 @@ export function ChatPage({
     return onToolApply(toolName, params, context);
   }, [onToolApply]);
 
-  const {
-    status: voiceOutputStatus,
-    error: voiceOutputError,
-    isSpeaking: isVoiceOutputActive,
-    speak: speakAgentMessage,
-    stop: stopAgentSpeech,
-  } = useVoiceOutput({
-    enabled: voiceModeEnabled && isAgentInteractionEnabled,
-    synthesizeSpeech: (text: string, signal?: AbortSignal) => api.synthesizeSpeech(expandTtsAbbreviations(text), signal),
-    onLogEvent: logStudyEvent,
-    onActiveItemChange: (item) => {
-      setSpeakingMessageId(item?.id ?? null);
-    },
-    onPlaybackComplete: () => {
-      sendTtsPlaybackComplete();
-    },
-  });
+  // The voice session is declared further down, once the relay state it needs
+  // exists. These stable shims let the callbacks above reach it.
+  const voiceSpeakRef = useRef<((item: VoiceSpeakItem) => void) | null>(null);
+  const voiceStopRef = useRef<(() => void) | null>(null);
+  const speakAgentMessage = useCallback((item: VoiceSpeakItem) => {
+    voiceSpeakRef.current?.(item);
+  }, []);
+  const stopAgentSpeech = useCallback(() => {
+    voiceStopRef.current?.();
+  }, []);
 
   const handleAgentMessage = useCallback((text: string) => {
     const normalizedText = text.trim();
@@ -1598,7 +1614,9 @@ export function ChatPage({
     setAwaitingAgentResponse(false);
     const stage = activeSpec?.stage ?? currentStage;
     const messageId = addAgentMessage(stage, normalizedText, activeSpec);
-    void speakAgentMessage({ id: messageId, text: normalizedText });
+    // The transcript keeps the original wording; only the spoken copy gets
+    // abbreviations expanded.
+    speakAgentMessage({ id: messageId, text: expandTtsAbbreviations(normalizedText) });
   }, [activeSpec, currentStage, addAgentMessage, speakAgentMessage]);
 
   const {
@@ -1666,6 +1684,13 @@ export function ChatPage({
     ]
   );
 
+  // The voice session is declared after this, but its transcript callback needs
+  // to reach it.
+  const submitChatInputRef = useRef(submitChatInput);
+  useEffect(() => {
+    submitChatInputRef.current = submitChatInput;
+  }, [submitChatInput]);
+
   const handleChatInputSubmit = useCallback(
     (text: string) => {
       submitChatInput(text, 'text');
@@ -1686,7 +1711,7 @@ export function ChatPage({
       })
     );
     const messageId = addAgentMessage(stage, normalizedText, activeSpec);
-    void speakAgentMessage({ id: messageId, text: normalizedText });
+    speakAgentMessage({ id: messageId, text: expandTtsAbbreviations(normalizedText) });
   }, [activeSpec, currentStage, addAgentMessage, logDerivedEvents, speakAgentMessage]);
 
   useToolHandler({
@@ -1730,9 +1755,25 @@ export function ChatPage({
       // Best-effort logging only; do not block the end screen.
     });
 
-    void api.finishStudySession().catch(() => {
-      // Best-effort finish request; local teardown already proceeded.
-    });
+    // Local teardown already proceeded, so a failure here must not block the end
+    // screen — but it must not be invisible either. A silently swallowed failure
+    // is how every finish request in the study ended up leaving its session
+    // `active` until the 4h TTL reaped it, with no trace in the logs.
+    void api
+      .finishStudySession()
+      .then((result) => {
+        void logStudyEventNow('study.session.finished', {
+          source: 'participant',
+          status: result.status,
+          finishedAt: result.finishedAt,
+        }).catch(() => {});
+      })
+      .catch((error: unknown) => {
+        void logStudyEventNow('study.session.finish_failed', {
+          source: 'participant',
+          message: error instanceof Error ? error.message : String(error),
+        }).catch(() => {});
+      });
   }, [
     loading,
     logStudyEventNow,
@@ -1842,19 +1883,19 @@ export function ChatPage({
       : 'Send a message...';
   const {
     supported: voiceInputSupported,
-    status: voiceInputStatus,
-    error: voiceInputError,
-  } = useVoiceInput({
+    inputStatus: voiceInputStatus,
+    outputStatus: voiceOutputStatus,
+    error: voiceSessionError,
+    speak: speakOverVoiceSession,
+    stop: stopVoiceSession,
+  } = useRealtimeVoice({
     enabled: voiceModeEnabled && isAgentInteractionEnabled,
-    suspended: !hasLiveAgentSession || inputDisabled || isVoiceOutputActive,
-    transcribeAudio: async (audio: Blob) => {
-      const result = await api.transcribeSpeech(
-        audio,
-        sttLanguage,
-        buildVoiceTranscriptionPrompt(activeSpec, currentStage)
-      );
-      return result.text;
-    },
+    // Only session liveness gates delivery. Suspending while the agent is busy
+    // would drop exactly the transcripts barge-in exists to capture, and the
+    // agent already defers a replan when a message arrives mid-turn.
+    suspended: !hasLiveAgentSession,
+    transcriptionPrompt: buildVoiceTranscriptionPrompt(activeSpec, currentStage) ?? null,
+    createSession: api.createRealtimeVoiceSession,
     onTranscript: ({ text, durationMs }) => {
       const normalizedTranscript = text.trim();
       if (!normalizedTranscript) return;
@@ -1870,10 +1911,22 @@ export function ChatPage({
         return;
       }
 
-      submitChatInput(normalizedTranscript, 'voice');
+      submitChatInputRef.current?.(normalizedTranscript, 'voice');
+    },
+    onSpeakingItemChange: (item) => {
+      setSpeakingMessageId(item?.id ?? null);
+    },
+    onPlaybackComplete: (item, { interrupted }) => {
+      sendTtsPlaybackComplete({ interrupted, messageId: item.id });
     },
     onLogEvent: logStudyEvent,
   });
+
+  useEffect(() => {
+    voiceSpeakRef.current = speakOverVoiceSession;
+    voiceStopRef.current = stopVoiceSession;
+  }, [speakOverVoiceSession, stopVoiceSession]);
+
   const voiceStatusLabel = getVoiceStatusLabel({
     voiceModeEnabled,
     voiceInputSupported,
@@ -1881,7 +1934,7 @@ export function ChatPage({
     voiceOutputStatus,
     hasLiveAgentSession,
   });
-  const voiceError = voiceModeEnabled ? (voiceInputError ?? voiceOutputError) : null;
+  const voiceError = voiceModeEnabled ? voiceSessionError : null;
   const voiceModeButtonDisabled = !voiceInputSupported || isFinishTaskStep;
   const effectiveChatInputPlaceholder =
     isFinishTaskStep
@@ -2018,7 +2071,7 @@ export function ChatPage({
 
   return (
     <div className="relative h-screen bg-dark">
-      <div ref={interactionScopeRef} className="flex h-full min-h-0">
+      <div className="flex h-full min-h-0">
       {showScenarioBriefing && (
         <aside
           className="relative hidden shrink-0 border-r border-dark-border bg-dark-light lg:block"
@@ -2158,6 +2211,14 @@ export function ChatPage({
           </button>
         </header>
 
+        {/*
+          The inert scope starts BELOW the header on purpose. It used to wrap the
+          whole layout, so every agent turn — 8,678 of them, median 2.8s — also
+          disabled Reset and Finish Task and blurred the focused element. The
+          participant's only escape hatches were locked exactly while they might
+          have needed them.
+        */}
+        <div ref={interactionScopeRef} className="flex min-h-0 flex-1 flex-col">
         {showScenarioBriefing && (
           <div className="shrink-0 border-b border-dark-border bg-dark-light px-4 py-3 lg:hidden">
             <ScenarioBriefing
@@ -2349,6 +2410,7 @@ export function ChatPage({
             }
           />
         )}
+        </div>
       </div>
       </div>
     </div>

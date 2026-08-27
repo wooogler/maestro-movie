@@ -12,6 +12,8 @@ interface ScenarioReviewPageProps {
   selectedScenarioId: string;
   loggingParticipantId: string;
   apiKey: string;
+  accessCode: string;
+  demoCredentialMode: 'code' | 'key';
   demoMode: boolean;
   onSessionCreated: (session: StudySessionState) => void;
 }
@@ -21,6 +23,8 @@ export function ScenarioReviewPage({
   selectedScenarioId,
   loggingParticipantId,
   apiKey,
+  accessCode,
+  demoCredentialMode,
   demoMode,
   onSessionCreated,
 }: ScenarioReviewPageProps) {
@@ -77,7 +81,15 @@ export function ScenarioReviewPage({
     if (!selectedScenario || startingSession) return;
 
     const trimmedApiKey = apiKey.trim();
-    if (demoMode && !trimmedApiKey) {
+    const trimmedAccessCode = accessCode.trim();
+    // In demo mode exactly one credential is sent: the access code redeems the
+    // operator key server-side, so sending both would be ambiguous.
+    const usingAccessCode = demoMode && demoCredentialMode === 'code';
+    if (demoMode && usingAccessCode && !trimmedAccessCode) {
+      setError('Enter the access code from the presenter on the start page before beginning the demo.');
+      return;
+    }
+    if (demoMode && !usingAccessCode && !trimmedApiKey) {
       setError('Enter your OpenAI API key on the start page before beginning the demo.');
       return;
     }
@@ -90,7 +102,11 @@ export function ScenarioReviewPage({
         studyMode,
         // No participant ID is sent in demo mode: there is nothing to log it against.
         loggingParticipantId: demoMode ? undefined : loggingParticipantId.trim() || undefined,
-        ...(trimmedApiKey ? { apiKey: trimmedApiKey } : {}),
+        ...(usingAccessCode
+          ? { accessCode: trimmedAccessCode }
+          : trimmedApiKey
+          ? { apiKey: trimmedApiKey }
+          : {}),
       });
       onSessionCreated(session);
       navigate('/booking');

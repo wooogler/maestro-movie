@@ -10,6 +10,7 @@ import type {
   DataItem,
   DisplayItem,
   FilterState,
+  FilterOperator,
   SortState,
   HighlightState,
   AugmentState,
@@ -62,6 +63,40 @@ function hasSameFilter(existing: FilterState[], next: FilterState): boolean {
       filter.operator === next.operator &&
       areFilterValuesEqual(filter.value, next.value)
   );
+}
+
+/** Operators that pin a field to a value: a second one contradicts the first. */
+const EXACT_VALUE_OPERATORS = new Set<FilterOperator>(['eq', 'contains', 'in']);
+const LOWER_BOUND_OPERATORS = new Set<FilterOperator>(['gt', 'gte']);
+const UPPER_BOUND_OPERATORS = new Set<FilterOperator>(['lt', 'lte']);
+
+/**
+ * Does `next` replace `existing` rather than stack on top of it?
+ *
+ * Filters used to be appended unconditionally, so a second constraint on the
+ * same field was ANDed with the first even when it contradicted it. Across the
+ * study that drove 495 stage states in 77 sessions down to one visible option
+ * or none, with no participant-facing way to undo it.
+ *
+ * Ranges must still compose — `time >= 16:00` AND `time <= 22:00` is one
+ * interval — so only genuinely competing constraints replace: a new exact value
+ * supersedes an old exact value, a new lower bound supersedes the old lower
+ * bound, and a new upper bound supersedes the old upper bound. `neq` always
+ * accumulates, since excluding several values at once is meaningful.
+ */
+function filterSupersedes(existing: FilterState, next: FilterState): boolean {
+  if (existing.field !== next.field) return false;
+  if (existing.operator === 'neq' || next.operator === 'neq') return false;
+  if (EXACT_VALUE_OPERATORS.has(next.operator)) {
+    return EXACT_VALUE_OPERATORS.has(existing.operator);
+  }
+  if (LOWER_BOUND_OPERATORS.has(next.operator)) {
+    return LOWER_BOUND_OPERATORS.has(existing.operator);
+  }
+  if (UPPER_BOUND_OPERATORS.has(next.operator)) {
+    return UPPER_BOUND_OPERATORS.has(existing.operator);
+  }
+  return false;
 }
 
 // =============================================================================
@@ -279,7 +314,7 @@ export function applyFilter<T extends DataItem>(
   const existingFilters = normalizeFilters(spec.modification.filter);
   const nextFilters = hasSameFilter(existingFilters, params)
     ? existingFilters
-    : [...existingFilters, params];
+    : [...existingFilters.filter((filter) => !filterSupersedes(filter, params)), params];
   const newSpec = {
     ...spec,
     modification: { ...spec.modification, filter: nextFilters },

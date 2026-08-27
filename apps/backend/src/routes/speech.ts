@@ -24,13 +24,32 @@ function readEnvNumber(name: string, fallback: number, min: number, max: number)
 const REALTIME_MODEL = process.env.OPENAI_REALTIME_MODEL || 'gpt-realtime-2.1';
 const REALTIME_VOICE = process.env.OPENAI_REALTIME_VOICE || 'alloy';
 const REALTIME_STT_MODEL = process.env.OPENAI_REALTIME_STT_MODEL || 'gpt-4o-mini-transcribe';
-// Realtime's speed range is narrower than /audio/speech's 0.25-4. Clamping to
-// 1.5 keeps the study's tuned rate valid under either range.
+// Realtime's speed range is narrower than /audio/speech's 0.25-4, so clamp to 1.5.
+//
+// Defaults to 1.0 — a natural speaking rate. The 1.5 the study used was a
+// deliberate choice for a timed lab task, and it sounds rushed in a live demo.
+// It also deliberately does NOT fall back to OPENAI_TTS_SPEED any more: that
+// constant still drives the agent's text-mode reading delay, and letting one
+// knob set both the voice rate and the text pacing is what coupled the text
+// conditions to a voice-only parameter in the first place.
 const REALTIME_SPEED = (() => {
-  const raw = process.env.OPENAI_REALTIME_SPEED || process.env.OPENAI_TTS_SPEED || '1.5';
+  const raw = process.env.OPENAI_REALTIME_SPEED || '1.0';
   const parsed = Number.parseFloat(raw);
-  if (!Number.isFinite(parsed)) return 1.5;
+  if (!Number.isFinite(parsed)) return 1.0;
   return Math.min(1.5, Math.max(0.25, parsed));
+})();
+/**
+ * Server-side noise reduction on the input stream.
+ *
+ * `near_field` suits a headset or earbuds held close to the mouth — AirPods,
+ * a laptop mic at arm's length — and is the right default for a booth where
+ * the room is loud but the speaker is close. `far_field` is for a room mic on
+ * a table. `off` disables it.
+ */
+const REALTIME_NOISE_REDUCTION = (() => {
+  const raw = (process.env.OPENAI_REALTIME_NOISE_REDUCTION || 'near_field').trim();
+  if (raw === 'off' || raw === 'none' || raw === 'null') return null;
+  return raw === 'far_field' ? 'far_field' : 'near_field';
 })();
 const REALTIME_VAD_THRESHOLD = readEnvNumber('OPENAI_REALTIME_VAD_THRESHOLD', 0.5, 0, 1);
 const REALTIME_VAD_SILENCE_MS = readEnvNumber('OPENAI_REALTIME_VAD_SILENCE_MS', 900, 100, 5000);
@@ -228,6 +247,12 @@ export async function speechRoutes(fastify: FastifyInstance): Promise<void> {
           audio: {
             input: {
               transcription: { model: REALTIME_STT_MODEL, language: 'en' },
+              // Suppresses room noise before VAD and transcription see the
+              // stream, so a loud booth does not keep opening turns the user
+              // never started.
+              ...(REALTIME_NOISE_REDUCTION
+                ? { noise_reduction: { type: REALTIME_NOISE_REDUCTION } }
+                : {}),
               turn_detection: {
                 type: 'server_vad',
                 threshold: REALTIME_VAD_THRESHOLD,

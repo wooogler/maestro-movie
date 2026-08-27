@@ -28,7 +28,10 @@ interface UseAgentBridgeResult {
   sendUserMessageToAgent: (text: string, stage: Stage) => void;
   sendSessionResetToAgent: (reason?: string) => void;
   sendVoiceModeChange: (enabled: boolean) => void;
-  sendTtsPlaybackComplete: () => void;
+  sendTtsPlaybackComplete: (info?: {
+    interrupted?: boolean;
+    messageId?: string | null;
+  }) => void;
   isConnected: boolean;
   isJoined: boolean;
   joinedSessionId: string | null;
@@ -483,9 +486,18 @@ export function useAgentBridge({
     [sendEnvelope]
   );
 
-  const sendTtsPlaybackComplete = useCallback(() => {
-    sendEnvelope({ type: 'tts.playback.complete', payload: {} });
-  }, [sendEnvelope]);
+  const sendTtsPlaybackComplete = useCallback(
+    (info?: { interrupted?: boolean; messageId?: string | null }) => {
+      sendEnvelope({
+        type: 'tts.playback.complete',
+        payload: {
+          interrupted: info?.interrupted ?? false,
+          ...(info?.messageId ? { messageId: info.messageId } : {}),
+        },
+      });
+    },
+    [sendEnvelope]
+  );
 
   const agentActivityPhase = useMemo<AgentActivityPhase>(() => {
     const connectedNames = new Set(connectedAgents.map((agent) => agent.name));
