@@ -507,6 +507,38 @@ export function listScenarios(): ScenarioDefinition[] {
   return getScenarioCatalog();
 }
 
+/**
+ * Canonical participant id for logging is `Pnn`. The study corpus contains one
+ * session whose payload says `p16` while its filename says `P16`, and a
+ * case-sensitive filter over that corpus silently drops the participant
+ * entirely — the difference between a 31-participant and a 32-participant
+ * analysis. Normalize participant-shaped ids here, at the single point of
+ * entry, and warn on anything that is not canonical so it is visible at session
+ * creation rather than months later during analysis.
+ *
+ * Non participant-shaped ids (pilot names like `test123`) are left untouched:
+ * rewriting them would be guesswork. Nothing is rejected — refusing to start a
+ * session mid-study over a typo would be worse than logging one.
+ */
+function normalizeLoggingParticipantId(raw: unknown): string | undefined {
+  if (typeof raw !== 'string') return undefined;
+  const trimmed = raw.trim();
+  if (!trimmed) return undefined;
+
+  const participantShaped = /^p(\d+)$/i.exec(trimmed);
+  const normalized = participantShaped ? `P${participantShaped[1]}` : trimmed;
+
+  if (!/^P\d{2}$/.test(normalized)) {
+    console.warn(
+      `[study] loggingParticipantId "${trimmed}" is not canonical Pnn. ` +
+        'It will be logged as-is; downstream analysis must filter it explicitly.'
+    );
+  } else if (normalized !== trimmed) {
+    console.warn(`[study] loggingParticipantId "${trimmed}" normalized to "${normalized}".`);
+  }
+  return normalized;
+}
+
 export function createStudySession(input: CreateSessionInput): CreateSessionResult {
   const scenario = getScenarioById(input.scenarioId);
   if (!scenario) {
@@ -562,10 +594,7 @@ export function createStudySession(input: CreateSessionInput): CreateSessionResu
     typeof input.participantId === 'string' && input.participantId.trim()
       ? input.participantId.trim()
       : `P-${sessionId.slice(-6)}`;
-  const loggingParticipantId =
-    typeof input.loggingParticipantId === 'string' && input.loggingParticipantId.trim()
-      ? input.loggingParticipantId.trim()
-      : undefined;
+  const loggingParticipantId = normalizeLoggingParticipantId(input.loggingParticipantId);
   const apiKey = trimmedApiKey;
   // Demo mode records nothing: an undefined log file disables backend
   // interaction logs, the agent LLM trace writer, and the frontend logger.

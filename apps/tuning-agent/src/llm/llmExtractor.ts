@@ -25,6 +25,12 @@ interface PreferenceExtractionOutput {
     strength: "hard" | "soft";
     relevantStages: ConflictStage[];
   }>;
+  /**
+   * Descriptions the user has explicitly withdrawn. Optional: absent means
+   * "nothing was withdrawn", which is why an omitted hard preference is now
+   * retained rather than silently dropped.
+   */
+  retractedDescriptions?: string[];
 }
 
 interface LlmTraceEvent {
@@ -71,7 +77,10 @@ export function subscribeLlmTrace(listener: LlmTraceListener): () => void {
 const PREFERENCE_SYSTEM_PROMPT =
   "You maintain the user preference list for a booking agent.\n" +
   "Input: userMessage, currentStage, state, compactUi, recentDialogue, existingPreferences.\n" +
-  "Output: { hasUpdate, preferences }.\n" +
+  "Output: { hasUpdate, preferences, retractedDescriptions }.\n" +
+  "- preferences: the full current preference list as you understand it.\n" +
+  "- retractedDescriptions: descriptions the user has explicitly withdrawn or replaced. Copy the description verbatim from existingPreferences.\n" +
+  "- A hard preference you omit from preferences is KEPT. To remove one, you must list it in retractedDescriptions. Soft preferences you omit are dropped.\n" +
   "\n" +
   "Procedural vs durable — read the full recentDialogue first:\n" +
   "- Procedural: the agent narrowed to a small set and asked the user to pick one. The user just picks one to proceed. → set hasUpdate=false, preferences=[].\n" +
@@ -189,6 +198,23 @@ function normalizeRelevantStages(
   return normalized.length > 0 ? normalized : CONFLICT_STAGES.slice();
 }
 
+/**
+ * Merge the extractor's output into the existing preference list.
+ *
+ * This used to be a full replace: whatever list the model returned became the
+ * memory, so a preference the model simply did not restate was treated as
+ * withdrawn. In the study corpus 59 of 550 updates silently lost a preference
+ * that way, in the worst case dropping two hard constraints at once, and the
+ * participant had no way to tell why the conditions they had stated were being
+ * ignored.
+ *
+ * Now:
+ *   - a returned preference replaces the one with the same id (as before);
+ *   - an omitted HARD preference is retained — withdrawing a hard constraint
+ *     requires the model to name it in `retractedDescriptions`;
+ *   - an omitted SOFT preference is still dropped, since soft preferences are
+ *     revisable by design and re-stating the list is how they get revised.
+ */
 function materializePreferences(
   raw: PreferenceExtractionOutput,
   existingPreferences: Preference[],
@@ -196,12 +222,22 @@ function materializePreferences(
   const existingById = new Map(
     existingPreferences.map((item) => [item.id, item]),
   );
+  const retractedIds = new Set(
+    (raw.retractedDescriptions ?? [])
+      .map((description) => normalizeDescription(description))
+      .filter((description): description is string => Boolean(description))
+      .map((description) => buildPreferenceId(description)),
+  );
+
   const preferences: Preference[] = [];
+  const returnedIds = new Set<string>();
   for (const rawPreference of raw.preferences) {
     const description = normalizeDescription(rawPreference.description);
     if (!description) continue;
     const strength = normalizePreferenceStrength(rawPreference.strength);
     const id = buildPreferenceId(description);
+    if (retractedIds.has(id)) continue;
+    returnedIds.add(id);
     const existing = existingById.get(id);
     preferences.push({
       id,
@@ -213,7 +249,16 @@ function materializePreferences(
       ),
     });
   }
-  return normalizePreferenceList(preferences);
+
+  // Carry forward hard constraints the model neither restated nor retracted.
+  const carriedForward = existingPreferences.filter(
+    (item) =>
+      item.strength === "hard" &&
+      !returnedIds.has(item.id) &&
+      !retractedIds.has(item.id),
+  );
+
+  return normalizePreferenceList([...preferences, ...carriedForward]);
 }
 
 function toPreferenceExtractionOutput(
@@ -221,10 +266,16 @@ function toPreferenceExtractionOutput(
 ): PreferenceExtractionOutput | null {
   const hasUpdate = value.hasUpdate === true;
 
+  const retractedDescriptions = Array.isArray(value.retractedDescriptions)
+    ? value.retractedDescriptions
+        .map((entry) => normalizeDescription(entry))
+        .filter((entry): entry is string => Boolean(entry))
+    : [];
+
   const rawPreferences = Array.isArray(value.preferences)
     ? value.preferences
     : null;
-  if (!rawPreferences) return { hasUpdate, preferences: [] };
+  if (!rawPreferences) return { hasUpdate, preferences: [], retractedDescriptions };
 
   const preferences: PreferenceExtractionOutput["preferences"] = [];
   for (const entry of rawPreferences) {
@@ -238,7 +289,7 @@ function toPreferenceExtractionOutput(
     });
   }
 
-  return { hasUpdate, preferences };
+  return { hasUpdate, preferences, retractedDescriptions };
 }
 const OPENAI_API_URL = "https://api.openai.com/v1/responses";
 const OPENAI_CHAT_COMPLETIONS_API_URL =
@@ -639,8 +690,12 @@ export async function extractStructuredPreferences(
           additionalProperties: false,
         },
       },
+      retractedDescriptions: {
+        type: "array",
+        items: { type: "string" },
+      },
     },
-    required: ["hasUpdate", "preferences"],
+    required: ["hasUpdate", "preferences", "retractedDescriptions"],
     additionalProperties: false,
   };
 

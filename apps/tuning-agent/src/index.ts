@@ -27,6 +27,7 @@ import { shouldResync } from './core/verifier';
 import { isActionSafe } from './policies/safetyPolicy';
 import { RelayClient } from './runtime/relayClient';
 import { createStudyLlmTraceLogWriterFromEnv } from './runtime/studyLlmTraceLog';
+import { createStudyAgentRuntimeLogWriterFromEnv } from './runtime/studyAgentRuntimeLog';
 import { AgentMonitorServer } from './monitor/server';
 import type {
   BacktrackContinuation,
@@ -121,8 +122,11 @@ const monitorEnabled = isDemoMode
 const memory = new AgentMemory();
 const relay = new RelayClient({ relayUrl, sessionId, agentName, requestTimeoutMs: 12000 });
 const studyLlmTraceLog = createStudyLlmTraceLogWriterFromEnv();
+const studyAgentRuntimeLog = createStudyAgentRuntimeLogWriterFromEnv();
 const monitor = new AgentMonitorServer({
   enabled: monitorEnabled,
+  // Durable even when the live monitor is off, which it is in production.
+  sink: studyAgentRuntimeLog.enabled ? studyAgentRuntimeLog.append : undefined,
   port: monitorPort,
   relayUrl,
   sessionId,

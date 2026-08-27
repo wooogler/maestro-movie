@@ -9,6 +9,12 @@ import type {
 
 interface MonitorOptions {
   enabled?: boolean;
+  /**
+   * Durable sink for runtime events. Runs regardless of `enabled`: the monitor
+   * itself is off in production, which is why the study's 43 lost planner turns
+   * and every fatal state left no trace on disk at all.
+   */
+  sink?: (type: string, payload: unknown) => void;
   port: number;
   relayUrl: string;
   sessionId: string;
@@ -75,6 +81,7 @@ function sendJson(res: http.ServerResponse, statusCode: number, body: unknown): 
 
 export class AgentMonitorServer {
   private readonly enabled: boolean;
+  private readonly sink: ((type: string, payload: unknown) => void) | null;
   private readonly port: number;
   private readonly clients = new Set<http.ServerResponse>();
   private readonly events: MonitorEvent[] = [];
@@ -84,6 +91,7 @@ export class AgentMonitorServer {
 
   constructor(options: MonitorOptions) {
     this.enabled = options.enabled ?? true;
+    this.sink = options.sink ?? null;
     this.port = options.port;
     this.state = {
       startedAt: nowIso(),
@@ -263,6 +271,15 @@ export class AgentMonitorServer {
   }
 
   pushEvent(type: string, payload: unknown): void {
+    // Before the enabled check on purpose — the durable record must not depend
+    // on whether anyone is watching the live monitor.
+    if (this.sink) {
+      try {
+        this.sink(type, payload);
+      } catch {
+        // A logging failure must never take down the agent.
+      }
+    }
     if (!this.enabled) return;
     const event: MonitorEvent = {
       index: ++this.sequence,
