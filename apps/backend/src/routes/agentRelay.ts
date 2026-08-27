@@ -51,6 +51,9 @@ const AGENT_TO_HOST_TYPES = new Set([
   'tool.call',
   'agent.message',
   'agent.status',
+  // Preference memory and workflow navigation state. The host renders it in the
+  // demo condition; study conditions ignore it.
+  'agent.memory',
   'session.end',
 ]);
 

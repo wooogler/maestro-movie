@@ -37,6 +37,7 @@ import type {
   FilterExpression,
   PlanDecision,
   PerceivedContext,
+  AgentMemorySnapshot,
   RelayEnvelope,
   SnapshotStatePayload,
   StateUpdatedPayload,
@@ -269,8 +270,54 @@ function sendAgentStatus(
   }
 }
 
-function syncMonitorMemoryState(): void {
+let lastPublishedMemoryFingerprint = '';
+
+function buildMemorySnapshot(reason: string): AgentMemorySnapshot {
+  return {
+    updatedAt: new Date().toISOString(),
+    reason,
+    stage: memory.getContext()?.stage ?? null,
+    preferences: memory.getPreferences(),
+    deadEnds: memory.getDeadEnds(),
+    attemptedBranches: memory.getAttemptedBranches(),
+    committedWorkflow: memory.getCommittedWorkflowState(),
+    pendingConflict: pendingBacktrackConflict
+      ? {
+          preferenceIds: pendingBacktrackConflict.preferenceIds.slice(),
+          description: pendingBacktrackConflict.description,
+          scope: { ...pendingBacktrackConflict.scope },
+          createdAt: pendingBacktrackConflict.createdAt,
+        }
+      : null,
+    backtrackContinuation: activeBacktrackContinuation
+      ? { ...activeBacktrackContinuation }
+      : null,
+    stageBindings: memory.getStageBindings(),
+  };
+}
+
+/**
+ * Publishes agent memory to both consumers: the researcher monitor, and — this
+ * is the part the demo needs — the host UI, which renders preference memory and
+ * workflow navigation as panels instead of leaving them buried in the planner.
+ *
+ * Content-deduped, so the call sites below can be liberal: publishing on every
+ * planner cycle costs nothing when nothing changed.
+ */
+function syncMonitorMemoryState(reason = 'memory-changed'): void {
   monitor.updateMemory(memory.getPreferences(), memory.getDeadEnds());
+
+  const snapshot = buildMemorySnapshot(reason);
+  const { updatedAt: _updatedAt, reason: _reason, ...comparable } = snapshot;
+  const fingerprint = JSON.stringify(comparable);
+  if (fingerprint === lastPublishedMemoryFingerprint) return;
+  lastPublishedMemoryFingerprint = fingerprint;
+
+  try {
+    relay.send('agent.memory', snapshot as unknown as Record<string, unknown>);
+  } catch {
+    // Host disconnections should not fail the planner loop.
+  }
 }
 
 function buildPendingBacktrackConflict(
@@ -315,6 +362,7 @@ function setPendingBacktrackConflict(
     pendingConflict: conflict,
     ...(details ?? {}),
   });
+  syncMonitorMemoryState(`pending-conflict:${reason}`);
 }
 
 function setActiveBacktrackContinuation(
@@ -331,6 +379,7 @@ function setActiveBacktrackContinuation(
       ...(details ?? {}),
     }
   );
+  syncMonitorMemoryState(`backtrack-continuation:${reason}`);
 }
 
 function setSuppressNavigationToolsOnce(
@@ -814,7 +863,7 @@ async function runPreferenceExtractionFromUserMessage(
     const updatedPreferences = await extractStructuredPreferences(extractionCtx);
     memory.setPreferences(updatedPreferences);
 
-    syncMonitorMemoryState();
+    syncMonitorMemoryState('preference-extraction');
     monitor.pushEvent('extraction.completed', {
       trigger: 'user.message',
       mode: 'preferences',
@@ -1420,7 +1469,7 @@ async function maybePlanAndExecute(trigger: string): Promise<void> {
         const timestamp = new Date().toISOString();
         const deadEnd = materializeDeadEndFromPendingConflict(pendingBacktrackConflict, timestamp);
         memory.upsertDeadEnds([deadEnd]);
-        syncMonitorMemoryState();
+        syncMonitorMemoryState('dead-end-recorded');
         monitor.pushEvent('memory.dead_ends_updated', {
           trigger,
           toolName,
@@ -1483,6 +1532,9 @@ async function maybePlanAndExecute(trigger: string): Promise<void> {
   } finally {
     actionInFlight = false;
     planningInFlight = false;
+    // Attempted branches, stage filters/highlights and committed selections all
+    // mutate inside the cycle above without publishing individually.
+    syncMonitorMemoryState('action-cycle');
     monitor.updateState({ actionInFlight: false, phase: 'ready' });
     if (fatalErrorMessage) {
       sendAgentStatus('idle', {
@@ -1522,7 +1574,6 @@ function upsertContext(next: PerceivedContext): void {
 function resetRuntimeState(): void {
   rejectPerceptionWaiters('session-reset');
   memory.reset();
-  syncMonitorMemoryState();
   actionInFlight = false;
   planningInFlight = false;
   currentAgentStatusPhase = 'idle';
@@ -1539,6 +1590,10 @@ function resetRuntimeState(): void {
   pendingBacktrackConflict = null;
   activeBacktrackContinuation = null;
   suppressNavigationToolsOnce = false;
+  // Published only after the navigation flags above are cleared, or the host
+  // would keep showing a conflict from the previous trial.
+  lastPublishedMemoryFingerprint = '';
+  syncMonitorMemoryState('session-reset');
   lastActionFingerprint = '';
   lastAgentToolName = null;
   lastActionAt = 0;
@@ -1573,6 +1628,12 @@ async function handleInbound(envelope: RelayEnvelope): Promise<void> {
         hostActive,
         agentCount: typeof payload.agentCount === 'number' ? payload.agentCount : null,
       });
+      if (hostActive) {
+        // A host that just (re)joined has no memory snapshot yet, and the
+        // content dedupe would otherwise withhold one until something changes.
+        lastPublishedMemoryFingerprint = '';
+        syncMonitorMemoryState('host-presence');
+      }
       if (!sessionReady && hostActive) {
         monitor.updateState({ waitingForHost: false, phase: 'starting-session' });
         void ensureSessionReady('host-presence').catch((error) => {
@@ -1596,6 +1657,7 @@ async function handleInbound(envelope: RelayEnvelope): Promise<void> {
       syncUserConversationStarted(next);
       markPerceptionUpdated();
       monitor.updateContext(memory.getContext());
+      syncMonitorMemoryState('state-updated');
       await maybePlanAndExecute('snapshot.state');
       return;
     }
@@ -1791,7 +1853,7 @@ async function handleInbound(envelope: RelayEnvelope): Promise<void> {
 async function main(): Promise<void> {
   await monitor.start();
   monitor.updateState({ phase: 'monitor-ready' });
-  syncMonitorMemoryState();
+  syncMonitorMemoryState('runtime-start');
   const activeMonitorPort = getMonitorApiPort();
   monitor.pushEvent('runtime.start', {
     relayUrl,

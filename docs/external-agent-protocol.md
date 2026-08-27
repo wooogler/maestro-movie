@@ -141,6 +141,66 @@ Posts an agent-visible explanation to the host chat timeline. This is not a tool
 }
 ```
 
+#### `agent.memory`
+Publishes the agent's preference memory and workflow-navigation state. Fire-and-forget: the host never replies, and an agent that is never listened to loses nothing by sending it.
+
+Sent whenever the content changes — after preference extraction, when a conflict is raised or cleared, when a dead end is recorded, at the end of each planner cycle, and once whenever a host joins (a host that just connected holds no snapshot yet). Identical consecutive snapshots are suppressed at the source.
+
+The host renders this as the demo's memory panel; study conditions receive it and ignore it.
+
+```json
+{
+  "v": "mvp-0.2",
+  "type": "agent.memory",
+  "payload": {
+    "updatedAt": "2026-11-03T19:20:31.004Z",
+    "reason": "dead-end-recorded",
+    "stage": "theater",
+    "preferences": [
+      {
+        "id": "pref_imax_required_1a2b3c4d5e",
+        "description": "The showing must be IMAX",
+        "strength": "hard",
+        "relevantStages": ["time"]
+      }
+    ],
+    "deadEnds": [
+      {
+        "id": "dead_9f8e7d6c5b",
+        "preferenceIds": ["pref_imax_required_1a2b3c4d5e"],
+        "scope": { "stage": "theater", "movie": "Street Fighter" },
+        "reason": "No IMAX showing within 15 miles",
+        "createdAt": "2026-11-03T19:20:31.004Z",
+        "lastSeenAt": "2026-11-03T19:20:31.004Z",
+        "count": 1
+      }
+    ],
+    "attemptedBranches": [],
+    "committedWorkflow": { "movie": { "title": "Street Fighter" } },
+    "pendingConflict": null,
+    "backtrackContinuation": { "targetStage": "theater" },
+    "stageBindings": [
+      {
+        "stage": "movie",
+        "parentContextKey": "root",
+        "filters": [
+          {
+            "field": "ageRating",
+            "operator": "in",
+            "value": ["G", "PG"],
+            "preferenceIds": ["pref_pg_or_below_0a1b2c3d4e"]
+          }
+        ],
+        "highlight": null,
+        "updatedAt": "2026-11-03T19:18:02.551Z"
+      }
+    ]
+  }
+}
+```
+
+`stageBindings` is what links memory to the GUI: each filter and highlight carries the preference ids that justified it, so a viewer can see which spoken constraint produced which on-screen adaptation.
+
 #### `session.end`
 Ends the session, flushes logs, resets UI state.
 

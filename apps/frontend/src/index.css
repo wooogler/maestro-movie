@@ -55,3 +55,16 @@ body {
   background-color: var(--app-surface-0);
   color: var(--app-text-main);
 }
+
+/* Demo memory panel: a newly extracted preference or a freshly recorded dead end
+   announces itself once, then settles into the list. */
+@keyframes memory-flash {
+  0% {
+    background-color: color-mix(in srgb, var(--color-primary) 35%, transparent);
+    transform: translateX(-4px);
+  }
+  100% {
+    background-color: transparent;
+    transform: translateX(0);
+  }
+}

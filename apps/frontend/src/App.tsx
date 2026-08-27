@@ -6,6 +6,7 @@ import { ScenarioReviewPage } from './pages/ScenarioReviewPage';
 import { StudyEndPage } from './pages/StudyEndPage';
 import { PerTrialSurveyPage } from './pages/PerTrialSurveyPage';
 import { PostStudySurveyPage } from './pages/PostStudySurveyPage';
+import { DemoMemoryMirrorPage } from './pages/DemoMemoryMirrorPage';
 import {
   DEFAULT_STUDY_MODE,
   DEMO_STUDY_MODE,
@@ -306,6 +307,9 @@ function App() {
                 }
               />
               <Route path="/demo" element={<DemoModeEntry onEnter={handleEnterDemoMode} />} />
+              {/* Second-screen mirror for the booth. Opened in its own window; it
+                  listens to the booking window rather than joining the relay. */}
+              <Route path="/demo/memory" element={<DemoMemoryMirrorPage />} />
               <Route
                 path="/task-review"
                 element={selectedScenarioId ? (

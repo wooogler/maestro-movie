@@ -1,6 +1,12 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { ToolDefinition } from '../agent/tools';
-import { PROTOCOL_VERSION, type RelayEnvelope, type SnapshotPayload } from '../agent/protocol';
+import {
+  PROTOCOL_VERSION,
+  parseAgentMemorySnapshot,
+  type AgentMemorySnapshot,
+  type RelayEnvelope,
+  type SnapshotPayload,
+} from '../agent/protocol';
 import type { UISpec, Stage } from '../spec';
 import type { ChatMessage } from '../store/chatStore';
 import type { ToolApplyContext } from '../components/devToolsContextShared';
@@ -38,6 +44,8 @@ interface UseAgentBridgeResult {
   connectedAgents: Array<{ id: string; name: string }>;
   agentActivityPhase: 'idle' | 'planning' | 'executing';
   agentStatusSupported: boolean;
+  /** Latest preference memory / workflow navigation state, or null before the agent publishes one. */
+  agentMemory: AgentMemorySnapshot | null;
 }
 
 type AgentActivityPhase = 'idle' | 'planning' | 'executing';
@@ -105,6 +113,7 @@ export function useAgentBridge({
   const [connectedAgents, setConnectedAgents] = useState<Array<{ id: string; name: string }>>([]);
   const [agentStatuses, setAgentStatuses] = useState<Record<string, AgentActivityPhase>>({});
   const [agentStatusSupported, setAgentStatusSupported] = useState(false);
+  const [agentMemory, setAgentMemory] = useState<AgentMemorySnapshot | null>(null);
 
   const wsRef = useRef<WebSocket | null>(null);
   const reconnectTimerRef = useRef<number | null>(null);
@@ -251,6 +260,12 @@ export function useAgentBridge({
         return;
       }
 
+      case 'agent.memory': {
+        const snapshot = parseAgentMemorySnapshot(message.payload);
+        if (snapshot) setAgentMemory(snapshot);
+        return;
+      }
+
       case 'session.start':
         sendEnvelope({
           type: 'session.started',
@@ -357,6 +372,7 @@ export function useAgentBridge({
       wsRef.current = null;
       setAgentStatuses({});
       setAgentStatusSupported(false);
+      setAgentMemory(null);
       return;
     }
 
@@ -528,5 +544,6 @@ export function useAgentBridge({
     connectedAgents,
     agentActivityPhase,
     agentStatusSupported,
+    agentMemory,
   };
 }

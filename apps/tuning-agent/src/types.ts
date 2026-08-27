@@ -174,3 +174,56 @@ export interface EpisodicRecord {
   code?: string;
   reason: string;
 }
+
+/**
+ * One filter the agent applied to a stage, together with the preferences that
+ * justified it. The demo memory panel draws the arrow from a preference chip to
+ * the GUI adaptation it caused; this is the data behind that arrow.
+ */
+export interface StageFilterBinding {
+  field: string;
+  operator: FilterOperator;
+  value: unknown;
+  preferenceIds: string[];
+}
+
+export interface StageHighlightBinding {
+  itemIds: string[];
+  coverage: HighlightCoverage;
+  preferenceIds: string[];
+}
+
+export interface StageBinding {
+  stage: ConflictStage;
+  parentContextKey: string;
+  filters: StageFilterBinding[];
+  highlight: StageHighlightBinding | null;
+  updatedAt: string;
+}
+
+export interface PendingConflictSnapshot {
+  preferenceIds: string[];
+  description: string;
+  scope: ConflictScope;
+  createdAt: string;
+}
+
+/**
+ * Payload of the `agent.memory` envelope: everything the agent knows about the
+ * user that is otherwise invisible to them. Sent to the host so the demo can
+ * render preference memory and workflow navigation instead of leaving both
+ * mechanisms buried in the planner.
+ */
+export interface AgentMemorySnapshot {
+  updatedAt: string;
+  /** Why this snapshot was published — useful when reading a relay log. */
+  reason: string;
+  stage: string | null;
+  preferences: Preference[];
+  deadEnds: DeadEnd[];
+  attemptedBranches: AttemptedBranch[];
+  committedWorkflow: Record<string, unknown> | null;
+  pendingConflict: PendingConflictSnapshot | null;
+  backtrackContinuation: BacktrackContinuation | null;
+  stageBindings: StageBinding[];
+}

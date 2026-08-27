@@ -37,6 +37,7 @@ import {
   type WorkflowSelectionState,
 } from '../spec';
 import { MessageList, FullTuningSplitView, ChatInput } from '../components/chat';
+import { AgentMemoryPanel, createMemoryPublisher } from '../components/memory';
 import { ScenarioBriefing } from '../components/scenario/ScenarioBriefing';
 import { StageRenderer } from '../renderer';
 import {
@@ -686,6 +687,9 @@ export function ChatPage({
     normalizedStudyModePreset === 'full-tuning-voice-on' ||
     // Demo mirrors the Interface B (full tuning) experience.
     normalizedStudyModePreset === 'demo';
+  // Preference memory and workflow navigation are surfaced in the demo only.
+  // Study conditions C1-C4 must keep the interface the paper describes.
+  const showMemoryPanel = normalizedStudyModePreset === 'demo';
   const voiceModeAvailable = studyModeConfig?.voiceModeAvailable ?? false;
   const sttLanguage: SupportedSttLanguage = 'en';
   const scenarioTitle = studySession?.scenario.title
@@ -1629,6 +1633,7 @@ export function ChatPage({
     connectedAgents,
     agentActivityPhase,
     agentStatusSupported,
+    agentMemory,
   } = useAgentBridge({
     uiSpec: activeSpec,
     messageHistory: messages,
@@ -1646,6 +1651,22 @@ export function ChatPage({
   useEffect(() => {
     agentStatusSupportedRef.current = agentStatusSupported;
   }, [agentStatusSupported]);
+
+  // Mirror memory to the booth's second screen. Only the demo opens that window,
+  // so publishing is scoped to it rather than running in every study session.
+  const memoryPublisherRef = useRef<ReturnType<typeof createMemoryPublisher> | null>(null);
+  useEffect(() => {
+    if (!showMemoryPanel) return;
+    const publisher = createMemoryPublisher();
+    memoryPublisherRef.current = publisher;
+    return () => {
+      memoryPublisherRef.current = null;
+      publisher.close();
+    };
+  }, [showMemoryPanel]);
+  useEffect(() => {
+    memoryPublisherRef.current?.publish(agentMemory, currentStage ?? null);
+  }, [agentMemory, currentStage]);
 
   useEffect(() => {
     sendVoiceModeChange(voiceModeEnabled);
@@ -2234,28 +2255,35 @@ export function ChatPage({
         )}
 
         {usesSplitInterface ? (
-          <FullTuningSplitView
-            messages={messages}
-            activeSpec={activeSpec}
-            isAgentTyping={isAgentTyping}
-            interactionLocked={interactionLocked}
-            speakingMessageId={speakingMessageId}
-            inputDisabled={inputDisabled}
-            inputPlaceholder={effectiveChatInputPlaceholder}
-            onSubmitInput={isAgentInteractionEnabled ? handleChatInputSubmit : undefined}
-            voiceModeAvailable={voiceModeAvailable}
-            voiceModeEnabled={voiceModeEnabled}
-            voiceStatusLabel={voiceStatusLabel}
-            highlightVoiceToggle={highlightVoiceToggle}
-            voiceToggleDisabled={voiceModeButtonDisabled}
-            onToggleVoiceMode={handleVoiceModeToggle}
-            onSelect={handleSelect}
-            onToggle={handleToggle}
-            onNext={handleNext}
-            onFinishTask={handleFinishStudy}
-            onBack={handleBack}
-            onConfirm={handleConfirm}
-          />
+          <div className={showMemoryPanel ? 'flex min-h-0 flex-1' : 'contents'}>
+            <FullTuningSplitView
+              messages={messages}
+              activeSpec={activeSpec}
+              isAgentTyping={isAgentTyping}
+              interactionLocked={interactionLocked}
+              speakingMessageId={speakingMessageId}
+              inputDisabled={inputDisabled}
+              inputPlaceholder={effectiveChatInputPlaceholder}
+              onSubmitInput={isAgentInteractionEnabled ? handleChatInputSubmit : undefined}
+              voiceModeAvailable={voiceModeAvailable}
+              voiceModeEnabled={voiceModeEnabled}
+              voiceStatusLabel={voiceStatusLabel}
+              highlightVoiceToggle={highlightVoiceToggle}
+              voiceToggleDisabled={voiceModeButtonDisabled}
+              onToggleVoiceMode={handleVoiceModeToggle}
+              onSelect={handleSelect}
+              onToggle={handleToggle}
+              onNext={handleNext}
+              onFinishTask={handleFinishStudy}
+              onBack={handleBack}
+              onConfirm={handleConfirm}
+            />
+            {showMemoryPanel && (
+              <aside className="hidden w-[21rem] shrink-0 overflow-y-auto border-l border-dark-border bg-dark px-4 py-4 xl:block">
+                <AgentMemoryPanel snapshot={agentMemory} currentStage={currentStage} />
+              </aside>
+            )}
+          </div>
         ) : viewMode === 'chat' ? (
           <MessageList
             messages={messages}

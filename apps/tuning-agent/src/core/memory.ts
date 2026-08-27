@@ -13,6 +13,7 @@ import type {
   PreferenceBinding,
   Preference,
   StageAlternativeMemory,
+  StageBinding,
 } from '../types';
 import type { WorkflowStage } from './workflowState';
 
@@ -109,6 +110,34 @@ export class AgentMemory {
       preferenceIds: item.preferenceIds.slice(),
       scope: { ...item.scope },
     }));
+  }
+
+  /**
+   * The filters and highlights currently in force, each carrying the preference
+   * ids that justified it. Only stages that actually carry an adaptation are
+   * returned — an untouched stage has nothing to explain.
+   */
+  getStageBindings(): StageBinding[] {
+    return Array.from(this.stageAlternatives.values())
+      .filter((record) => record.filters.length > 0 || record.highlight !== null)
+      .map((record) => ({
+        stage: record.stage,
+        parentContextKey: record.parentContextKey,
+        filters: record.filters.map((trace) => ({
+          field: trace.filter.field,
+          operator: trace.filter.operator,
+          value: trace.filter.value,
+          preferenceIds: trace.preferenceBindings.map((binding) => binding.id),
+        })),
+        highlight: record.highlight
+          ? {
+              itemIds: record.highlight.itemIds.slice(),
+              coverage: record.highlight.coverage,
+              preferenceIds: record.highlight.preferenceBindings.map((binding) => binding.id),
+            }
+          : null,
+        updatedAt: record.updatedAt,
+      }));
   }
 
   private cloneWorkflowValue(value: unknown): unknown {
