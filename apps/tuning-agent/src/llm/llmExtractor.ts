@@ -1,6 +1,7 @@
 import { refreshModelEnvVars } from "../core/envRefresh";
 import { buildPreferenceId, normalizePreferenceList } from "../core/cpMemory";
 import { resolveOpenAiApiKey } from "./openaiKey";
+import { fetchOpenAiWithRetry } from "./resilientFetch";
 import { CONFLICT_STAGES } from "../types";
 import type { ConflictStage, Preference } from "../types";
 
@@ -446,13 +447,23 @@ async function callOpenAIJson(
 
   let response: Response;
   try {
-    response = await fetch(apiUrl, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${apiKey}`,
+    response = await fetchOpenAiWithRetry({
+      url: apiUrl,
+      apiKey,
+      body,
+      onAttemptError: (info) => {
+        emitLlmTrace("error", {
+          requestId: traceRequestId,
+          kind,
+          provider: "openai",
+          phase: `fetch.attempt.${info.phase}`,
+          attempt: info.attempt,
+          willRetry: info.willRetry,
+          ...(info.status === undefined ? {} : { status: info.status }),
+          errorMessage: info.errorMessage,
+          ...(info.errorName === undefined ? {} : { errorName: info.errorName }),
+        });
       },
-      body: JSON.stringify(body),
     });
   } catch (error) {
     emitLlmTrace("error", {
@@ -483,13 +494,10 @@ async function callOpenAIJson(
         body: baseBody,
       });
       try {
-        response = await fetch(apiUrl, {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            Authorization: `Bearer ${apiKey}`,
-          },
-          body: JSON.stringify(baseBody),
+        response = await fetchOpenAiWithRetry({
+          url: apiUrl,
+          apiKey,
+          body: baseBody,
         });
         retriedWithoutTemperature = true;
       } catch (error) {

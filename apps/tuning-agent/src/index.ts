@@ -1,3 +1,4 @@
+import { createSpeechBarrier } from './core/speechBarrier';
 import { executePlannedAction } from './core/executor';
 import { AgentMemory } from './core/memory';
 import { applyStateUpdated, applyUserMessage, fromSnapshot } from './core/perception';
@@ -187,7 +188,6 @@ let lastActionAt = 0;
 let lastAgentToolName: string | null = null;
 let pendingReadingDelayUntil = 0;
 let voiceModeEnabled = false;
-let ttsPlaybackResolve: (() => void) | null = null;
 let ensureSessionReadyInFlight: Promise<void> | null = null;
 let sessionReady = false;
 let hostConnectionAvailable = false;
@@ -958,12 +958,26 @@ function computeReadingDelay(text: string): number {
   return Math.max(durationMs, MIN_READING_DELAY_MS);
 }
 
+const speechBarrier = createSpeechBarrier({
+  timeoutMs: TTS_PLAYBACK_TIMEOUT_MS,
+  onEvent: (event) => {
+    monitor.pushEvent(`tts.playback.${event.type}`, event);
+  },
+});
+
+/** Called after an `agent.message` has been accepted by the host. */
+function noteAgentSpeechSent(): void {
+  if (!voiceModeEnabled) return;
+  speechBarrier.noteSpeechSent();
+}
+
 async function maybeSendAssistantMessage(context: PerceivedContext, text: string): Promise<void> {
   const trimmed = text.trim();
   if (!trimmed) return;
   const action = buildAgentMessageAction(trimmed);
   if (!isActionSafe(context, action)) return;
   const outcome = await executePlannedAction(relay, action);
+  if (outcome.ok) noteAgentSpeechSent();
   monitor.pushEvent('assistant_message.outcome', { text: trimmed, outcome });
 }
 
@@ -1095,22 +1109,17 @@ async function maybePlanAndExecute(trigger: string): Promise<void> {
   // to act proactively from the first stage (e.g. greeting on snapshot).
 
   let readingDelayPromise: Promise<void> | null = null;
-  if (pendingReadingDelayUntil > 0) {
-    if (voiceModeEnabled) {
-      readingDelayPromise = new Promise<void>((resolve) => {
-        ttsPlaybackResolve = resolve;
-        setTimeout(() => {
-          if (ttsPlaybackResolve === resolve) {
-            ttsPlaybackResolve = null;
-            resolve();
-          }
-        }, TTS_PLAYBACK_TIMEOUT_MS);
-      });
-    } else {
-      const remaining = pendingReadingDelayUntil - Date.now();
-      if (remaining > 0) {
-        readingDelayPromise = sleep(remaining);
-      }
+  if (voiceModeEnabled) {
+    // Gate on what was actually sent, not on pendingReadingDelayUntil. The
+    // fallback utterance at the tool-call path speaks without ever setting a
+    // reading delay, so keying the barrier off that flag let the agent talk
+    // over its own previous sentence.
+    readingDelayPromise = speechBarrier.wait();
+    pendingReadingDelayUntil = 0;
+  } else if (pendingReadingDelayUntil > 0) {
+    const remaining = pendingReadingDelayUntil - Date.now();
+    if (remaining > 0) {
+      readingDelayPromise = sleep(remaining);
     }
     pendingReadingDelayUntil = 0;
   }
@@ -1251,6 +1260,7 @@ async function maybePlanAndExecute(trigger: string): Promise<void> {
     }
 
     const outcome = await executePlannedAction(relay, action);
+    if (action.type === 'agent.message' && outcome.ok) noteAgentSpeechSent();
     if (outcome.uiSpec !== undefined) {
       const current = memory.getContext();
       if (current) {
@@ -1528,6 +1538,10 @@ function resetRuntimeState(): void {
   lastActionFingerprint = '';
   lastAgentToolName = null;
   lastActionAt = 0;
+  // A barrier or reading delay left armed from the previous trial would
+  // otherwise leak into the next one — the study resets between trials.
+  pendingReadingDelayUntil = 0;
+  speechBarrier.release('session-reset');
   monitor.updateState({
     phase: 'ready',
     actionInFlight: false,
@@ -1725,15 +1739,23 @@ async function handleInbound(envelope: RelayEnvelope): Promise<void> {
     }
     case 'voice.mode': {
       const payload = asRecord(envelope.payload);
+      const wasEnabled = voiceModeEnabled;
       voiceModeEnabled = payload?.enabled === true;
+      if (wasEnabled && !voiceModeEnabled) {
+        // Voice was switched off (including the by-design auto-disable at the
+        // confirm step). Nothing will report playback any more, so waiting out
+        // the 15s timeout would just freeze the agent.
+        speechBarrier.release('voice-mode-disabled');
+      }
       monitor.pushEvent('voice.mode', { enabled: voiceModeEnabled });
       return;
     }
     case 'tts.playback.complete': {
-      if (ttsPlaybackResolve) {
-        ttsPlaybackResolve();
-        ttsPlaybackResolve = null;
-      }
+      const payload = asRecord(envelope.payload);
+      speechBarrier.noteCompletion({
+        messageId: typeof payload?.messageId === 'string' ? payload.messageId : null,
+        interrupted: payload?.interrupted === true,
+      });
       return;
     }
     case 'session.reset': {

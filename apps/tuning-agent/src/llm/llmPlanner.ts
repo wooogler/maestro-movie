@@ -1,4 +1,5 @@
 import { resolveOpenAiApiKey } from "./openaiKey";
+import { fetchOpenAiWithRetry } from "./resilientFetch";
 import type {
   BacktrackContinuation,
   ConflictMemory,
@@ -1048,13 +1049,21 @@ export async function planActionWithOpenAI(
 
   let response: Response;
   try {
-    response = await fetch(apiUrl, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${apiKey}`,
+    response = await fetchOpenAiWithRetry({
+      url: apiUrl,
+      apiKey,
+      body,
+      onAttemptError: (info) => {
+        emitLlmTrace("error", {
+          requestId: traceRequestId,
+          phase: `fetch.attempt.${info.phase}`,
+          attempt: info.attempt,
+          willRetry: info.willRetry,
+          ...(info.status === undefined ? {} : { status: info.status }),
+          errorMessage: info.errorMessage,
+          ...(info.errorName === undefined ? {} : { errorName: info.errorName }),
+        });
       },
-      body: JSON.stringify(body),
     });
   } catch (error) {
     emitLlmTrace("error", {
@@ -1088,13 +1097,10 @@ export async function planActionWithOpenAI(
         body: baseBody,
       });
       try {
-        response = await fetch(apiUrl, {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            Authorization: `Bearer ${apiKey}`,
-          },
-          body: JSON.stringify(baseBody),
+        response = await fetchOpenAiWithRetry({
+          url: apiUrl,
+          apiKey,
+          body: baseBody,
         });
         retriedWithoutTemperature = true;
       } catch (error) {
