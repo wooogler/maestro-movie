@@ -58,6 +58,15 @@ export interface ScenarioSeatTemplate {
   rowRules?: ScenarioSeatTemplateRowRule[];
 }
 
+/**
+ * A theater whose house does not match the dataset default — a single-screen
+ * repertory house and a 16-plex auditorium have different row counts, seat
+ * counts and price tiers, and a shared grid makes every theater feel identical.
+ */
+export interface ScenarioSeatTemplateOverride extends ScenarioSeatTemplate {
+  theaterId: string;
+}
+
 export interface ScenarioSeatOverride {
   showingId: string;
   row: string;
@@ -116,8 +125,19 @@ export interface ScenarioDataset {
   theaters: ScenarioDatasetTheater[];
   showings: ScenarioDatasetShowing[];
   seatTemplate: ScenarioSeatTemplate;
+  /** Per-theater house layouts. Theaters not listed use `seatTemplate`. */
+  seatTemplateOverrides?: ScenarioSeatTemplateOverride[];
   seatOverrides: ScenarioSeatOverride[];
   assertions: ScenarioDatasetAssertions;
+}
+
+/** The layout in force for a theater: its override if it has one, else the default. */
+export function resolveSeatTemplate(
+  dataset: Pick<ScenarioDataset, 'seatTemplate' | 'seatTemplateOverrides'>,
+  theaterId: string
+): ScenarioSeatTemplate {
+  const override = dataset.seatTemplateOverrides?.find((item) => item.theaterId === theaterId);
+  return override ?? dataset.seatTemplate;
 }
 
 function toObject(value: unknown): Record<string, unknown> | null {
@@ -294,10 +314,14 @@ function parseShowing(raw: unknown, index: number, scenarioId: string): Scenario
   };
 }
 
-function parseSeatTemplate(raw: unknown, scenarioId: string): ScenarioSeatTemplate {
+function parseSeatTemplate(
+  raw: unknown,
+  scenarioId: string,
+  label = 'seatTemplate'
+): ScenarioSeatTemplate {
   const record = toObject(raw);
   if (!record) {
-    throw new Error(`[${scenarioId}] seatTemplate must be an object`);
+    throw new Error(`[${scenarioId}] ${label} must be an object`);
   }
 
   const rows = readStringArray(record.rows);
@@ -307,42 +331,42 @@ function parseSeatTemplate(raw: unknown, scenarioId: string): ScenarioSeatTempla
   const defaultStatus = readString(record.defaultStatus) as SeatStatus | null;
 
   if (!rows || seatsPerRow === null || !defaultType || defaultPrice === null) {
-    throw new Error(`[${scenarioId}] seatTemplate has invalid required fields`);
+    throw new Error(`[${scenarioId}] ${label} has invalid required fields`);
   }
   if (!['standard', 'premium', 'couple'].includes(defaultType)) {
-    throw new Error(`[${scenarioId}] seatTemplate.defaultType is invalid`);
+    throw new Error(`[${scenarioId}] ${label}.defaultType is invalid`);
   }
   if (defaultStatus && !['available', 'occupied'].includes(defaultStatus)) {
-    throw new Error(`[${scenarioId}] seatTemplate.defaultStatus is invalid`);
+    throw new Error(`[${scenarioId}] ${label}.defaultStatus is invalid`);
   }
   assertUniqueIds(rows, 'seat row', scenarioId);
 
   let rowRules: ScenarioSeatTemplateRowRule[] | undefined;
   if (record.rowRules !== undefined) {
     if (!Array.isArray(record.rowRules)) {
-      throw new Error(`[${scenarioId}] seatTemplate.rowRules must be an array`);
+      throw new Error(`[${scenarioId}] ${label}.rowRules must be an array`);
     }
 
     rowRules = record.rowRules.map((entry, index) => {
       const rowRule = toObject(entry);
       if (!rowRule) {
-        throw new Error(`[${scenarioId}] seatTemplate.rowRules[${index}] must be an object`);
+        throw new Error(`[${scenarioId}] ${label}.rowRules[${index}] must be an object`);
       }
       const row = readString(rowRule.row);
       const type = rowRule.type === undefined ? undefined : (readString(rowRule.type) as SeatType | null);
       const price = rowRule.price === undefined ? undefined : readPositiveInteger(rowRule.price);
 
       if (!row) {
-        throw new Error(`[${scenarioId}] seatTemplate.rowRules[${index}].row is required`);
+        throw new Error(`[${scenarioId}] ${label}.rowRules[${index}].row is required`);
       }
       if (!rows.includes(row)) {
-        throw new Error(`[${scenarioId}] seatTemplate.rowRules[${index}] references unknown row`);
+        throw new Error(`[${scenarioId}] ${label}.rowRules[${index}] references unknown row`);
       }
       if (type && !['standard', 'premium', 'couple'].includes(type)) {
-        throw new Error(`[${scenarioId}] seatTemplate.rowRules[${index}].type is invalid`);
+        throw new Error(`[${scenarioId}] ${label}.rowRules[${index}].type is invalid`);
       }
       if (rowRule.price !== undefined && price === null) {
-        throw new Error(`[${scenarioId}] seatTemplate.rowRules[${index}].price is invalid`);
+        throw new Error(`[${scenarioId}] ${label}.rowRules[${index}].price is invalid`);
       }
 
       return {
@@ -354,7 +378,7 @@ function parseSeatTemplate(raw: unknown, scenarioId: string): ScenarioSeatTempla
 
     assertUniqueIds(
       rowRules.map((item) => item.row),
-      'seatTemplate rowRules',
+      `${label} rowRules`,
       scenarioId
     );
   }
@@ -367,6 +391,38 @@ function parseSeatTemplate(raw: unknown, scenarioId: string): ScenarioSeatTempla
     ...(defaultStatus ? { defaultStatus } : {}),
     ...(rowRules ? { rowRules } : {}),
   };
+}
+
+function parseSeatTemplateOverrides(
+  raw: unknown,
+  scenarioId: string
+): ScenarioSeatTemplateOverride[] | undefined {
+  if (raw === undefined) return undefined;
+  if (!Array.isArray(raw)) {
+    throw new Error(`[${scenarioId}] seatTemplateOverrides must be an array`);
+  }
+
+  const overrides = raw.map((entry, index) => {
+    const record = toObject(entry);
+    if (!record) {
+      throw new Error(`[${scenarioId}] seatTemplateOverrides[${index}] must be an object`);
+    }
+    const theaterId = readString(record.theaterId);
+    if (!theaterId) {
+      throw new Error(`[${scenarioId}] seatTemplateOverrides[${index}].theaterId is required`);
+    }
+    return {
+      theaterId,
+      ...parseSeatTemplate(record, scenarioId, `seatTemplateOverrides[${index}]`),
+    };
+  });
+
+  assertUniqueIds(
+    overrides.map((item) => item.theaterId),
+    'seatTemplateOverrides theaterId',
+    scenarioId
+  );
+  return overrides;
 }
 
 function parseSeatOverrides(raw: unknown, scenarioId: string): ScenarioSeatOverride[] {
@@ -652,7 +708,21 @@ function validateReferences(dataset: ScenarioDataset, scenarioId: string): void 
   const movieSet = new Set(movieIds);
   const theaterSet = new Set(theaterIds);
   const showingSet = new Set(showingIds);
-  const rowSet = new Set(dataset.seatTemplate.rows);
+  const theaterByShowingId = new Map(dataset.showings.map((showing) => [showing.id, showing.theaterId]));
+
+  /** A seat reference is only meaningful against the house it belongs to. */
+  const templateForShowing = (showingId: string) => {
+    const theaterId = theaterByShowingId.get(showingId);
+    return theaterId ? resolveSeatTemplate(dataset, theaterId) : dataset.seatTemplate;
+  };
+
+  for (const override of dataset.seatTemplateOverrides ?? []) {
+    if (!theaterSet.has(override.theaterId)) {
+      throw new Error(
+        `[${scenarioId}] seatTemplateOverrides references unknown theaterId ${override.theaterId}`
+      );
+    }
+  }
 
   for (const showing of dataset.showings) {
     if (!movieSet.has(showing.movieId)) {
@@ -667,11 +737,12 @@ function validateReferences(dataset: ScenarioDataset, scenarioId: string): void 
     if (!showingSet.has(override.showingId)) {
       throw new Error(`[${scenarioId}] seatOverride references unknown showingId ${override.showingId}`);
     }
-    if (!rowSet.has(override.row)) {
+    const template = templateForShowing(override.showingId);
+    if (!template.rows.includes(override.row)) {
       throw new Error(`[${scenarioId}] seatOverride references unknown row ${override.row}`);
     }
     for (const number of [...(override.occupiedNumbers ?? []), ...(override.availableNumbers ?? [])]) {
-      if (number < 1 || number > dataset.seatTemplate.seatsPerRow) {
+      if (number < 1 || number > template.seatsPerRow) {
         throw new Error(`[${scenarioId}] seatOverride has out-of-range seat number ${number}`);
       }
     }
@@ -704,7 +775,7 @@ function validateReferences(dataset: ScenarioDataset, scenarioId: string): void 
     if (!showingSet.has(rule.showingId)) {
       throw new Error(`[${scenarioId}] assertions.adjacencyRules references unknown showingId ${rule.showingId}`);
     }
-    if (!rowSet.has(rule.row)) {
+    if (!templateForShowing(rule.showingId).rows.includes(rule.row)) {
       throw new Error(`[${scenarioId}] assertions.adjacencyRules references unknown row ${rule.row}`);
     }
   }
@@ -721,13 +792,14 @@ function validateReferences(dataset: ScenarioDataset, scenarioId: string): void 
         `[${scenarioId}] assertions.seatAvailabilityRules references unknown showingId ${rule.showingId}`
       );
     }
-    if (!rowSet.has(rule.row)) {
+    const availabilityTemplate = templateForShowing(rule.showingId);
+    if (!availabilityTemplate.rows.includes(rule.row)) {
       throw new Error(
         `[${scenarioId}] assertions.seatAvailabilityRules references unknown row ${rule.row}`
       );
     }
     for (const number of rule.expectedAvailableNumbers) {
-      if (number < 1 || number > dataset.seatTemplate.seatsPerRow) {
+      if (number < 1 || number > availabilityTemplate.seatsPerRow) {
         throw new Error(
           `[${scenarioId}] assertions.seatAvailabilityRules has out-of-range seat number ${number}`
         );
@@ -750,6 +822,9 @@ function parseScenarioDataset(raw: unknown, scenarioId: string): ScenarioDataset
     theaters: record.theaters.map((theater, index) => parseTheater(theater, index, scenarioId)),
     showings: record.showings.map((showing, index) => parseShowing(showing, index, scenarioId)),
     seatTemplate: parseSeatTemplate(record.seatTemplate, scenarioId),
+    ...(record.seatTemplateOverrides !== undefined
+      ? { seatTemplateOverrides: parseSeatTemplateOverrides(record.seatTemplateOverrides, scenarioId) }
+      : {}),
     seatOverrides: parseSeatOverrides(record.seatOverrides, scenarioId),
     assertions: parseAssertions(record.assertions, scenarioId),
   };

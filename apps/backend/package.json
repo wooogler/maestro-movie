@@ -13,6 +13,7 @@
     "db:push": "drizzle-kit push",
     "db:seed": "tsx src/db/seed.ts",
     "db:seed:scenarios": "tsx src/db/seedScenarios.ts",
+    "scenarios:generate": "tsx src/db/generator/generateScenarioDataset.ts",
     "db:studio": "drizzle-kit studio"
   },
   "keywords": [

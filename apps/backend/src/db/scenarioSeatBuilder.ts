@@ -2,6 +2,7 @@ import type {
   ScenarioDatasetShowing,
   ScenarioSeatOverride,
   ScenarioSeatTemplate,
+  ScenarioSeatTemplateOverride,
 } from '../study/scenarioDataset';
 
 type SeatType = 'standard' | 'premium' | 'couple';
@@ -52,31 +53,46 @@ function buildOverrideMap(overrides: ScenarioSeatOverride[]): Map<string, SeatOv
 export function buildScenarioSeats(
   showings: ScenarioDatasetShowing[],
   seatTemplate: ScenarioSeatTemplate,
-  seatOverrides: ScenarioSeatOverride[]
+  seatOverrides: ScenarioSeatOverride[],
+  seatTemplateOverrides: ScenarioSeatTemplateOverride[] = []
 ): ScenarioSeatRow[] {
-  const rowRuleMap = new Map(
-    (seatTemplate.rowRules ?? []).map((rule) => [rule.row, rule])
+  // Row rules are cached per layout: resolving them per seat would rebuild the
+  // same map for every row of every showing.
+  const rowRuleCache = new Map<ScenarioSeatTemplate, Map<string, { type?: SeatType; price?: number }>>();
+  const rowRulesFor = (template: ScenarioSeatTemplate) => {
+    const cached = rowRuleCache.get(template);
+    if (cached) return cached;
+    const built = new Map((template.rowRules ?? []).map((rule) => [rule.row, rule]));
+    rowRuleCache.set(template, built);
+    return built;
+  };
+
+  const templateByTheaterId = new Map(
+    seatTemplateOverrides.map((override) => [override.theaterId, override as ScenarioSeatTemplate])
   );
   const overrideMap = buildOverrideMap(seatOverrides);
-  const defaultStatus = seatTemplate.defaultStatus ?? 'available';
-  const seatsPerShowing = seatTemplate.rows.length * seatTemplate.seatsPerRow;
 
   const seats: ScenarioSeatRow[] = [];
 
   for (const showing of showings) {
+    const template = templateByTheaterId.get(showing.theaterId) ?? seatTemplate;
+    const rowRuleMap = rowRulesFor(template);
+    const defaultStatus = template.defaultStatus ?? 'available';
+    const seatsPerShowing = template.rows.length * template.seatsPerRow;
+
     if (showing.totalSeats !== seatsPerShowing) {
       throw new Error(
         `[${showing.id}] totalSeats=${showing.totalSeats} does not match template seats=${seatsPerShowing}`
       );
     }
 
-    for (const row of seatTemplate.rows) {
+    for (const row of template.rows) {
       const rowRule = rowRuleMap.get(row);
-      const type = (rowRule?.type ?? seatTemplate.defaultType) as SeatType;
-      const price = rowRule?.price ?? seatTemplate.defaultPrice;
+      const type = (rowRule?.type ?? template.defaultType) as SeatType;
+      const price = rowRule?.price ?? template.defaultPrice;
       const override = overrideMap.get(keyForOverride(showing.id, row));
 
-      for (let number = 1; number <= seatTemplate.seatsPerRow; number++) {
+      for (let number = 1; number <= template.seatsPerRow; number++) {
         let status: SeatStatus = defaultStatus;
 
         if (override?.occupiedNumbers.has(number)) {

@@ -225,7 +225,8 @@ function seedScenarioFromDataset(templatePath: string, scenario: ScenarioDefinit
     const seats = buildScenarioSeats(
       dataset.showings,
       dataset.seatTemplate,
-      dataset.seatOverrides
+      dataset.seatOverrides,
+      dataset.seatTemplateOverrides
     );
 
     const transaction = sqlite.transaction(() => {
@@ -301,10 +302,18 @@ function seedScenarioTemplate(scenario: ScenarioDefinition): void {
 async function main(): Promise<void> {
   ensureTemplateDir();
   const scenarios = getScenarioCatalog(true);
+  // Several scenarios can share one world — the demo cards all run against the
+  // same generated Detroit dataset — so a template is built once, not per card.
+  const built = new Set<string>();
   for (const scenario of scenarios) {
+    if (built.has(scenario.templateDbFile)) {
+      console.log(`[seed:scenarios] ${scenario.id} reuses ${scenario.templateDbFile}`);
+      continue;
+    }
     seedScenarioTemplate(scenario);
+    built.add(scenario.templateDbFile);
   }
-  console.log(`[seed:scenarios] Complete. Generated ${scenarios.length} scenario template DBs.`);
+  console.log(`[seed:scenarios] Complete. Generated ${built.size} scenario template DBs.`);
 }
 
 void main().catch((error) => {

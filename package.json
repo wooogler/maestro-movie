@@ -24,14 +24,16 @@
     "start:agent": "bash scripts/run-tuning-agent.sh start",
     "db:seed": "npm run db:seed --workspace=apps/backend",
     "db:seed:scenarios": "npm run db:seed:scenarios --workspace=apps/backend",
+    "scenarios:generate": "npm run scenarios:generate --workspace=apps/backend --",
     "codes": "tsx scripts/demo-access-codes.ts",
     "codes:generate": "tsx scripts/demo-access-codes.ts generate",
     "codes:stats": "tsx scripts/demo-access-codes.ts stats",
     "codes:revoke": "tsx scripts/demo-access-codes.ts revoke",
-    "check": "npm run check:barrier && npm run check:codes && npm run check:memory",
+    "check": "npm run check:barrier && npm run check:codes && npm run check:memory && npm run check:scenarios",
     "check:barrier": "tsx apps/tuning-agent/src/core/speechBarrier.check.ts",
     "check:codes": "tsx apps/backend/src/study/demoAccessCodes.check.ts",
     "check:memory": "tsx scripts/check-memory-snapshot.ts",
+    "check:scenarios": "tsx apps/backend/src/db/generator/generateScenarioDataset.ts --verify",
     "typecheck": "tsc --noEmit -p apps/backend/tsconfig.json && tsc --noEmit -p apps/tuning-agent/tsconfig.json && tsc --noEmit -p apps/frontend/tsconfig.app.json"
   },
   "devDependencies": {

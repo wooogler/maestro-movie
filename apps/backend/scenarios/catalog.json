@@ -226,6 +226,99 @@
       ],
       "templateDbFile": "scn_s4_t2_last_trip_hard.db",
       "seedDataFile": "data/scn_s4_t2_last_trip_hard.json"
+    },
+    {
+      "id": "demo_open_booking",
+      "title": "Demo: Open Booking (Bring Your Own Preferences)",
+      "background": "There is no script. Book whatever film you would actually want to see in Detroit this week, however you would want to see it.",
+      "story": "Today is Tuesday, November 3, 2026, and you are at the UIST demo reception at the Renaissance Center in Detroit. Five films are playing across five real cinemas between now and Sunday, November 8. Ask for whatever you actually want — a genre, a title, a night, a cinema you can get to, a format, seats together.",
+      "stepBriefs": {
+        "movie": "Whatever you feel like seeing. Five films are playing.",
+        "theater": "Whichever cinema suits you, 2.5 to 20 miles out.",
+        "date": "Any day from today, Tuesday November 3, through Sunday November 8.",
+        "time": "Any showtime. Standard, 3D and IMAX all run.",
+        "seat": "Any seats — together, up front, premium."
+      },
+      "narratorPreferenceTypes": [
+        "open-demo-no-script"
+      ],
+      "templateDbFile": "demo_uist2026_detroit.db",
+      "seedDataFile": "data/demo_uist2026_detroit.json"
+    },
+    {
+      "id": "demo_card_a_tonight",
+      "title": "Demo A: Tonight, After the Reception",
+      "background": "The reception is over and there is still an evening left. One ticket, close to downtown, back before midnight.",
+      "story": "Today is Tuesday, November 3, 2026. The UIST demo reception wraps up around 7:30 PM and I want to see Klara and the Sun tonight. I would rather not drive far — under 15 miles if I can help it, and the closest option is best. The showing has to start after 8:00 PM, and I want to be back downtown before midnight. One seat, somewhere near the middle, and not in the front two rows.",
+      "stepBriefs": {
+        "movie": "I want Klara and the Sun specifically.",
+        "theater": "The closest theater, and no more than 15 miles out.",
+        "date": "Tonight, Tuesday November 3.",
+        "time": "It has to start after 8:00 PM and be over before midnight.",
+        "seat": "One seat near the middle, not in the front two rows."
+      },
+      "narratorPreferenceTypes": [
+        "klara-and-the-sun-hard",
+        "tonight-only-hard",
+        "closest-theater-soft",
+        "within-15-miles-hard",
+        "start-after-8pm-hard",
+        "end-before-midnight-hard",
+        "center-seat-soft",
+        "avoid-front-rows-hard"
+      ],
+      "templateDbFile": "demo_uist2026_detroit.db",
+      "seedDataFile": "data/demo_uist2026_detroit.json"
+    },
+    {
+      "id": "demo_card_b_imax_night",
+      "title": "Demo B: IMAX Night With a Co-author",
+      "background": "A proper last night out with a co-author — but the only IMAX in the region is further away than I said I would drive.",
+      "story": "Today is Tuesday, November 3, 2026. A co-author and I want to see Street Fighter on Thursday, November 5 — the last night of the conference. It has to be IMAX; a standard screening is not worth the trip. I am not willing to drive more than 15 miles from the Renaissance Center. The showing needs to start after 6:30 PM and end by 11:00 PM. We need two seats together, and not in the front rows.",
+      "stepBriefs": {
+        "movie": "I want Street Fighter.",
+        "theater": "Nothing more than 15 miles from the Renaissance Center, closest first.",
+        "date": "Thursday, November 5, the last night of the conference.",
+        "time": "IMAX only, starting after 6:30 PM and ending by 11:00 PM.",
+        "seat": "Two seats together, not in the front rows."
+      },
+      "narratorPreferenceTypes": [
+        "street-fighter-hard",
+        "date-2026-11-05-hard",
+        "imax-required-hard",
+        "within-15-miles-hard",
+        "closest-theater-soft",
+        "start-after-630pm-hard",
+        "end-before-11pm-hard",
+        "two-adjacent-seats-hard",
+        "avoid-front-rows-hard"
+      ],
+      "templateDbFile": "demo_uist2026_detroit.db",
+      "seedDataFile": "data/demo_uist2026_detroit.json"
+    },
+    {
+      "id": "demo_card_c_family_matinee",
+      "title": "Demo C: Family Matinee Before the Flight",
+      "background": "Two kids, a closing session that runs to lunchtime, and an evening flight out of Detroit.",
+      "story": "Today is Tuesday, November 3, 2026. On Thursday, November 5 I am taking a colleague's two kids to a movie after the closing session. It has to be rated PG or below, and the shorter one is better so they sit through it. We need to be out by 5:00 PM to make an evening flight. Three seats together, not in the front rows. I would start with the closest theater but can go further for a better showtime.",
+      "stepBriefs": {
+        "movie": "A PG-or-below family movie, and the shorter one if there is a choice.",
+        "theater": "Start with the closest theater, but I can go further for a better showtime.",
+        "date": "Thursday, November 5.",
+        "time": "Anything that ends by 5:00 PM.",
+        "seat": "Three seats together, not in the front rows."
+      },
+      "narratorPreferenceTypes": [
+        "age-rating-g-or-pg-hard",
+        "under-2-hours-soft",
+        "date-2026-11-05-hard",
+        "end-before-5pm-hard",
+        "closest-theater-soft",
+        "three-adjacent-seats-hard",
+        "avoid-front-rows-hard"
+      ],
+      "templateDbFile": "demo_uist2026_detroit.db",
+      "seedDataFile": "data/demo_uist2026_detroit.json"
     }
   ]
 }
