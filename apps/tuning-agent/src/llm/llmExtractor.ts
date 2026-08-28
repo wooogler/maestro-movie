@@ -1,5 +1,5 @@
 import { refreshModelEnvVars } from "../core/envRefresh";
-import { buildPreferenceId, normalizePreferenceList } from "../core/cpMemory";
+import { createPreferenceId, normalizePreferenceList } from "../core/cpMemory";
 import { resolveOpenAiApiKey } from "./openaiKey";
 import { fetchOpenAiWithRetry } from "./resilientFetch";
 import { CONFLICT_STAGES } from "../types";
@@ -12,6 +12,7 @@ interface PreferenceExtractionInput {
   compactUi: unknown;
   recentDialogue: Array<{ type: "user" | "agent"; text: string }>;
   existingPreferences: Array<{
+    id: string;
     description: string;
     strength: "hard" | "soft";
     relevantStages: ConflictStage[];
@@ -21,16 +22,20 @@ interface PreferenceExtractionInput {
 interface PreferenceExtractionOutput {
   hasUpdate: boolean;
   preferences: Array<{
+    /**
+     * Echoed from existingPreferences when the entry is being kept or amended.
+     * Empty for a genuinely new preference — the id is minted on this side.
+     */
+    id: string;
     description: string;
     strength: "hard" | "soft";
     relevantStages: ConflictStage[];
   }>;
   /**
-   * Descriptions the user has explicitly withdrawn. Optional: absent means
-   * "nothing was withdrawn", which is why an omitted hard preference is now
-   * retained rather than silently dropped.
+   * Ids the user has explicitly withdrawn. Absent means nothing was withdrawn,
+   * which is why an omitted hard preference is retained rather than dropped.
    */
-  retractedDescriptions?: string[];
+  retractedIds?: string[];
 }
 
 interface LlmTraceEvent {
@@ -77,10 +82,11 @@ export function subscribeLlmTrace(listener: LlmTraceListener): () => void {
 const PREFERENCE_SYSTEM_PROMPT =
   "You maintain the user preference list for a booking agent.\n" +
   "Input: userMessage, currentStage, state, compactUi, recentDialogue, existingPreferences.\n" +
-  "Output: { hasUpdate, preferences, retractedDescriptions }.\n" +
-  "- preferences: the full current preference list as you understand it.\n" +
-  "- retractedDescriptions: descriptions the user has explicitly withdrawn or replaced. Copy the description verbatim from existingPreferences.\n" +
-  "- A hard preference you omit from preferences is KEPT. To remove one, you must list it in retractedDescriptions. Soft preferences you omit are dropped.\n" +
+  "Output: { hasUpdate, preferences, retractedIds }.\n" +
+  "- Every entry in existingPreferences carries an `id`. It is that preference's identity and it never changes, even when the wording does.\n" +
+  "- preferences: the full current preference list as you understand it. Echo the `id` for every entry you are keeping or amending. Use an empty id (\"\") only for a preference the user has just introduced.\n" +
+  "- retractedIds: the ids the user has explicitly withdrawn or replaced.\n" +
+  "- A hard preference you omit from preferences is KEPT. To remove one, you must list its id in retractedIds. Soft preferences you omit are dropped.\n" +
   "\n" +
   "Procedural vs durable — read the full recentDialogue first:\n" +
   "- Procedural: the agent had narrowed the list and asked the user to choose, and the user answers with one of the offered items and nothing else. That is a selection, not a new requirement. → set hasUpdate=false, preferences=[].\n" +
@@ -95,13 +101,14 @@ const PREFERENCE_SYSTEM_PROMPT =
   '- "hard": user restates an existing soft preference without any hedging words (prefer, ideally, if possible) — treat the restatement as an upgrade to hard.\n' +
   '- "soft": user prefers but would still accept an alternative (cues: prefer, ideally, if possible, would be nice). Hedging language only makes something soft when the user is expressing a taste, not naming a concrete requirement.\n' +
   "- If one clause combines a hard acceptance constraint with a soft tie-breaker, extract them as separate preferences.\n" +
+  "- When one utterance states the same KIND of constraint for two branches (e.g. a time window for Saturday and a time window for Sunday), give them the same strength. The user is describing one requirement that applies per branch, not one requirement and one whim, and the verb they happened to use for each is not the difference.\n" +
   '- Genuinely vague wants with no concrete value ("something fun", "a good seat") default to "soft". This does not override the concrete-value rule above.\n' +
   "\n" +
   "Updating existingPreferences:\n" +
   "- Unchanged: re-emit the entry with its wording and relevantStages untouched. Keeping an existing preference is the DEFAULT. Never omit an entry merely because this turn was not about it.\n" +
-  "- Changed (strength, scope, or value): re-emit it with the new text. Only rewrite the wording when what the user wants actually changed — a cosmetic rewrite of an unchanged preference is an error.\n" +
+  "- Changed (strength, scope, or value): re-emit it with the SAME id and the new text. Only rewrite the wording when what the user wants actually changed — a cosmetic rewrite of an unchanged preference is an error.\n" +
   "- Dormant: a preference scoped to a branch the user is not currently on (e.g. a Saturday-only time window while Sunday is selected) is NOT withdrawn. Keep it, with its qualifier, exactly as written. Requirements for different branches coexist; choosing one branch does not retract the other. If the user has told you both branches, write BOTH as separate scope-qualified entries.\n" +
-  "- Retracted: list the entry's description under retractedDescriptions, and only when the user withdrew it in THIS turn. Omitting an entry from preferences is NOT a way to withdraw it.\n" +
+  "- Retracted: list the entry's id under retractedIds, and only when the user withdrew it in THIS turn. Omitting an entry from preferences is NOT a way to withdraw it.\n" +
   "- If the agent's own last message asked the user to relax ONE named requirement and the user agreed, retract only that requirement. Never retract requirements that were not asked about.\n" +
   '- Write each description as a short sentence capturing user intent (e.g. "Wants to watch Cosmic Laughs.", "Prefers evening showtimes."). One entry per distinct preference.\n' +
   "- If a preference is conditioned on or scoped to a choice at another stage, preserve the qualifier in the description. Dropping it turns a conditional preference into an unconditional one.\n" +
@@ -206,51 +213,49 @@ function normalizeRelevantStages(
 /**
  * Merge the extractor's output into the existing preference list.
  *
- * This used to be a full replace: whatever list the model returned became the
- * memory, so a preference the model simply did not restate was treated as
- * withdrawn. In the study corpus 59 of 550 updates silently lost a preference
- * that way, in the worst case dropping two hard constraints at once, and the
- * participant had no way to tell why the conditions they had stated were being
- * ignored.
+ * Identity comes from the echoed `id`, not from the description text. That is
+ * what lets a preference be reworded without becoming a different preference —
+ * the dead ends and filter traces keyed on it survive the edit.
  *
- * Now:
- *   - a returned preference replaces the one with the same id (as before);
- *   - an omitted HARD preference is retained — withdrawing a hard constraint
- *     requires the model to name it in `retractedDescriptions`;
- *   - an omitted SOFT preference is still dropped, since soft preferences are
- *     revisable by design and re-stating the list is how they get revised.
+ * Two safety nets, because the model can forget to echo an id:
+ *   - an entry whose description exactly matches an existing one inherits that
+ *     entry's id rather than being minted as a duplicate;
+ *   - an omitted HARD preference is carried forward. Withdrawing one requires
+ *     naming its id in `retractedIds`. Soft preferences are still revisable by
+ *     restating the list.
  */
 function materializePreferences(
   raw: PreferenceExtractionOutput,
   existingPreferences: Preference[],
 ): Preference[] {
-  const existingById = new Map(
-    existingPreferences.map((item) => [item.id, item]),
+  const existingById = new Map(existingPreferences.map((item) => [item.id, item]));
+  const existingByDescription = new Map(
+    existingPreferences.map((item) => [normalizeDescription(item.description), item]),
   );
-  const retractedIds = new Set(
-    (raw.retractedDescriptions ?? [])
-      .map((description) => normalizeDescription(description))
-      .filter((description): description is string => Boolean(description))
-      .map((description) => buildPreferenceId(description)),
-  );
+  const retractedIds = new Set(raw.retractedIds ?? []);
 
   const preferences: Preference[] = [];
   const returnedIds = new Set<string>();
   for (const rawPreference of raw.preferences) {
     const description = normalizeDescription(rawPreference.description);
     if (!description) continue;
-    const strength = normalizePreferenceStrength(rawPreference.strength);
-    const id = buildPreferenceId(description);
+
+    const echoedId = rawPreference.id.trim();
+    const matched =
+      (echoedId ? existingById.get(echoedId) : undefined) ??
+      existingByDescription.get(description);
+    const id = matched?.id ?? createPreferenceId();
     if (retractedIds.has(id)) continue;
+    if (returnedIds.has(id)) continue;
     returnedIds.add(id);
-    const existing = existingById.get(id);
+
     preferences.push({
       id,
       description,
-      strength,
+      strength: normalizePreferenceStrength(rawPreference.strength),
       relevantStages: normalizeRelevantStages(
         rawPreference.relevantStages,
-        existing?.relevantStages,
+        matched?.relevantStages,
       ),
     });
   }
@@ -271,16 +276,16 @@ function toPreferenceExtractionOutput(
 ): PreferenceExtractionOutput | null {
   const hasUpdate = value.hasUpdate === true;
 
-  const retractedDescriptions = Array.isArray(value.retractedDescriptions)
-    ? value.retractedDescriptions
-        .map((entry) => normalizeDescription(entry))
+  const retractedIds = Array.isArray(value.retractedIds)
+    ? value.retractedIds
+        .map((entry) => (typeof entry === "string" ? entry.trim() : ""))
         .filter((entry): entry is string => Boolean(entry))
     : [];
 
   const rawPreferences = Array.isArray(value.preferences)
     ? value.preferences
     : null;
-  if (!rawPreferences) return { hasUpdate, preferences: [], retractedDescriptions };
+  if (!rawPreferences) return { hasUpdate, preferences: [], retractedIds };
 
   const preferences: PreferenceExtractionOutput["preferences"] = [];
   for (const entry of rawPreferences) {
@@ -288,13 +293,14 @@ function toPreferenceExtractionOutput(
     const description = normalizeDescription(entry.description);
     if (!description) continue;
     preferences.push({
+      id: typeof entry.id === "string" ? entry.id.trim() : "",
       description,
       strength: normalizePreferenceStrength(entry.strength),
       relevantStages: normalizeRelevantStages(entry.relevantStages),
     });
   }
 
-  return { hasUpdate, preferences, retractedDescriptions };
+  return { hasUpdate, preferences, retractedIds };
 }
 const OPENAI_API_URL = "https://api.openai.com/v1/responses";
 const OPENAI_CHAT_COMPLETIONS_API_URL =
@@ -669,6 +675,7 @@ export async function extractStructuredPreferences(
     compactUi: ctx.compactUi,
     recentDialogue: ctx.recentDialogue,
     existingPreferences: ctx.existingPreferences.map((preference) => ({
+      id: preference.id,
       description: preference.description,
       strength: preference.strength,
       relevantStages: preference.relevantStages,
@@ -684,6 +691,11 @@ export async function extractStructuredPreferences(
         items: {
           type: "object",
           properties: {
+            id: {
+              type: "string",
+              description:
+                'Echo the id from existingPreferences when keeping or amending that entry. Use "" for a brand-new preference.',
+            },
             description: { type: "string" },
             strength: { type: "string", enum: ["hard", "soft"] },
             relevantStages: {
@@ -691,16 +703,16 @@ export async function extractStructuredPreferences(
               items: { type: "string", enum: CONFLICT_STAGES },
             },
           },
-          required: ["description", "strength", "relevantStages"],
+          required: ["id", "description", "strength", "relevantStages"],
           additionalProperties: false,
         },
       },
-      retractedDescriptions: {
+      retractedIds: {
         type: "array",
         items: { type: "string" },
       },
     },
-    required: ["hasUpdate", "preferences", "retractedDescriptions"],
+    required: ["hasUpdate", "preferences", "retractedIds"],
     additionalProperties: false,
   };
 

@@ -1,4 +1,4 @@
-import { createHash } from 'node:crypto';
+import { createHash, randomBytes } from 'node:crypto';
 import type {
   ConflictScope,
   ConflictStage,
@@ -21,14 +21,6 @@ function normalizeWhitespace(value: string): string {
   return value.trim().replace(/\s+/g, ' ');
 }
 
-function slugify(value: string): string {
-  const slug = value
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, '-')
-    .replace(/^-+|-+$/g, '')
-    .slice(0, 40);
-  return slug || 'item';
-}
 
 function shortHash(value: string): string {
   return createHash('sha1').update(value).digest('hex').slice(0, 10);
@@ -151,9 +143,23 @@ export function normalizeDeadEnds(deadEnds: DeadEnd[]): DeadEnd[] {
   return Array.from(deduped.values());
 }
 
-export function buildPreferenceId(description: string): string {
-  const normalizedDescription = normalizeWhitespace(description).toLowerCase();
-  return `pref_${slugify(normalizedDescription)}_${shortHash(normalizedDescription)}`;
+/**
+ * Mints an identity for a preference.
+ *
+ * Ids used to be derived from the description text — slug plus a hash — which
+ * meant an identity that changed whenever the wording did. A model rewriting
+ * "ends at 7" as "ends before 7" produced a different preference as far as the
+ * rest of the system was concerned, and everything keyed on the old id went
+ * with it: dead ends, stage-alternative filter traces, conflict references. In
+ * the study every observed dead-end loss traced back to an id disappearing, and
+ * 5 of 11 were pure rewordings where the constraint itself had not changed.
+ *
+ * The id is now opaque and assigned once. The extractor echoes it back for
+ * entries it is keeping or amending, so wording is free to change without the
+ * preference losing its history.
+ */
+export function createPreferenceId(): string {
+  return `pref_${randomBytes(6).toString('hex')}`;
 }
 
 export function normalizeConflictScope(scope: ConflictScope): ConflictScope {
