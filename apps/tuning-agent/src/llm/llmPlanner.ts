@@ -34,6 +34,11 @@ interface PlannerInput {
   availableTools: ToolSchemaItem[];
   workflow: PlannerWorkflow;
   stageMeta?: Array<{ stage: string; goal: string; fieldGuide: string }>;
+  /**
+   * The language the visitor is conversing in, as the host reported it.
+   * Absent or "en" leaves the prompt exactly as it was before this existed.
+   */
+  language?: string;
 }
 
 interface PlannerAction {
@@ -313,6 +318,12 @@ const CP_MEMORY_PROMPT_RULES =
   "- Apply preferences after excluding dead-ended items. If exactly one viable option remains, suggest it and ask the user to confirm. This is not a conflict, so do not emit conflictMemory. If multiple remain, ask the user to choose.\n" +
   "- If no visible option satisfies a hard preference, emit conflictMemory, briefly explain why, and suggest going back to the nearest earlier stage that has remaining alternatives (based on priorStageAlternativeCounts). Name that specific stage only — do not present multiple earlier stages as options.\n" +
   "- If prev is unavailable this turn but priorStageAlternativeCounts shows an earlier stage with count > 0, still mention going back as an option the user can request.\n" +
+  "- If EVERY entry in priorStageAlternativeCounts is 0, do not conclude the user is out of options and do not offer relaxing a hard requirement as the only path. Say plainly which requirement is blocking, and ask which one they would like to revisit.\n" +
+  "\n" +
+  "Confirm stage:\n" +
+  "- Before offering to finalize, re-check EVERY hard preference against the assembled booking shown in the confirm summary, not against what you remember deciding earlier.\n" +
+  "- If any hard preference is violated, do NOT ask 'shall I confirm?'. Name the specific violation and ask the user to choose: proceed anyway, or go back to the stage that would fix it. Emit conflictMemory for the violated preference.\n" +
+  "- Only treat a hard preference as relaxed after the user has been told it is violated and has said to proceed anyway. Reaching the confirm stage is not consent.\n" +
   "\n" +
   "Backtracking:\n" +
   "- Call prev immediately when EITHER condition is met (each is independently sufficient):\n" +
@@ -386,7 +397,7 @@ const OPENAI_TOOL_CALLING_RULES =
   '- If no GUI tool should be used now, call "respond".\n' +
   '- Fill "reason" FIRST: assess user intent and current state, then justify the chosen action. Then write "assistantMessage" consistent with that reasoning.\n' +
   '- If calling filter or highlight to apply current user preferences, include "preferenceIds" with the existing memory IDs that justify that action. Omit preferenceIds when the action is not preference-driven.\n' +
-  '- For highlight, also include "coverage": use "full" when the highlighted items represent the full viable set for the relevant preference(s), and "partial" when they are only a suggested subset.\n' +
+  '- For highlight, also include "coverage": use "full" when the highlighted items are every item satisfying the relevant preference(s), and "partial" when they are only a suggested subset. Coverage describes the preference match, not the stage inventory.\n' +
   "- For GUI tool calls, assistantMessage should briefly state what criterion or preference is being applied, not just that an action is happening. Do not ask for permission.\n" +
   "- Base assistantMessage only on visible information and known context. Do not invent facts or claim later-stage knowledge.\n" +
   "- Never include internal item IDs in assistantMessage; use human-readable labels.\n" +
@@ -412,6 +423,31 @@ function buildStageMetaSection(
   return `Stage workflow (fixed order):\n  ${order}\nStage goals:\n${goals}`;
 }
 
+/**
+ * Appended only for a non-English session, so the English prompt this study was
+ * run against stays byte-identical.
+ *
+ * It governs the spoken channel and nothing else. Tool names, parameter values
+ * and item ids are the host's vocabulary — the screen still shows "Street
+ * Fighter" and seat "C1" — so translating them would break selection outright.
+ * The decision framework above is untouched: which tool to call, and when, does
+ * not depend on the language it is narrated in.
+ */
+const LANGUAGE_PROMPTS: Record<string, string> = {
+  ko:
+    "Language:\n" +
+    "- The user speaks Korean. Write assistantMessage in Korean, in a polite conversational register (해요체).\n" +
+    '- Keep film titles, cinema names, formats (IMAX, 3D), seat ids ("C1") and times exactly as they appear on screen, in their original script. Do not translate or transliterate them.\n' +
+    '- Everything else in assistantMessage — verbs, questions, comparisons, counts — is Korean.\n' +
+    '- "reason" stays in English. It is a trace field, not something the user hears.\n' +
+    "- Tool names and every tool parameter value stay exactly as the schema and the screen define them. They are identifiers, not prose.",
+};
+
+export function buildLanguageSection(language: string | undefined): string | null {
+  if (!language || language === "en") return null;
+  return LANGUAGE_PROMPTS[language] ?? null;
+}
+
 // ── System prompt cache ─────────────────────────────────────────────────────
 // cpMemoryEnabled + guiAdaptationEnabled + stageMeta are fixed for a session,
 // so we memoize by the combination key to avoid rebuilding on every turn.
@@ -422,10 +458,13 @@ let cachedSystemPrompt = "";
 function buildSystemPrompt(
   workflow: PlannerWorkflow,
   stageMeta?: Array<{ stage: string; goal: string; fieldGuide: string }>,
+  language?: string,
 ): string {
   const cpMemory = hasCpMemoryContext(workflow);
   const guiAdaptation = workflow.guiAdaptationEnabled !== false;
-  const key = `cp:${cpMemory}|gui:${guiAdaptation}|meta:${stageMeta ? stageMeta.length : 0}`;
+  // Language belongs in the key: a visitor may switch mid-session, and the
+  // cached prompt would otherwise keep the language they started in.
+  const key = `cp:${cpMemory}|gui:${guiAdaptation}|meta:${stageMeta ? stageMeta.length : 0}|lang:${language ?? "en"}`;
 
   if (key === cachedSystemPromptKey && cachedSystemPrompt) {
     return cachedSystemPrompt;
@@ -445,6 +484,10 @@ function buildSystemPrompt(
     sections.push(GUI_ADAPTATION_ENABLED_RULES);
   } else {
     sections.push(GUI_ADAPTATION_DISABLED_RULES);
+  }
+  const languageSection = buildLanguageSection(language);
+  if (languageSection) {
+    sections.push(languageSection);
   }
 
   cachedSystemPrompt = sections.join("\n");
@@ -620,7 +663,7 @@ function toOpenAiTools(
       properties[TOOL_META_COVERAGE_KEY] = {
         type: "string",
         description:
-          'Use "full" when the highlighted items represent the full viable set for the linked preference(s); use "partial" when the highlight is only a suggested subset.',
+          'Use "full" when the highlighted items are every item satisfying the linked preference(s); use "partial" when the highlight is only a suggested subset. This describes the preference match only — it says nothing about how many options the stage still has.',
         enum: ["full", "partial"],
       };
     }
@@ -983,7 +1026,7 @@ export async function planActionWithOpenAI(
     workflow: input.workflow,
   };
   const openAiSystemPrompt =
-    buildSystemPrompt(input.workflow, input.stageMeta) +
+    buildSystemPrompt(input.workflow, input.stageMeta, input.language) +
     "\n" +
     OPENAI_TOOL_CALLING_RULES;
   const traceRequestId = createLlmTraceRequestId();

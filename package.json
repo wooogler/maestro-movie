@@ -42,7 +42,8 @@
     "check:memory": "tsx scripts/check-memory-snapshot.ts",
     "check:scenarios": "tsx apps/backend/src/db/generator/generateScenarioDataset.ts --verify",
     "typecheck": "tsc --noEmit -p apps/backend/tsconfig.json && tsc -p apps/backend/tsconfig.check.json && tsc --noEmit -p apps/tuning-agent/tsconfig.json && tsc --noEmit -p apps/frontend/tsconfig.app.json && tsc --noEmit -p apps/frontend/tsconfig.node.json",
-    "check:navigation": "tsx apps/tuning-agent/src/core/navigationMemory.check.ts"
+    "check:navigation": "tsx apps/tuning-agent/src/core/navigationMemory.check.ts",
+    "regress:extractor": "tsx apps/tuning-agent/src/llm/extractorPrompt.regress.ts"
   },
   "devDependencies": {
     "typescript": "^5.3.3"
