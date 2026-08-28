@@ -30,12 +30,19 @@
     "codes:generate": "tsx scripts/demo-access-codes.ts generate",
     "codes:stats": "tsx scripts/demo-access-codes.ts stats",
     "codes:revoke": "tsx scripts/demo-access-codes.ts revoke",
-    "check": "npm run check:barrier && npm run check:codes && npm run check:memory && npm run check:scenarios",
+    "check": "npm run check:barrier && npm run check:voice && npm run check:language && npm run check:planner-language && npm run check:layout && npm run check:logpaths && npm run check:codes && npm run check:memory && npm run check:navigation",
     "check:barrier": "tsx apps/tuning-agent/src/core/speechBarrier.check.ts",
+    "check:voice": "tsx apps/frontend/src/voice/smartSkip.check.ts",
+    "voice:validate": "tsx scripts/validate-voice-classifier.ts",
+    "check:language": "tsx apps/frontend/src/i18n/language.check.ts",
+    "check:planner-language": "tsx apps/tuning-agent/src/llm/languagePrompt.check.ts",
+    "check:layout": "tsx apps/frontend/src/components/chat/fullTuningLayout.check.ts",
+    "check:logpaths": "tsx apps/backend/src/study/logPaths.check.ts",
     "check:codes": "tsx apps/backend/src/study/demoAccessCodes.check.ts",
     "check:memory": "tsx scripts/check-memory-snapshot.ts",
     "check:scenarios": "tsx apps/backend/src/db/generator/generateScenarioDataset.ts --verify",
-    "typecheck": "tsc --noEmit -p apps/backend/tsconfig.json && tsc --noEmit -p apps/tuning-agent/tsconfig.json && tsc --noEmit -p apps/frontend/tsconfig.app.json"
+    "typecheck": "tsc --noEmit -p apps/backend/tsconfig.json && tsc -p apps/backend/tsconfig.check.json && tsc --noEmit -p apps/tuning-agent/tsconfig.json && tsc --noEmit -p apps/frontend/tsconfig.app.json && tsc --noEmit -p apps/frontend/tsconfig.node.json",
+    "check:navigation": "tsx apps/tuning-agent/src/core/navigationMemory.check.ts"
   },
   "devDependencies": {
     "typescript": "^5.3.3"

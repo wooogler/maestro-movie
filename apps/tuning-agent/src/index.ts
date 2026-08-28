@@ -193,6 +193,9 @@ let lastActionAt = 0;
 let lastAgentToolName: string | null = null;
 let pendingReadingDelayUntil = 0;
 let voiceModeEnabled = false;
+// The language the visitor is conversing in, as the host reports it. English
+// until told otherwise, which is what every study session was.
+let conversationLanguage = 'en';
 let ensureSessionReadyInFlight: Promise<void> | null = null;
 let sessionReady = false;
 let hostConnectionAvailable = false;
@@ -986,12 +989,23 @@ function isControlFlowCancellation(error: unknown): boolean {
   return message === 'session-reset' || message === 'terminated-by-signal';
 }
 
-function buildAgentMessageAction(text: string): import('./types').PlannedAction {
+/**
+ * `category` names what the message is narrating — the tool it accompanies, or
+ * `respond`/`system`. The protocol documents it as optional and the host falls
+ * back to classifying the text, but that classifier is English regex tuned on
+ * the English study corpus; there is no Korean corpus to tune against, so for a
+ * Korean session the tag is the only accurate routing there is.
+ */
+function buildAgentMessageAction(
+  text: string,
+  category: string
+): import('./types').PlannedAction {
   return {
     type: 'agent.message',
     reason: 'Provide a concise assistant response to the user.',
     payload: {
       text,
+      category,
     },
   };
 }
@@ -1024,10 +1038,14 @@ function noteAgentSpeechSent(): void {
   speechBarrier.noteSpeechSent();
 }
 
-async function maybeSendAssistantMessage(context: PerceivedContext, text: string): Promise<void> {
+async function maybeSendAssistantMessage(
+  context: PerceivedContext,
+  text: string,
+  category: string
+): Promise<void> {
   const trimmed = text.trim();
   if (!trimmed) return;
-  const action = buildAgentMessageAction(trimmed);
+  const action = buildAgentMessageAction(trimmed, category);
   if (!isActionSafe(context, action)) return;
   const outcome = await executePlannedAction(relay, action);
   if (outcome.ok) noteAgentSpeechSent();
@@ -1196,7 +1214,8 @@ async function maybePlanAndExecute(trigger: string): Promise<void> {
       memory,
       lastAgentToolName,
       activeBacktrackContinuation,
-      suppressNavigationTools
+      suppressNavigationTools,
+      conversationLanguage
     );
     const action = decision.action;
     const decisionExplainText = decision.explainText ?? '';
@@ -1234,7 +1253,7 @@ async function maybePlanAndExecute(trigger: string): Promise<void> {
 
       if (readingDelayPromise) await readingDelayPromise;
       if (decisionExplainText.trim()) {
-        await maybeSendAssistantMessage(planningContext, decisionExplainText);
+        await maybeSendAssistantMessage(planningContext, decisionExplainText, 'respond');
       }
       monitor.pushEvent('planner.no_action', {
         source: decision.source,
@@ -1308,7 +1327,8 @@ async function maybePlanAndExecute(trigger: string): Promise<void> {
     if (action.type !== 'agent.message') {
       await maybeSendAssistantMessage(
         planningContext,
-        decisionExplainText || `I will run ${getToolName(action)} next. Reason: ${action.reason}`
+        decisionExplainText || `I will run ${getToolName(action)} next. Reason: ${action.reason}`,
+        toolName || 'respond'
       );
     }
 
@@ -1331,7 +1351,8 @@ async function maybePlanAndExecute(trigger: string): Promise<void> {
       monitor.updateState({ sessionReady: false, waitingForHost: true, phase: 'waiting-host' });
       await maybeSendAssistantMessage(
         planningContext,
-        'The host connection is not ready yet. I will retry once the host is available.'
+        'The host connection is not ready yet. I will retry once the host is available.',
+        'system'
       );
       await ensureSessionReady('runtime-action');
       requestDeferredReplan('runtime-action');
@@ -1493,7 +1514,7 @@ async function maybePlanAndExecute(trigger: string): Promise<void> {
         }
         return `Something went wrong — let me try again.`;
       })();
-      await maybeSendAssistantMessage(planningContext, friendly);
+      await maybeSendAssistantMessage(planningContext, friendly, 'system');
     }
     const shouldResyncAfterSuccess =
       outcome.ok && action.type === 'tool.call' && toolName !== 'next' && toolName !== 'prev';
@@ -1739,9 +1760,39 @@ async function handleInbound(envelope: RelayEnvelope): Promise<void> {
           }
         }
         if (pendingBacktrackConflict) {
-          setPendingBacktrackConflict(null, 'stage-changed', {
-            stage: next.stage,
-          });
+          // The user moving BACKWARD after we disclosed a conflict is the user
+          // carrying out the backtrack we just proposed — it confirms the
+          // conflict rather than cancelling it. Discarding it here was the
+          // single largest source of lost dead ends in the study: of 402
+          // conflict episodes only 131 were ever recorded, and user-driven
+          // backward stage changes accounted for 84 of the discards. Worse, the
+          // agent would then re-propose the same dead-ended option later,
+          // because nothing remembered why the user had left it.
+          const nextStageIndex = WORKFLOW_STAGE_ORDER.indexOf(
+            toWorkflowStage(next.stage) as (typeof WORKFLOW_STAGE_ORDER)[number]
+          );
+          const currentStageIndex = WORKFLOW_STAGE_ORDER.indexOf(
+            toWorkflowStage(current.stage) as (typeof WORKFLOW_STAGE_ORDER)[number]
+          );
+          const wentBackwards =
+            nextStageIndex >= 0 && currentStageIndex >= 0 && nextStageIndex < currentStageIndex;
+          if (wentBackwards) {
+            const deadEnd = materializeDeadEndFromPendingConflict(
+              pendingBacktrackConflict,
+              new Date().toISOString()
+            );
+            memory.upsertDeadEnds([deadEnd]);
+            syncMonitorMemoryState('dead-end-recorded');
+            monitor.pushEvent('memory.dead_ends_updated', {
+              reason: 'user-backtracked',
+              deadEnd,
+            });
+          }
+          setPendingBacktrackConflict(
+            null,
+            wentBackwards ? 'user-backtracked' : 'stage-changed',
+            { stage: next.stage, recorded: wentBackwards }
+          );
         }
         await maybePlanAndExecute('state.updated:stage-change');
         // Reset lastAgentToolName if it wasn't changed during the await.
@@ -1814,6 +1865,16 @@ async function handleInbound(envelope: RelayEnvelope): Promise<void> {
         speechBarrier.release('voice-mode-disabled');
       }
       monitor.pushEvent('voice.mode', { enabled: voiceModeEnabled });
+      return;
+    }
+    case 'conversation.language': {
+      const payload = asRecord(envelope.payload);
+      const next = typeof payload?.language === 'string' ? payload.language.trim() : '';
+      // Unknown values fall back to English rather than reaching the planner:
+      // an unrecognised language yields no prompt section, so the agent would
+      // silently keep speaking English anyway. Better that it be explicit.
+      conversationLanguage = next === 'ko' ? 'ko' : 'en';
+      monitor.pushEvent('conversation.language', { language: conversationLanguage });
       return;
     }
     case 'tts.playback.complete': {

@@ -83,21 +83,26 @@ const PREFERENCE_SYSTEM_PROMPT =
   "- A hard preference you omit from preferences is KEPT. To remove one, you must list it in retractedDescriptions. Soft preferences you omit are dropped.\n" +
   "\n" +
   "Procedural vs durable — read the full recentDialogue first:\n" +
-  "- Procedural: the agent narrowed to a small set and asked the user to pick one. The user just picks one to proceed. → set hasUpdate=false, preferences=[].\n" +
+  "- Procedural: the agent had narrowed the list and asked the user to choose, and the user answers with one of the offered items and nothing else. That is a selection, not a new requirement. → set hasUpdate=false, preferences=[].\n" +
   "- Durable: the user freely states what they want — a name, a constraint, a desire. This is a preference even if it matches a visible item. Store it.\n" +
   "- When in doubt, set hasUpdate=false, preferences=[].\n" +
   "\n" +
-  "Strength:\n" +
+  "Strength — ask one question: if the only remaining options all failed this, would the user rather be shown them anyway, or be told there is no match?\n" +
+  '- "told there is no match" -> "hard". "show me anyway" -> "soft".\n' +
+  "- A constraint the user states unprompted with a concrete value — a cutoff time, a format, a seat count, a required amenity, an age rating — is HARD by default, whatever verb introduces it. \"I want two seats together\" and \"I need two seats together\" are the same requirement.\n" +
   '- "hard": user accepts ONLY matching options (cues: must, only, need, should, no later than).\n' +
-  '- "hard": user names a specific visible item exactly (e.g. userMessage matches a visibleItems value). Picking a concrete item by name is a direct selection, not a vague preference.\n' +
-  '- "hard": user restates an existing soft preference without any hedging words (prefer, ideally, if possible, would like, want) — treat the restatement as an upgrade to hard.\n' +
-  '- "soft": user prefers but accepts alternatives (cues: prefer, ideally, if possible, like, want).\n' +
+  '- "hard": user volunteers a specific item by name when the agent did NOT just ask them to choose (e.g. naming a movie at the start of the task). Wanting that item is the requirement. If the agent had just asked, treat it as Procedural instead.\n' +
+  '- "hard": user restates an existing soft preference without any hedging words (prefer, ideally, if possible) — treat the restatement as an upgrade to hard.\n' +
+  '- "soft": user prefers but would still accept an alternative (cues: prefer, ideally, if possible, would be nice). Hedging language only makes something soft when the user is expressing a taste, not naming a concrete requirement.\n' +
   "- If one clause combines a hard acceptance constraint with a soft tie-breaker, extract them as separate preferences.\n" +
-  '- Ambiguous defaults to "soft".\n' +
+  '- Genuinely vague wants with no concrete value ("something fun", "a good seat") default to "soft". This does not override the concrete-value rule above.\n' +
   "\n" +
   "Updating existingPreferences:\n" +
-  "- Changed (strength, scope, or wording): update the entry in place. Do not duplicate.\n" +
-  "- Withdrawn: omit it. Unchanged: preserve wording and relevantStages exactly.\n" +
+  "- Unchanged: re-emit the entry with its wording and relevantStages untouched. Keeping an existing preference is the DEFAULT. Never omit an entry merely because this turn was not about it.\n" +
+  "- Changed (strength, scope, or value): re-emit it with the new text. Only rewrite the wording when what the user wants actually changed — a cosmetic rewrite of an unchanged preference is an error.\n" +
+  "- Dormant: a preference scoped to a branch the user is not currently on (e.g. a Saturday-only time window while Sunday is selected) is NOT withdrawn. Keep it, with its qualifier, exactly as written. Requirements for different branches coexist; choosing one branch does not retract the other. If the user has told you both branches, write BOTH as separate scope-qualified entries.\n" +
+  "- Retracted: list the entry's description under retractedDescriptions, and only when the user withdrew it in THIS turn. Omitting an entry from preferences is NOT a way to withdraw it.\n" +
+  "- If the agent's own last message asked the user to relax ONE named requirement and the user agreed, retract only that requirement. Never retract requirements that were not asked about.\n" +
   '- Write each description as a short sentence capturing user intent (e.g. "Wants to watch Cosmic Laughs.", "Prefers evening showtimes."). One entry per distinct preference.\n' +
   "- If a preference is conditioned on or scoped to a choice at another stage, preserve the qualifier in the description. Dropping it turns a conditional preference into an unconditional one.\n" +
   "- Assign relevantStages using stageFieldGuides.";

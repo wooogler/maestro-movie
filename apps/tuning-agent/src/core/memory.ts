@@ -20,16 +20,26 @@ import type { WorkflowStage } from './workflowState';
 const MAX_EPISODIC_RECORDS = 200;
 const INFRA_ERROR_CODES = new Set(['SESSION_NOT_ACTIVE', 'RELAY_ERROR']);
 
+/**
+ * A dead end records a fact about the world — "no two adjacent seats remain in
+ * this showing" — so it should outlive incidental churn in the preference list.
+ *
+ * This used to require EVERY referenced preference to still exist, to be hard,
+ * AND to list the dead end's own stage in `relevantStages`. That last condition
+ * destroyed exactly the dead ends worth keeping: the whole point of the store is
+ * to remember at the DATE stage that a date cannot satisfy a SEAT requirement,
+ * and a seat preference's relevantStages is `['seat']`, not `['date']`. In the
+ * study, 131 of 470 disclosed conflicts (27.9%) named a preference whose stages
+ * did not include the stage where the conflict arose, and 127 of those pointed
+ * downstream — the look-ahead case. All of them were pruned on the next
+ * extraction turn.
+ *
+ * Now a dead end survives while any referenced preference is still around, and
+ * a rewording that changes one id no longer takes the fact with it.
+ */
 function shouldRetainDeadEnd(deadEnd: DeadEnd, preferencesById: ReadonlyMap<string, Preference>): boolean {
   if (deadEnd.preferenceIds.length === 0) return true;
-  return deadEnd.preferenceIds.every((id) => {
-    const preference = preferencesById.get(id);
-    return (
-      preference !== undefined &&
-      preference.strength === 'hard' &&
-      preference.relevantStages.includes(deadEnd.scope.stage)
-    );
-  });
+  return deadEnd.preferenceIds.some((id) => preferencesById.has(id));
 }
 
 function shouldRetainAlternativeFilter(
@@ -364,15 +374,27 @@ export class AgentMemory {
           return !id || !excludeItemIds.has(id);
         })
       : record.items;
-    if (record.filters.length > 0) {
+    // How many options this stage still HAS — used by the planner to pick a
+    // backtrack target. Only a hard requirement removes an option from the
+    // stage; a soft one reorders or highlights, and a highlight of any kind is
+    // a display act that says nothing about inventory.
+    //
+    // Previously a `coverage: 'full'` highlight was read as the stage's whole
+    // inventory, so highlighting the single matching theater and then selecting
+    // it left the stage reporting 0 alternatives while four theaters remained.
+    // 81.9% of turns following a full/1 highlight reported zero, against 5.5%
+    // with no highlight. Soft-bound highlights were the larger share of that.
+    const hardFilters = record.filters.filter(
+      (entry) =>
+        entry.preferenceBindings.length > 0 &&
+        entry.preferenceBindings.every((binding) => binding.strength === 'hard')
+    );
+    if (hardFilters.length > 0) {
       return countSelectableFilteredItems(
         items,
-        record.filters.map((entry) => entry.filter),
+        hardFilters.map((entry) => entry.filter),
         record.valueField
       );
-    }
-    if (record.highlight && record.highlight.coverage === 'full') {
-      return countSelectableHighlightItems(items, record.highlight.itemIds);
     }
     return countSelectableFilteredItems(
       items,

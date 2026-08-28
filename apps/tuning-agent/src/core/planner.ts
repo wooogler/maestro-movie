@@ -392,7 +392,24 @@ function buildCurrentView(spec: UISpecLike): Record<string, unknown> | null {
 }
 
 
-const STAGE_SCOPE_KEY: Record<string, string> = { time: 'showing', seat: 'seats' };
+// `seat: 'seats'` used to be here, but nothing ever wrote a `seats` key —
+// `buildConflictScope` only records movie/theater/date/showing. Across the whole
+// study corpus the key appeared 0 times in 2,521 dead ends, while 59.7% of dead
+// ends were recorded at the seat stage. Every one of them was unmatchable.
+const STAGE_SCOPE_KEY: Record<string, string> = { time: 'showing' };
+
+/**
+ * The stage at which a dead end excludes options.
+ *
+ * A conflict discovered at the seat stage means the SHOWING cannot be used —
+ * seats are not chosen from a list that survives a backtrack, the showtime is.
+ * So it is enforced one stage up, against `scope.showing`.
+ *
+ * Everything else is enforced where it was found.
+ */
+export function deadEndBlacklistStage(deadEnd: DeadEnd): string {
+  return deadEnd.scope.stage === 'seat' ? 'time' : deadEnd.scope.stage;
+}
 
 const STAGE_PARENT_SCOPE_KEYS: Record<string, string[]> = Object.fromEntries(
   STAGE_ORDER.map((stage, i) =>
@@ -434,14 +451,22 @@ function isDeadEndRelevant(
   return true;
 }
 
-function findDeadEndItemIds(
+export function findDeadEndItemIds(
   items: Record<string, unknown>[],
   deadEnds: DeadEnd[],
   stage: string,
   state: Record<string, unknown> | null,
 ): string[] {
   const scopeKey = STAGE_SCOPE_KEY[stage] ?? stage;
-  const relevantDeadEnds = deadEnds.filter((de) => isDeadEndRelevant(de, stage, state));
+  // A dead end applies only where its own choice is made. Without this gate a
+  // dead end carries its whole ancestor path — movie, theater, date, showing —
+  // and gets matched at every one of those stages, so a seat that did not work
+  // out blacklisted the movie. In the study 574 of 960 (dead end, turn) pairs
+  // projected two or more stages upward, blacklisting the movie itself in 126
+  // turns across 28 sessions.
+  const relevantDeadEnds = deadEnds.filter(
+    (de) => deadEndBlacklistStage(de) === stage && isDeadEndRelevant(de, stage, state)
+  );
   const deadEndValues = new Set<string>();
   for (const de of relevantDeadEnds) {
     const scope = de.scope as unknown as Record<string, unknown>;
@@ -708,6 +733,7 @@ function validateLlmAction(
         reason: decision.action.reason ?? '',
         payload: {
           text: text || explainText || (decision.action.reason ?? ''),
+          category: 'respond',
         },
       },
       explainText,
@@ -774,7 +800,9 @@ export async function planNextAction(
   memory: AgentMemory,
   lastAgentToolName?: string | null,
   backtrackContinuation?: BacktrackContinuation | null,
-  suppressNavigationTools?: boolean
+  suppressNavigationTools?: boolean,
+  /** Host-reported conversation language. Undefined and 'en' behave identically. */
+  language?: string
 ): Promise<PlanDecision> {
   if (!context.sessionId) {
     return { action: null, source: 'rule', fallbackReason: 'NO_SESSION' };
@@ -868,6 +896,7 @@ export async function planNextAction(
         backtrackContinuation ?? null
       ),
       stageMeta: context.stageMeta,
+      ...(language && language !== 'en' ? { language } : {}),
     };
 
     const llm = await planActionWithOpenAI(plannerInput);
