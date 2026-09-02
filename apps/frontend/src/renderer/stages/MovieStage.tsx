@@ -15,6 +15,7 @@ export function MovieStage({
   onSelect,
   onNext,
   motionProfile,
+  onRevealHidden,
 }: StageProps<MovieItem>) {
   const canProceed = !!spec.state.selected;
   const selectedVariant = spec.meta?.selectionRestored === true ? 'visited' : 'active';
@@ -35,6 +36,7 @@ export function MovieStage({
         selectedVariant={selectedVariant}
         highlightedIds={spec.modification.highlight?.itemIds}
         motionProfile={motionProfile}
+        onRevealHidden={onRevealHidden}
         allItems={allItems}
         filteredOutIds={filteredOutIds}
       />
@@ -42,7 +44,6 @@ export function MovieStage({
       <ActionBar
         onNext={onNext}
         nextDisabled={!canProceed}
-        nextLabel="Continue"
       />
     </div>
   );

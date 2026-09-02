@@ -43,6 +43,7 @@ interface SystemMessageProps {
   linkedAssistantSpeaking?: boolean;
   onSelect?: (id: string) => void;
   onToggle?: (id: string) => void;
+  onRevealHidden?: (revealed: boolean, hiddenCount: number) => void;
   onNext?: () => void;
   onFinishTask?: () => void;
   onBack?: () => void;
@@ -220,6 +221,7 @@ export function SystemMessage({
   linkedAssistantSpeaking = false,
   onSelect,
   onToggle,
+  onRevealHidden,
   onNext,
   onFinishTask,
   onBack,
@@ -245,13 +247,15 @@ export function SystemMessage({
   const stageCardWidthClass = 'max-w-full min-w-0';
   const stageCardWidthStyle = { width: `${SINGLE_STREAM_STAGE_CARD_BASE_WIDTH_PX}px` };
   const stageCardBorderClass = linkedAssistantSpeaking
-    ? 'rounded-2xl rounded-tl-sm border border-rose-500/70 bg-dark px-3 py-2.5 shadow-[0_0_0_3px_rgba(244,63,94,0.18)]'
+    ? 'rounded-2xl rounded-tl-sm border border-accent-line/70 bg-dark px-3 py-2.5 shadow-[0_0_0_3px_var(--app-accent-glow)]'
     : 'rounded-2xl rounded-tl-sm border border-dark-border bg-dark px-3 py-2.5';
   const stageCardShellClass = showAvatar ? 'flex items-start gap-2' : '';
   const avatarElement = showAvatar ? (
+    // The avatar is teal (the system); the ring goes gold only while the agent is
+    // actually driving this stage.
     <div
       className={`mt-1 flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-primary ${
-        isAgentControlled ? 'ring-2 ring-blue-400 shadow-[0_0_0_3px_rgba(59,130,246,0.2)]' : ''
+        isAgentControlled ? 'ring-2 ring-accent-line shadow-[0_0_0_3px_var(--app-accent-glow)]' : ''
       }`}
     >
       <svg
@@ -293,6 +297,7 @@ export function SystemMessage({
               spec={spec}
               onSelect={isActive && onSelect ? onSelect : () => {}}
               onToggle={isActive && onToggle ? onToggle : () => {}}
+              onRevealHidden={isActive ? onRevealHidden : undefined}
               onNext={isActive && onNext ? onNext : () => {}}
               onFinishTask={isActive && onFinishTask ? onFinishTask : undefined}
               onBack={isActive && onBack ? onBack : undefined}

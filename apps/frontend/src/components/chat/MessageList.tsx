@@ -14,6 +14,7 @@ interface MessageListProps {
   speakingMessageId?: string | null;
   onSelect?: (id: string) => void;
   onToggle?: (id: string) => void;
+  onRevealHidden?: (revealed: boolean, hiddenCount: number) => void;
   onNext?: () => void;
   onFinishTask?: () => void;
   onBack?: () => void;
@@ -33,6 +34,7 @@ export function MessageList({
   speakingMessageId = null,
   onSelect,
   onToggle,
+  onRevealHidden,
   onNext,
   onFinishTask,
   onBack,
@@ -161,6 +163,7 @@ export function MessageList({
                   activeSpec={isActive ? activeSpec : null}
                   onSelect={onSelect}
                   onToggle={onToggle}
+                  onRevealHidden={onRevealHidden}
                   onNext={onNext}
                   onFinishTask={onFinishTask}
                   onBack={onBack}

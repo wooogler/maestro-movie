@@ -5,9 +5,17 @@
  * DisplayItem의 value를 직접 렌더링
  */
 
-import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import {
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+  type CSSProperties,
+} from 'react';
 import type { DisplayItem } from '../../spec';
 import type { GuiMotionProfile } from '../stages';
+import { useLanguage } from '../../i18n';
 
 type RenderPhase = 'stable' | 'entering' | 'exiting';
 
@@ -18,6 +26,16 @@ interface RenderItem extends DisplayItem {
 }
 
 const TEXT_CHANGE_DURATION_MS = 980;
+/*
+  A showtime list is the one stage that routinely runs long — a popular movie on
+  a Saturday is 18 showings — and the split view scales the whole card down to
+  fit its height, so an 18-row column was rendered at less than half size and
+  became unreadable. Past these counts the buttons wrap into columns instead,
+  which trades width (a time label is short) for the height that was costing
+  legibility.
+*/
+const COLUMN_BREAK_TWO = 6;
+const COLUMN_BREAK_THREE = 12;
 const DEFAULT_SORT_MOVE_DURATION_MS = 500;
 const FULL_TUNING_SORT_MOVE_DURATION_MS = 760;
 const SORT_MOVE_EASING = 'cubic-bezier(0.42, 0, 0.58, 1)';
@@ -34,6 +52,10 @@ interface ButtonGroupProps {
   allItems?: DisplayItem[];
   filteredOutIds?: string[];
   density?: 'default' | 'compact';
+  /** Fires when the participant opens or closes "Show all" over a filter. */
+  onRevealHidden?: (revealed: boolean, hiddenCount: number) => void;
+  /** 'auto' wraps a long list into 2-3 columns; 'single' keeps one per row. */
+  columns?: 'single' | 'auto';
 }
 
 export function ButtonGroup({
@@ -48,19 +70,36 @@ export function ButtonGroup({
   allItems,
   filteredOutIds = [],
   density = 'default',
+  columns = 'single',
+  onRevealHidden,
 }: ButtonGroupProps) {
   const [isExpanded, setIsExpanded] = useState(false);
   const highlightSet = useMemo(() => new Set(highlightedIds), [highlightedIds]);
   const filteredOutSet = useMemo(() => new Set(filteredOutIds), [filteredOutIds]);
   const hasExpandableFilter = Boolean(allItems) && filteredOutIds.length > 0;
-  const filterToggleLabel = isExpanded ? 'Show less' : 'Show all';
+  const { s } = useLanguage();
+  const filterToggleLabel = isExpanded ? s.showLess : s.showAll;
   const filterToggleTitle = isExpanded
-    ? 'Hide filtered-out items'
-    : `${filteredOutIds.length} filtered item(s) hidden. Show all items.`;
+    ? s.hideFilteredOut
+    : s.filteredItemsHidden.replace('{count}', String(filteredOutIds.length));
   const sourceItems = useMemo(
     () => (hasExpandableFilter && isExpanded && allItems ? allItems : items),
     [allItems, hasExpandableFilter, isExpanded, items]
   );
+  /*
+    Counted over the stage's whole inventory, not over what a filter currently
+    leaves visible, so narrowing 18 showtimes to 5 does not also snap the grid
+    back to one column mid-animation — that reflow made the fit-to-height scale
+    swing with it, and the card visibly zoomed out and back in.
+  */
+  const columnCount = useMemo(() => {
+    if (columns !== 'auto') return 1;
+    const total = (allItems ?? items).length;
+    if (total <= COLUMN_BREAK_TWO) return 1;
+    if (total <= COLUMN_BREAK_THREE) return 2;
+    return 3;
+  }, [allItems, columns, items]);
+  const isGrid = columnCount > 1;
   const sortMoveDurationMs =
     motionProfile === 'full-tuning'
       ? FULL_TUNING_SORT_MOVE_DURATION_MS
@@ -108,7 +147,21 @@ export function ButtonGroup({
     }
   }, [hasExpandableFilter]);
 
+  /*
+    Resetting the list when the stage's animation scope changes, and only then.
+
+    It used to run on mount as well, and its `setRenderItems` allocated a fresh
+    array every time — so every ButtonGroup rendered twice the moment it
+    appeared, and each of those renders dragged the FLIP layout effect below
+    through a `getBoundingClientRect` on every item. A stage transition mounts a
+    whole new ButtonGroup, so that doubled commit landed inside the slide.
+  */
+  const lastAnimationScopeRef = useRef(animationScope);
+
   useEffect(() => {
+    if (lastAnimationScopeRef.current === animationScope) return;
+    lastAnimationScopeRef.current = animationScope;
+
     timeoutIdsRef.current.forEach((timeoutId) => window.clearTimeout(timeoutId));
     timeoutIdsRef.current = [];
     previousRectsRef.current = new Map();
@@ -299,12 +352,23 @@ export function ButtonGroup({
   }, [renderItems, sortFadeDurationMs, sortMoveDurationMs]);
 
   return (
-    <div className="flex w-full max-w-md flex-col">
+    <div
+      className={`flex w-full flex-col ${
+        isGrid ? 'gui-item-group max-w-lg' : 'max-w-md'
+      }`}
+      style={isGrid ? ({ '--gui-grid-columns': columnCount } as CSSProperties) : undefined}
+    >
       {hasExpandableFilter ? (
         <div className="mb-2 flex justify-end">
           <button
             type="button"
-            onClick={() => setIsExpanded((current) => !current)}
+            onClick={() => {
+              // The callback stays out of the state updater: React invokes that
+              // twice under StrictMode, which logged every toggle twice.
+              const next = !isExpanded;
+              onRevealHidden?.(next, filteredOutIds.length);
+              setIsExpanded(next);
+            }}
             className="rounded-full border border-dark-border bg-dark-light/70 px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.14em] text-fg-muted transition-colors hover:border-primary hover:text-fg-strong"
             title={filterToggleTitle}
           >
@@ -312,96 +376,102 @@ export function ButtonGroup({
           </button>
         </div>
       ) : null}
-      {renderItems.map((item) => {
-        const isSelected = item.id === selectedId;
-        const isHighlighted = highlightSet.has(item.id);
-        const isFilteredOut = filteredOutSet.has(item.id);
+      <div className={isGrid ? 'gui-item-grid' : 'flex flex-col'}>
+        {renderItems.map((item) => {
+          const isSelected = item.id === selectedId;
+          const isHighlighted = highlightSet.has(item.id);
+          const isFilteredOut = filteredOutSet.has(item.id);
 
-        const highlightClass = isHighlighted
-          ? motionProfile === 'full-tuning'
-            ? 'border-blue-500 border-2 shadow-[0_0_0_4px_rgba(37,99,235,0.38)] gui-highlight-border-once'
-            : 'ring-[4px] ring-blue-500 gui-highlight-wave'
-          : '';
+          const highlightClass = isHighlighted
+            ? motionProfile === 'full-tuning'
+              ? 'border-accent-line border-2 shadow-[0_0_0_4px_var(--app-accent-glow-strong)] gui-highlight-border-once'
+              : 'ring-[4px] ring-accent-line gui-highlight-wave'
+            : '';
 
-        // A filtered-out item stays clickable once the participant has opened
-        // "Show all". Leaving it inert was the only affordance for escaping an
-        // over-narrow filter, and it did nothing: across the study 495 stage
-        // states in 77 sessions were reduced to one option or none with no way
-        // back except resetting the whole session. Selecting one now clears the
-        // filters hiding it (handled upstream in the select handler).
-        const isFilteredOutButReachable = isFilteredOut && isExpanded;
-        const isDisabled =
-          disabled || item.isDisabled || (isFilteredOut && !isFilteredOutButReachable);
+          // A filtered-out item stays clickable once the participant has opened
+          // "Show all". Leaving it inert was the only affordance for escaping an
+          // over-narrow filter, and it did nothing: across the study 495 stage
+          // states in 77 sessions were reduced to one option or none with no way
+          // back except resetting the whole session. Selecting one now clears the
+          // filters hiding it (handled upstream in the select handler).
+          const isFilteredOutButReachable = isFilteredOut && isExpanded;
+          const isDisabled =
+            disabled || item.isDisabled || (isFilteredOut && !isFilteredOutButReachable);
 
-        return (
-          <div
-            key={item.id}
-            ref={(node) => {
-              if (node) {
-                itemRefs.current.set(item.id, node);
-              } else {
-                itemRefs.current.delete(item.id);
-              }
-            }}
-            className={`gui-item-shell ${
-              density === 'compact' ? 'gui-item-shell-compact' : ''
-            } ${
-              item.phase === 'entering'
-                ? 'gui-item-enter'
-                : item.phase === 'exiting'
-                ? 'gui-item-exit'
-                : ''
-            }`}
-            style={structuralAnimationStyle}
-          >
-            <button
-              onClick={() => !isDisabled && onSelect(item.id)}
-              disabled={isDisabled || item.phase === 'exiting'}
-              title={
-                isFilteredOutButReachable
-                  ? 'Hidden by a filter. Selecting it will clear that filter.'
-                  : undefined
-              }
-              className={`
-                relative w-full rounded-xl border text-left transition-all ${
-                  density === 'compact' ? 'px-5 py-3 text-[15px] leading-snug' : 'px-6 py-4'
+          return (
+            <div
+              key={item.id}
+              ref={(node) => {
+                if (node) {
+                  itemRefs.current.set(item.id, node);
+                } else {
+                  itemRefs.current.delete(item.id);
                 }
-                ${
-                  isSelected
-                    ? selectedVariant === 'visited'
-                      ? 'border-primary/45 bg-primary/12 font-semibold text-fg-strong'
-                      : 'border-primary bg-primary font-semibold text-primary-fg'
-                    : isFilteredOut
-                    ? 'border-dark-border/80 bg-dark-border/35 text-fg-faint'
-                    : 'border-dark-border bg-dark-light text-fg-strong hover:border-dark-border hover:bg-dark-lighter'
-                }
-                ${highlightClass}
-                ${
-                  isDisabled
-                    ? isFilteredOut
-                      ? 'cursor-not-allowed opacity-65'
-                      : 'cursor-not-allowed opacity-50'
-                    : isFilteredOutButReachable
-                    ? 'cursor-pointer opacity-65'
-                    : 'cursor-pointer'
-                }
-                ${item.textChanged ? 'gui-item-text-shift' : ''}
-              `}
+              }}
+              className={`gui-item-shell ${isGrid ? 'gui-item-shell-grid' : ''} ${
+                density === 'compact' ? 'gui-item-shell-compact' : ''
+              } ${
+                item.phase === 'entering'
+                  ? 'gui-item-enter'
+                  : item.phase === 'exiting'
+                  ? 'gui-item-exit'
+                  : ''
+              }`}
+              style={structuralAnimationStyle}
             >
-              {item.textChanged && item.previousValue ? (
-                <span className="gui-item-text-stack">
-                  <span aria-hidden="true" className="gui-item-text-previous">
-                    {item.previousValue}
+              <button
+                onClick={() => !isDisabled && onSelect(item.id)}
+                disabled={isDisabled || item.phase === 'exiting'}
+                title={
+                  isFilteredOutButReachable
+                    ? s.hiddenByFilter
+                    : undefined
+                }
+                className={`
+                  relative w-full rounded-xl border transition-[color,background-color,border-color,opacity] ${
+                    isGrid
+                      ? 'flex h-full items-center justify-center px-2 py-3 text-center text-[15px] leading-snug'
+                      : density === 'compact'
+                      ? 'px-5 py-3 text-left text-[15px] leading-snug'
+                      : 'px-6 py-4 text-left'
+                  }
+                  ${
+                    isSelected
+                      ? selectedVariant === 'visited'
+                        ? 'border-primary bg-primary/12 font-semibold text-fg-strong'
+                        : 'border-primary bg-primary font-semibold text-primary-fg'
+                      : isFilteredOut
+                      ? 'border-dark-border/80 bg-dark-border/35 text-fg-faint'
+                      : 'border-dark-border bg-dark-light text-fg-strong hover:border-dark-border hover:bg-dark-lighter'
+                  }
+                  ${highlightClass}
+                  ${
+                    isDisabled
+                      ? isFilteredOut
+                        ? 'cursor-not-allowed opacity-65'
+                        : 'cursor-not-allowed opacity-50'
+                      : isFilteredOutButReachable
+                      ? 'cursor-pointer opacity-65'
+                      : 'cursor-pointer'
+                  }
+                  ${item.textChanged ? 'gui-item-text-shift' : ''}
+                `}
+              >
+                {item.textChanged && item.previousValue ? (
+                  <span className="gui-item-text-stack">
+                    <span aria-hidden="true" className="gui-item-text-previous">
+                      {item.previousValue}
+                    </span>
+                    <span className="gui-item-text-current">{item.value}</span>
                   </span>
-                  <span className="gui-item-text-current">{item.value}</span>
-                </span>
-              ) : (
-                <span className="block">{item.value}</span>
-              )}
-            </button>
-          </div>
-        );
-      })}
+                ) : (
+                  <span className="block">{item.value}</span>
+                )}
+              </button>
+            </div>
+          );
+        })}
+      </div>
     </div>
   );
 }

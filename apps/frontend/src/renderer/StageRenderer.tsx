@@ -24,6 +24,8 @@ export interface StageRendererProps {
   onBack?: () => void;
   onConfirm?: () => void;
   motionProfile?: GuiMotionProfile;
+  /** Only movie, theater and time can be filtered, so only they report this. */
+  onRevealHidden?: (revealed: boolean, hiddenCount: number) => void;
 }
 
 export function StageRenderer({
@@ -35,6 +37,7 @@ export function StageRenderer({
   onBack,
   onConfirm,
   motionProfile = 'default',
+  onRevealHidden,
 }: StageRendererProps) {
   switch (spec.stage) {
     case 'movie':
@@ -43,6 +46,7 @@ export function StageRenderer({
           spec={spec as UISpec<MovieItem>}
           onSelect={onSelect}
           onNext={onNext}
+          onRevealHidden={onRevealHidden}
           motionProfile={motionProfile}
         />
       );
@@ -53,6 +57,7 @@ export function StageRenderer({
           spec={spec as UISpec<TheaterItem>}
           onSelect={onSelect}
           onNext={onNext}
+          onRevealHidden={onRevealHidden}
           onBack={onBack}
           motionProfile={motionProfile}
         />
@@ -75,6 +80,7 @@ export function StageRenderer({
           spec={spec as UISpec<TimeItem>}
           onSelect={onSelect}
           onNext={onNext}
+          onRevealHidden={onRevealHidden}
           onBack={onBack}
           motionProfile={motionProfile}
         />

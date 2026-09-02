@@ -16,6 +16,7 @@ export function TimeStage({
   onNext,
   onBack,
   motionProfile,
+  onRevealHidden,
 }: StageProps<TimeItem>) {
   const canProceed = !!spec.state.selected;
   const selectedVariant = spec.meta?.selectionRestored === true ? 'visited' : 'active';
@@ -36,8 +37,10 @@ export function TimeStage({
         selectedVariant={selectedVariant}
         highlightedIds={spec.modification.highlight?.itemIds}
         motionProfile={motionProfile}
+        onRevealHidden={onRevealHidden}
         allItems={allItems}
         filteredOutIds={filteredOutIds}
+        columns="auto"
       />
 
       <ActionBar

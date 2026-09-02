@@ -16,6 +16,7 @@ export function TheaterStage({
   onNext,
   onBack,
   motionProfile,
+  onRevealHidden,
 }: StageProps<TheaterItem>) {
   const canProceed = !!spec.state.selected;
   const selectedVariant = spec.meta?.selectionRestored === true ? 'visited' : 'active';
@@ -36,6 +37,7 @@ export function TheaterStage({
         selectedVariant={selectedVariant}
         highlightedIds={spec.modification.highlight?.itemIds}
         motionProfile={motionProfile}
+        onRevealHidden={onRevealHidden}
         allItems={allItems}
         filteredOutIds={filteredOutIds}
       />

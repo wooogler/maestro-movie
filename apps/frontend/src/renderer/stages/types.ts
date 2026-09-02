@@ -13,4 +13,9 @@ export interface StageProps<T = unknown> {
   onFinishTask?: () => void;
   onBack?: () => void;
   motionProfile?: GuiMotionProfile;
+  /**
+   * The participant reached past a filter to see what it was hiding. Only the
+   * three stages that can be filtered pass this through.
+   */
+  onRevealHidden?: (revealed: boolean, hiddenCount: number) => void;
 }
