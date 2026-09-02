@@ -33,7 +33,36 @@ function getItemFieldValue<T extends DataItem>(
   return item[field];
 }
 
-function getComparableValue(field: string, rawValue: unknown, valueField: string): unknown {
+const MINUTES_PER_DAY = 1440;
+
+/**
+ * `endTime` wraps past midnight — `addEndTimeToItems` computes it with `% 24`,
+ * so a 10:00 PM screening of a 2h04m film ends at "00:04". Compared as a plain
+ * clock time that lands *before* every evening showing, which is how a
+ * "ends by 10 PM" filter (`endTime lte 22:00`) used to leave a 12:04 AM finish
+ * on screen.
+ *
+ * The rule: an end time belongs to the next day iff it is earlier than the
+ * item's own start `time`, and then it counts as minutes + one full day, so it
+ * sorts and compares after 23:59. Filter values carry no start time of their
+ * own and so never wrap — "22:00" always means 22:00 today.
+ */
+function getEndTimeComparable(rawValue: unknown, item?: DataItem): unknown {
+  const endMinutes = parseTimeToMinutes(rawValue);
+  if (endMinutes === null) return rawValue;
+  if (!item) return endMinutes;
+
+  const startMinutes = parseTimeToMinutes(item.time);
+  if (startMinutes === null) return endMinutes;
+  return endMinutes < startMinutes ? endMinutes + MINUTES_PER_DAY : endMinutes;
+}
+
+function getComparableValue(
+  field: string,
+  rawValue: unknown,
+  valueField: string,
+  item?: DataItem
+): unknown {
   const effectiveField = field === 'value' ? valueField : field;
 
   if (effectiveField === 'rating') {
@@ -47,6 +76,10 @@ function getComparableValue(field: string, rawValue: unknown, valueField: string
 
   if (effectiveField === 'time') {
     return parseTimeToMinutes(rawValue) ?? rawValue;
+  }
+
+  if (effectiveField === 'endTime') {
+    return getEndTimeComparable(rawValue, item);
   }
 
   return rawValue;
@@ -389,6 +422,41 @@ export function clearModification<T extends DataItem>(
   return refreshSpec(newSpec);
 }
 
+/**
+ * Removes the filters a predicate names, leaving the rest of the modification
+ * alone.
+ *
+ * Used when the agent withdraws an adaptation because the preference behind it
+ * is gone. `clearModification('filter')` is the wrong tool there: it would also
+ * drop the filters that other, still-live preferences are holding up.
+ */
+export function pruneFilters<T extends DataItem>(
+  spec: UISpec<T>,
+  shouldRemove: (filter: FilterState) => boolean
+): UISpec<T> {
+  const filters = normalizeFilters(spec.modification.filter);
+  if (filters.length === 0) return spec;
+
+  const remaining = filters.filter((filter) => !shouldRemove(filter));
+  if (remaining.length === filters.length) return spec;
+
+  const modification = { ...spec.modification };
+  if (remaining.length === 0) {
+    delete modification.filter;
+  } else {
+    modification.filter = remaining;
+  }
+  return refreshSpec({ ...spec, modification });
+}
+
+/** Drops the highlight, leaving filters and sorting in place. */
+export function clearHighlight<T extends DataItem>(spec: UISpec<T>): UISpec<T> {
+  if (!spec.modification.highlight) return spec;
+  const modification = { ...spec.modification };
+  delete modification.highlight;
+  return refreshSpec({ ...spec, modification });
+}
+
 // =============================================================================
 // Internal Logic Functions
 // =============================================================================
@@ -402,7 +470,7 @@ function applyFilterLogic<T extends DataItem>(
 
   return items.filter((item) => {
     const itemValue = getItemFieldValue(item, field, valueField);
-    const comparableItemValue = getComparableValue(field, itemValue, valueField);
+    const comparableItemValue = getComparableValue(field, itemValue, valueField, item);
     const comparableFilterValue = getComparableValue(field, value, valueField);
 
     switch (operator) {
@@ -453,8 +521,8 @@ function applySortLogic<T extends DataItem>(
   return [...items].sort((a, b) => {
     const aVal = getItemFieldValue(a, field, valueField);
     const bVal = getItemFieldValue(b, field, valueField);
-    const comparableAVal = getComparableValue(field, aVal, valueField);
-    const comparableBVal = getComparableValue(field, bVal, valueField);
+    const comparableAVal = getComparableValue(field, aVal, valueField, a);
+    const comparableBVal = getComparableValue(field, bVal, valueField, b);
 
     let comparison: number;
     if (typeof comparableAVal === 'number' && typeof comparableBVal === 'number') {

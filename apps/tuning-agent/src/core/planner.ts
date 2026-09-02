@@ -7,6 +7,7 @@ import {
 import { resolveOpenAiApiKey } from '../llm/openaiKey';
 import { refreshModelEnvVars } from './envRefresh';
 import type { AgentMemory } from './memory';
+import { isSelectableItem } from './filterSimulation';
 import {
   getEnabledVisibleItems,
   getHighlightedIds,
@@ -75,6 +76,20 @@ function toHistoryType(value: unknown): HistoryMessageType | null {
   const type = readTrimmedString(value);
   if (type === 'system' || type === 'user' || type === 'agent') return type;
   return null;
+}
+
+/**
+ * Is a filter applied to this stage at all?
+ *
+ * Deliberately lenient: the count below never evaluates the conditions, so a
+ * malformed entry must still gate the field ON. Dropping it would fail toward
+ * exactly the silence this exists to fix. The spec type is
+ * `FilterState | FilterState[]` (frontend spec/types.ts); applyFilter only ever
+ * writes the array form, but the single form is legal.
+ */
+function hasActiveFilter(value: unknown): boolean {
+  if (Array.isArray(value)) return value.some((entry) => asRecord(entry) !== null);
+  return asRecord(value) !== null;
 }
 
 function compactVisibleItems(
@@ -347,6 +362,39 @@ function buildCurrentView(spec: UISpecLike): Record<string, unknown> | null {
   const rawVisibleItems = Array.isArray(rawSpec.visibleItems) ? rawSpec.visibleItems.length : 0;
   if (rawVisibleItems > visibleItems.length) {
     summary.disabledItemCount = rawVisibleItems - visibleItems.length;
+  }
+  // How many selectable options the active filter is holding back.
+  //
+  // The planner already receives both `items` (the stage inventory) and
+  // `visibleItems` (what survived the filter), so it could difference them. It
+  // did not: across the study 82 turns re-entered a filtered stage after a
+  // backtrack, and in 26 of them the agent called the short list the only
+  // options left. One integer is cheaper than expecting the model to notice.
+  //
+  // Differenced against the host's own visibleItems rather than re-run through
+  // filterSimulation: visibleItems IS the filter's output (computeDisplayItems
+  // in frontend spec/modifiers.ts filters, then sorts and augments, neither of
+  // which changes the length), so this cannot drift from the screen, and it
+  // needs no display.valueField — which the agent's UISpecLike does not carry.
+  //
+  // `items` is the wrong left-hand side at any stage whose inventory holds
+  // entries that were never selectable: the date stage ships `available: false`
+  // days and the seat stage ships occupied seats. So the left side is the
+  // selectable inventory, the same predicate compactVisibleItems applies on the
+  // right, and non-selectable entries cancel at every stage.
+  if (hasActiveFilter(modification?.filter)) {
+    const rawItems = Array.isArray(rawSpec.items) ? rawSpec.items : [];
+    const selectableInventory = rawItems.filter((item) => {
+      const record = asRecord(item);
+      return record !== null && isSelectableItem(record);
+    }).length;
+    const hiddenByFilterCount = selectableInventory - visibleItems.length;
+    // Emitted only when something is actually hidden: every prompt rule keyed
+    // to this field reads its presence as "options are behind the filter", and
+    // a zero would fire all of them on a filter that hides nothing.
+    if (hiddenByFilterCount > 0) {
+      summary.hiddenByFilterCount = hiddenByFilterCount;
+    }
   }
   if (selectedId) {
     summary.selected = selectedValue ? { id: selectedId, value: selectedValue } : { id: selectedId };
@@ -897,6 +945,10 @@ export async function planNextAction(
       ),
       stageMeta: context.stageMeta,
       ...(language && language !== 'en' ? { language } : {}),
+      // Spread the same way as `language`: absent unless it is actually on, so
+      // a study session's planner input is byte-identical to what it was.
+      ...(context.narrateAdaptations ? { narrateAdaptations: true } : {}),
+      ...(context.spokenBrevity ? { spokenBrevity: true } : {}),
     };
 
     const llm = await planActionWithOpenAI(plannerInput);

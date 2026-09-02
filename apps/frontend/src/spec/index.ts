@@ -53,6 +53,8 @@ export {
   selectItems,
   toggleItem,
   clearModification,
+  clearHighlight,
+  pruneFilters,
   getVisibleItems, // deprecated
 } from './modifiers';
 

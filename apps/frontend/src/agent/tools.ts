@@ -66,11 +66,12 @@ export const modificationTools: ToolDefinition[] = [
   {
     name: "highlight",
     description:
-      "Visually mark one or more items without hiding others or committing to a selection. Does not change the item set or order.",
+      "Visually mark a few items without hiding others or committing to a selection. Does not change the item set or order. A highlight is read by contrast, so its value falls as the marked set grows: marking most of what is on screen distinguishes nothing, and marking all of it is inert. Use it to point at one or two choices, not as a substitute for filter. Do NOT call this tool when more than three distinct choices qualify, or when every option still on screen qualifies — call respond instead and ask one question that narrows the set. At the seat stage a choice is a whole adjacent block, not a seat: four qualifying pairs are four choices.",
     parameters: {
       itemIds: {
         type: "array",
-        description: "Array of item IDs to highlight",
+        description:
+          "Array of item IDs to highlight. Keep this to the smallest set that answers the user's question — at most three distinct choices, and never every visible item.",
       },
     },
   },

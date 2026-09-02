@@ -26,10 +26,10 @@ const VERBOSE = process.argv.includes('--verbose');
 /**
  * How many times to replay each case.
  *
- * gpt-5.4 is not deterministic even at temperature 0, so a single run is a
- * coin-flip report rather than a verdict: measured over 14 runs this suite sat
- * at roughly 93%. With --runs the harness reports a rate per case and only
- * fails one that misses more often than it hits.
+ * These models are not deterministic even at temperature 0, so a single run is
+ * a coin-flip report rather than a verdict: on gpt-5.4, measured over 14 runs,
+ * this suite sat at roughly 93%. With --runs the harness reports a rate per
+ * case and only fails one that misses more often than it hits.
  */
 const RUNS = (() => {
   const i = process.argv.indexOf('--runs');
