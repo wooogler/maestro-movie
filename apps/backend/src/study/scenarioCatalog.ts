@@ -25,6 +25,42 @@ function readSeatRows(catalogPath: string, seedDataFile: string): string[] | und
   }
 }
 
+const DATE_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
+
+/**
+ * A generated dataset states the day it is set on. Reading it here keeps that
+ * one fact in one place: the generator's world spec. Without it the calendar
+ * falls back to FIXED_CURRENT_DATE, which is right only for the study worlds.
+ */
+function readDatasetClock(
+  catalogPath: string,
+  seedDataFile: string
+): { todayIso?: string; dateWindowDays?: number } {
+  const seedDataPath = path.resolve(path.dirname(catalogPath), seedDataFile);
+  if (!fs.existsSync(seedDataPath)) return {};
+
+  try {
+    const parsed = JSON.parse(fs.readFileSync(seedDataPath, 'utf-8')) as {
+      todayIso?: unknown;
+      dateCount?: unknown;
+    };
+    const todayIso =
+      typeof parsed.todayIso === 'string' && DATE_PATTERN.test(parsed.todayIso.trim())
+        ? parsed.todayIso.trim()
+        : undefined;
+    const dateWindowDays =
+      typeof parsed.dateCount === 'number' && Number.isInteger(parsed.dateCount) && parsed.dateCount > 0
+        ? parsed.dateCount
+        : undefined;
+    return {
+      ...(todayIso ? { todayIso } : {}),
+      ...(dateWindowDays ? { dateWindowDays } : {}),
+    };
+  } catch {
+    return {};
+  }
+}
+
 function readStepBriefs(value: unknown): ScenarioStepBriefs | undefined {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined;
   const record = value as Record<string, unknown>;
@@ -112,6 +148,20 @@ function validateScenario(raw: unknown, catalogPath: string): ScenarioDefinition
     };
   }
 
+  // An explicit catalog entry wins over the dataset, so a scenario can be moved
+  // in time without regenerating it.
+  const datasetClock = seedDataFile ? readDatasetClock(catalogPath, seedDataFile) : {};
+  const todayIso =
+    typeof record.todayIso === 'string' && DATE_PATTERN.test(record.todayIso.trim())
+      ? record.todayIso.trim()
+      : datasetClock.todayIso;
+  const dateWindowDays =
+    typeof record.dateWindowDays === 'number' &&
+    Number.isInteger(record.dateWindowDays) &&
+    record.dateWindowDays > 0
+      ? record.dateWindowDays
+      : datasetClock.dateWindowDays;
+
   return {
     id,
     title,
@@ -123,6 +173,8 @@ function validateScenario(raw: unknown, catalogPath: string): ScenarioDefinition
     templateDbFile,
     ...(seedDataFile ? { seedDataFile } : {}),
     seedFilters,
+    ...(todayIso ? { todayIso } : {}),
+    ...(dateWindowDays ? { dateWindowDays } : {}),
   };
 }
 

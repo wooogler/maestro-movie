@@ -10,7 +10,7 @@ import {
   getScenarioTemplatePath,
   resolveScenarioTemplateDir,
 } from '../study/scenarioCatalog';
-import { loadScenarioDataset } from '../study/scenarioDataset';
+import { loadScenarioDataset, type ScenarioDataset } from '../study/scenarioDataset';
 import type { ScenarioDefinition } from '../study/types';
 import { normalizeParkingAmenities } from '../utils/parkingAmenities';
 
@@ -196,8 +196,27 @@ function ensureTemplateDir(): string {
   return dir;
 }
 
+/**
+ * The calendar opens on the scenario's "today" and offers no way to leave that
+ * month, so a world whose showings start somewhere else renders a month in
+ * which every day is unavailable — a dead end with nothing on screen to explain
+ * it. Cheaper to fail here, where the dataset and its dates are both in hand.
+ */
+function assertClockMatchesShowings(scenario: ScenarioDefinition, dataset: ScenarioDataset): void {
+  const today = scenario.todayIso ?? dataset.todayIso;
+  if (!today) return;
+  if (dataset.showings.some((showing) => showing.date === today)) return;
+
+  const dates = [...new Set(dataset.showings.map((showing) => showing.date))].sort();
+  throw new Error(
+    `[${scenario.id}] is set on ${today}, but its showings run ${dates[0] ?? '(none)'}..${dates[dates.length - 1] ?? '(none)'}. ` +
+      'The calendar would open on a month with no bookable day.'
+  );
+}
+
 function seedScenarioFromDataset(templatePath: string, scenario: ScenarioDefinition): void {
   const dataset = loadScenarioDataset(scenario);
+  assertClockMatchesShowings(scenario, dataset);
   fs.mkdirSync(path.dirname(templatePath), { recursive: true });
   if (fs.existsSync(templatePath)) {
     fs.unlinkSync(templatePath);

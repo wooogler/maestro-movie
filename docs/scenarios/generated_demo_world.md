@@ -28,6 +28,15 @@ Five films genuinely in theaters on Tuesday 3 November 2026 and five real
 Detroit-area cinemas, over the six days from the demo reception through Sunday
 8 November. Roughly 680 showings and 50,000 seats.
 
+The dataset states the day it is set on (`todayIso`, with `dateCount` for the
+window), and that travels with it: the catalog reads it onto the scenario, the
+session payload carries it, and the calendar opens on that month. This matters
+because there is no month navigation — the calendar shows one month and offers
+no way out of it — so a world seeded on one date and a UI pinned to another
+leaves every visible day unavailable. Scenarios without a dataset, which is all
+of the study ones, fall back to `FIXED_CURRENT_DATE`. Seeding refuses to build a
+template whose stated day has no showings.
+
 Titles, release dates, theater names, distances, screen counts and amenities are
 real. **Runtimes, MPAA ratings, critic scores, house layouts, prices and every
 showtime are invented** — those values do not exist yet for unreleased films.

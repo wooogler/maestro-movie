@@ -565,4 +565,13 @@ async function seed() {
   sqlite.close();
 }
 
-seed().catch(console.error);
+// Not `.catch(console.error)`: seed() deletes the whole catalogue before it
+// rebuilds it, so a partial run leaves the database empty. Exiting 0 there made
+// deploy/scripts/deploy-podman.sh report a successful deploy over an empty
+// catalogue, with /health still answering 200 because it never touches the DB.
+seed().catch((error) => {
+  console.error(
+    `[seed] Failed: ${error instanceof Error ? error.message : String(error)}`
+  );
+  process.exit(1);
+});

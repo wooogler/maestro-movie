@@ -58,6 +58,7 @@ export const STAGE_META: StageMeta[] = [
     goal: 'Select Showtime.',
     fieldGuide:
       'Showtime/screening selection. Item fields: time, displayTime, endTime (HH:MM 24h), displayEndTime, format ("Standard" | "IMAX" | "3D"), screenNumber. ' +
+      'An endTime earlier than its own time is the next day and sorts after 23:59, so "ends by 10 PM" is endTime lte 22:00 and drops a 12:04 AM finish. ' +
       'Assign preferences about: start/end time constraints, arrival time, screening format (IMAX, 3D), and specific screen number when relevant. ' +
       'Important: IMAX and 3D are per-showtime attributes determined at this stage, not at the theater stage.',
   },
@@ -201,7 +202,9 @@ export interface DateItem extends DataItem {
 export function generateDateSpec(
   dates: DateItem[],
   movieId: string,
-  theaterId: string
+  theaterId: string,
+  /** YYYY-MM-DD. The month the calendar opens on, and the day it marks "today". */
+  today?: string
 ): UISpec<DateItem> {
   return createSpec({
     stage: 'date',
@@ -213,7 +216,7 @@ export function generateDateSpec(
       valueField: 'displayText',
       component: 'calendar',
     },
-    meta: { movieId, theaterId },
+    meta: { movieId, theaterId, ...(today ? { today } : {}) },
   });
 }
 

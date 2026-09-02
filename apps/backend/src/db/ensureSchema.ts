@@ -65,6 +65,71 @@ function rebuildMoviesTable(sqlite: Database.Database): void {
   }
 }
 
+/**
+ * Rebuild `theaters` without the legacy `distance_km` column.
+ *
+ * Adding `distance_miles` was only half of that rename. The old column stayed,
+ * and on any database created before it that column is `REAL NOT NULL` with no
+ * default — so every INSERT the current seed writes, which names
+ * `distance_miles` and not `distance_km`, dies on
+ * "NOT NULL constraint failed: theaters.distance_km". It surfaced in a deploy
+ * that had already swapped the containers, leaving the site up on a catalogue
+ * the seed had emptied and could not refill.
+ *
+ * SQLite cannot drop a column on the versions this ships against, so the table
+ * is rebuilt exactly the way `rebuildMoviesTable` does it. `theaters` is
+ * referenced by `showings.theater_id`; foreign keys are off for the swap, and
+ * the reference resolves again by name once the rename lands. The only indexes
+ * on the table are the PRIMARY KEY autoindexes, which the new table gets on its
+ * own.
+ */
+function rebuildTheatersTable(sqlite: Database.Database): void {
+  sqlite.exec('PRAGMA foreign_keys = OFF');
+  try {
+    const transaction = sqlite.transaction(() => {
+      sqlite.exec(`
+        CREATE TABLE theaters_next (
+          id TEXT PRIMARY KEY,
+          name TEXT NOT NULL,
+          location TEXT NOT NULL,
+          screen_count INTEGER NOT NULL,
+          distance_miles REAL NOT NULL,
+          amenities TEXT NOT NULL
+        );
+
+        INSERT INTO theaters_next (
+          id,
+          name,
+          location,
+          screen_count,
+          distance_miles,
+          amenities
+        )
+        SELECT
+          id,
+          name,
+          location,
+          screen_count,
+          -- distance_miles was added with DEFAULT 0, so a row still holding 0
+          -- is one the copy never reached; prefer the legacy value there rather
+          -- than freezing every theater at zero miles away.
+          CASE
+            WHEN distance_miles IS NOT NULL AND distance_miles <> 0 THEN distance_miles
+            ELSE COALESCE(distance_km, 0)
+          END,
+          COALESCE(amenities, '[]')
+        FROM theaters;
+
+        DROP TABLE theaters;
+        ALTER TABLE theaters_next RENAME TO theaters;
+      `);
+    });
+    transaction();
+  } finally {
+    sqlite.exec('PRAGMA foreign_keys = ON');
+  }
+}
+
 function normalizeMovieDurations(sqlite: Database.Database): void {
   const rows = sqlite.prepare('SELECT id, duration FROM movies').all() as Array<{
     id: string;
@@ -119,6 +184,13 @@ export function ensureDbSchema(sqlite: Database.Database): void {
 
     if (!theaterColumnNames.has('amenities')) {
       sqlite.exec("ALTER TABLE theaters ADD COLUMN amenities TEXT NOT NULL DEFAULT '[]'");
+    }
+
+    // Last, so the rebuild copies from columns that are guaranteed to exist by
+    // the two steps above. Adding the new column was never the migration —
+    // removing the old one is, and until it goes the seed cannot insert a row.
+    if (hasDistanceKm) {
+      rebuildTheatersTable(sqlite);
     }
   }
 

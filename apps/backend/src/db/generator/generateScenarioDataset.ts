@@ -74,6 +74,10 @@ function buildDataset(
   const adjacencyRules = buildAdjacencyRules(world, showings, plans);
 
   return {
+    // Carried into the dataset so the runtime does not have to be told
+    // separately what day this world is set on.
+    todayIso: world.todayIso,
+    dateCount: world.dateCount,
     movies: world.movies.map((movie) => ({
       id: movie.id,
       title: movie.title,
@@ -211,7 +215,11 @@ function parseArgs(argv: string[]): {
   verify: boolean;
 } {
   let seed = 20261103;
-  let out = 'apps/backend/scenarios/data/demo_uist2026_detroit.json';
+  // Resolved from this file, not from the cwd: `npm run scenarios:generate`
+  // goes through the workspace, so the process starts in apps/backend and a
+  // repo-root-relative default writes apps/backend/apps/backend/... instead.
+  // An explicit --out stays relative to wherever the caller is standing.
+  let out = path.resolve(__dirname, '../../../scenarios/data/demo_uist2026_detroit.json');
   let quiet = false;
   let verify = false;
 

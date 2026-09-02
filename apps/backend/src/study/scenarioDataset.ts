@@ -121,6 +121,14 @@ export interface ScenarioDatasetAssertions {
 }
 
 export interface ScenarioDataset {
+  /**
+   * The day this world is set on, and how many bookable days follow it. The
+   * calendar has no live clock — it renders whatever day the dataset says
+   * "today" is — so a dataset built for one date and a UI pinned to another
+   * leaves every day of the visible month unavailable.
+   */
+  todayIso?: string;
+  dateCount?: number;
   movies: ScenarioDatasetMovie[];
   theaters: ScenarioDatasetTheater[];
   showings: ScenarioDatasetShowing[];

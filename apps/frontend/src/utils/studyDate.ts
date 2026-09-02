@@ -55,3 +55,17 @@ export const FIXED_CURRENT_DATE = toIsoDateString(
 export function getFixedCurrentDate(): Date {
   return new Date(fixedCurrentDate.getTime());
 }
+
+/**
+ * The day a scenario is set on. Scenarios generated from a dataset carry their
+ * own date — the demo world runs on 2026-11-03 — while the study scenarios are
+ * seeded against FIXED_CURRENT_DATE and pass nothing.
+ *
+ * These have to agree with the seeded showings: the calendar renders one month
+ * and offers no way to leave it, so a mismatch shows a month in which every day
+ * is unavailable.
+ */
+export function resolveScenarioToday(todayIso?: string | null): Date {
+  const parsed = todayIso ? parseFixedDate(todayIso.trim()) : null;
+  return parsed ?? getFixedCurrentDate();
+}
