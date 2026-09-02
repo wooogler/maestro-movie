@@ -96,7 +96,7 @@ export function SeatStage({
                       title={seat.label}
                       style={{ gridColumn: `${seat.number} / span 1` }}
                       className={`
-                        relative aspect-square min-w-0 w-full overflow-hidden rounded-t-md text-[10px] transition-all sm:rounded-t-lg sm:text-xs
+                        relative aspect-square min-w-0 w-full rounded-t-md text-[10px] transition-[color,background-color,border-color,opacity] sm:rounded-t-lg sm:text-xs
                         ${
                           isOccupied
                             ? 'cursor-not-allowed bg-dark-border text-fg-faint font-normal'

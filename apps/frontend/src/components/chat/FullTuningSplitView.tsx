@@ -1,4 +1,5 @@
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import type { AnimationEvent as ReactAnimationEvent } from 'react';
 import { StageRenderer } from '../../renderer';
 import { isBookingCompleteMeta, type UISpec, type Stage } from '../../spec';
 import type {
@@ -75,7 +76,21 @@ type TimelineRow =
 const SNAPSHOT_SYNC_BOTTOM_THRESHOLD_PX = 48;
 const SNAPSHOT_SYNC_ANCHOR_BOTTOM_OFFSET_PX = 64;
 const TIMELINE_SYNC_FLASH_MS = 950;
-const GUI_STAGE_TRANSITION_MS = 420;
+/*
+  The slide's own length, in `App.css` — `gui-stage-slide-*` all run 560ms.
+
+  These two used to disagree: the teardown fired at 420ms, which unmounted the
+  outgoing panel and stripped the slide-in class off the incoming one 140ms
+  before their keyframes had finished. That is a hard visual discontinuity, and
+  it put a heavy commit (a whole stage tree unmounting) inside the tail of every
+  transition. Teardown is now driven by the incoming panel's own `animationend`
+  and this is only the fallback for when that event never arrives — a panel
+  mounted under `prefers-reduced-motion`, or a browser that drops the event on a
+  backgrounded tab — so it is deliberately a little longer than the animation.
+*/
+const GUI_STAGE_TRANSITION_MS = 560;
+const GUI_STAGE_TRANSITION_FALLBACK_MS = GUI_STAGE_TRANSITION_MS + 140;
+
 const AUTO_FOLLOW_SCROLL_SYNC_LOCK_MS = 520;
 const GUI_CARD_BASE_WIDTH_PX = 440;
 
@@ -320,6 +335,15 @@ export function FullTuningSplitView({
   const activeSnapshotRef = useRef<GuiSnapshot | null>(null);
   const activeSnapshotIndexRef = useRef<number>(-1);
   const transitionTimeoutRef = useRef<number | null>(null);
+  /*
+    The same fact as `transitionState`, but readable synchronously. The fit-to-
+    height effect below has to know a slide has started during the very commit
+    that starts it, and a state update scheduled from a layout effect is not
+    visible to the effects that run after it in that same commit.
+  */
+  const guiTransitionActiveRef = useRef(false);
+  /** Which incoming snapshot the running transition belongs to, if any. */
+  const transitionIncomingIdRef = useRef<string | null>(null);
   const syncHighlightTimeoutRef = useRef<number | null>(null);
   const autoScrollFrameRef = useRef<number | null>(null);
   const autoFollowScrollSyncLockUntilRef = useRef(0);
@@ -626,8 +650,35 @@ export function FullTuningSplitView({
   const containerClass = conversationCollapsed
     ? 'mx-auto grid h-full w-full max-w-6xl min-h-0 grid-cols-1 grid-rows-[minmax(0,1fr)_auto] gap-4'
     : 'mx-auto grid h-full w-full max-w-6xl min-h-0 grid-cols-1 grid-rows-[minmax(0,3fr)_minmax(0,2fr)] gap-4 lg:grid-cols-[minmax(0,3fr)_minmax(0,2fr)] lg:grid-rows-1';
+  /*
+    `syncActiveSnapshotToScroll` walks every timeline row and calls
+    `getBoundingClientRect` on each. Wired straight to `onScroll` that ran once
+    per scroll event — several times a frame on a trackpad — and it is also the
+    one thing guaranteed to be happening while the stage slides, because the
+    transcript auto-scrolls to the agent's new turn at the same moment. So it is
+    collapsed to at most one pass per frame, and skipped entirely while a
+    transition is in flight: the snapshot it would pick is the one already being
+    animated to.
+  */
+  const scrollSyncFrameRef = useRef<number | null>(null);
+
+  useEffect(
+    () => () => {
+      if (scrollSyncFrameRef.current !== null) {
+        window.cancelAnimationFrame(scrollSyncFrameRef.current);
+      }
+    },
+    []
+  );
+
   const handleTimelineScroll = useCallback(() => {
-    syncActiveSnapshotToScroll();
+    if (guiTransitionActiveRef.current) return;
+    if (scrollSyncFrameRef.current !== null) return;
+    scrollSyncFrameRef.current = window.requestAnimationFrame(() => {
+      scrollSyncFrameRef.current = null;
+      if (guiTransitionActiveRef.current) return;
+      syncActiveSnapshotToScroll();
+    });
   }, [syncActiveSnapshotToScroll]);
 
   const scrollToSnapshot = useCallback(
@@ -681,13 +732,53 @@ export function FullTuningSplitView({
     []
   );
 
-  useEffect(() => {
+  // Ends the transition the given snapshot started, and only that one — a late
+  // `animationend` or fallback timer from a superseded slide must not unfreeze
+  // the one that replaced it.
+  const endGuiTransition = useCallback((incomingId: string) => {
+    if (transitionIncomingIdRef.current !== incomingId) return;
+    transitionIncomingIdRef.current = null;
+    guiTransitionActiveRef.current = false;
+    if (transitionTimeoutRef.current !== null) {
+      window.clearTimeout(transitionTimeoutRef.current);
+      transitionTimeoutRef.current = null;
+    }
+    setTransitionState((current) => (current?.incomingId === incomingId ? null : current));
+  }, []);
+
+  /*
+    The slide-in panel tells us when it is done.
+
+    `animationend` bubbles, and the stage tree underneath runs animations of its
+    own (`gui-item-enter`, the text swap), so this has to check that the event
+    came from this panel and names one of the slide keyframes — otherwise the
+    first list item to finish fading in would tear the transition down early.
+  */
+  const handleIncomingAnimationEnd = useCallback(
+    (event: ReactAnimationEvent<HTMLDivElement>) => {
+      if (event.target !== event.currentTarget) return;
+      if (!event.animationName.startsWith('gui-stage-slide-in')) return;
+      const incomingId = transitionState?.incomingId;
+      if (incomingId) endGuiTransition(incomingId);
+    },
+    [endGuiTransition, transitionState?.incomingId]
+  );
+
+  /*
+    A layout effect, not a passive one, so the outgoing panel and the slide
+    classes are in the DOM in the same paint that the new stage first appears
+    in — and, just as importantly, so `guiTransitionActiveRef` is already set by
+    the time the fit-to-height effect below runs in this same commit.
+  */
+  useLayoutEffect(() => {
     const previousSnapshot = activeSnapshotRef.current;
     const previousSnapshotIndex = activeSnapshotIndexRef.current;
 
     if (!activeSnapshot) {
       activeSnapshotRef.current = null;
       activeSnapshotIndexRef.current = activeSnapshotIndex;
+      guiTransitionActiveRef.current = false;
+      transitionIncomingIdRef.current = null;
       setTransitionState(null);
       return;
     }
@@ -695,6 +786,8 @@ export function FullTuningSplitView({
     if (!previousSnapshot) {
       activeSnapshotRef.current = activeSnapshot;
       activeSnapshotIndexRef.current = activeSnapshotIndex;
+      guiTransitionActiveRef.current = false;
+      transitionIncomingIdRef.current = null;
       setTransitionState(null);
       return;
     }
@@ -702,6 +795,8 @@ export function FullTuningSplitView({
     if (previousSnapshot.id !== activeSnapshot.id && previousSnapshot.stage !== activeSnapshot.stage) {
       const direction: GuiTransitionDirection =
         activeSnapshotIndex >= previousSnapshotIndex ? 'forward' : 'backward';
+      guiTransitionActiveRef.current = true;
+      transitionIncomingIdRef.current = activeSnapshot.id;
       setTransitionState({
         outgoing: previousSnapshot,
         direction,
@@ -713,24 +808,55 @@ export function FullTuningSplitView({
       }
 
       transitionTimeoutRef.current = window.setTimeout(() => {
-        setTransitionState((current) =>
-          current?.incomingId === activeSnapshot.id ? null : current
-        );
         transitionTimeoutRef.current = null;
-      }, GUI_STAGE_TRANSITION_MS);
-    } else {
+        endGuiTransition(activeSnapshot.id);
+      }, GUI_STAGE_TRANSITION_FALLBACK_MS);
+    } else if (transitionIncomingIdRef.current !== activeSnapshot.id) {
+      /*
+        Nothing to slide — but only tear a transition down if it is not this
+        snapshot's own. `activeSnapshot` is a fresh object on every change to
+        `messages` or `activeSpec`, so this effect re-runs on every streamed
+        token, and once the slide has started `previousSnapshot.id` already
+        equals `activeSnapshot.id`. Unguarded, the next token to arrive landed
+        in this branch and cancelled the slide it was in the middle of.
+      */
       if (transitionTimeoutRef.current !== null) {
         window.clearTimeout(transitionTimeoutRef.current);
         transitionTimeoutRef.current = null;
       }
+      guiTransitionActiveRef.current = false;
+      transitionIncomingIdRef.current = null;
       setTransitionState(null);
     }
 
     activeSnapshotRef.current = activeSnapshot;
     activeSnapshotIndexRef.current = activeSnapshotIndex;
-  }, [activeSnapshot, activeSnapshotIndex]);
+  }, [activeSnapshot, activeSnapshotIndex, endGuiTransition]);
+
+  /*
+    Fit the booking stage into the height it has been given.
+
+    Two things this must not do, both of which it used to.
+
+    It must not recompute *during* a slide. The scale is an inline transform on
+    `guiContentRef`, which is the parent of both stage panels — so recomputing it
+    on the commit that starts the transition snapped the outgoing panel to the
+    incoming stage's scale on frame 0 of its exit, and did so via a forced
+    synchronous layout (`clientHeight` + `scrollHeight`) followed by a state
+    update, i.e. a full re-render before paint. The scale is therefore frozen
+    while a transition is running and recomputed once when it clears, by which
+    point the incoming stage is the only one left to fit.
+
+    And it must not observe `content`. `content.scrollHeight` changes on every
+    frame that `.gui-item-shell` is transitioning `max-height` (380ms), so
+    observing it turned any filter, sort or "Show all" into a 60Hz stream of
+    re-renders of the entire split view. Only the viewport is observed; the
+    stage's own height is re-read on each snapshot instead.
+  */
+  const guiTransitionActive = transitionState !== null;
 
   useLayoutEffect(() => {
+    if (guiTransitionActive || guiTransitionActiveRef.current) return;
     const viewport = guiViewportRef.current;
     const content = guiContentRef.current;
     if (!viewport || !content) return;
@@ -745,9 +871,8 @@ export function FullTuningSplitView({
     if (typeof ResizeObserver === 'undefined') return;
     const ro = new ResizeObserver(recalc);
     ro.observe(viewport);
-    ro.observe(content);
     return () => ro.disconnect();
-  }, [activeSnapshot?.id]);
+  }, [activeSnapshot?.id, guiTransitionActive]);
 
   return (
     <div className="min-h-0 flex-1 overflow-hidden px-4 py-4">
@@ -773,8 +898,16 @@ export function FullTuningSplitView({
                   className="relative mx-auto flex w-full max-w-2xl items-start justify-center"
                   style={{ transform: `scale(${guiScale})`, transformOrigin: 'center center' }}
                 >
+                  {/*
+                    Both panels are keyed by the snapshot they show. Without a
+                    key React reconciles them positionally, so moving to a new
+                    stage was a mount *and* an unmount *and* another mount of a
+                    full stage tree rather than one of each — three trees' worth
+                    of commit work landing on the frame the slide starts on.
+                  */}
                   {transitionState?.outgoing ? (
                     <div
+                      key={`outgoing-${transitionState.outgoing.id}`}
                       className={`absolute inset-0 flex items-center justify-center py-1 gui-stage-panel ${
                         transitionState.direction === 'forward'
                           ? 'gui-stage-slide-out-up'
@@ -791,6 +924,8 @@ export function FullTuningSplitView({
                   ) : null}
 
                   <div
+                    key={`incoming-${activeSnapshot.id}`}
+                    onAnimationEnd={transitionState ? handleIncomingAnimationEnd : undefined}
                     className={`relative flex w-full items-center justify-center py-1 gui-stage-panel ${
                       transitionState
                         ? transitionState.direction === 'forward'
@@ -938,18 +1073,7 @@ export function FullTuningSplitView({
   );
 }
 
-function GuiSnapshotCard({
-  snapshot,
-  interactive,
-  agentActive = false,
-  speaking = false,
-  onSelect,
-  onToggle,
-  onNext,
-  onFinishTask,
-  onBack,
-  onConfirm,
-}: {
+interface GuiSnapshotCardProps {
   snapshot: GuiSnapshot;
   interactive: boolean;
   agentActive?: boolean;
@@ -960,7 +1084,31 @@ function GuiSnapshotCard({
   onFinishTask?: () => void;
   onBack?: () => void;
   onConfirm?: () => void;
-}) {
+}
+
+/*
+  Memoised, because this is where the expensive tree lives — a whole
+  `StageRenderer` with its own hooks, timers, ResizeObserver and FLIP layout
+  effect — and none of it depends on most of what re-renders the split view.
+  Streamed agent tokens, a voice status flip, the transcript's scroll-sync
+  state: each of those re-rendered both stage cards, and the outgoing one is
+  frozen by definition. `transitionState.outgoing` holds the snapshot object
+  captured when the slide began, and the other props it is handed are constants,
+  so with this memo the exiting panel renders exactly once and then only slides.
+  ChatPage already hands every callback down through `useCallback`.
+*/
+const GuiSnapshotCard = memo(function GuiSnapshotCard({
+  snapshot,
+  interactive,
+  agentActive = false,
+  speaking = false,
+  onSelect,
+  onToggle,
+  onNext,
+  onFinishTask,
+  onBack,
+  onConfirm,
+}: GuiSnapshotCardProps) {
   const frameClass = speaking
     ? 'border-rose-500/70 shadow-[0_0_0_3px_rgba(244,63,94,0.18)]'
     : agentActive
@@ -1034,7 +1182,7 @@ function GuiSnapshotCard({
       </div>
     </div>
   );
-}
+});
 
 function SnapshotNavButton({
   direction,

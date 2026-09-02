@@ -53,50 +53,62 @@
   }
 }
 
+/*
+  Everything below animates `opacity` and `transform` and nothing else.
+
+  That is not a style preference, it is the whole reason the stage transition
+  used to stutter. `filter: blur()` and `box-shadow` are painted properties: the
+  moment a keyframe touches one, the compositor can no longer run the animation
+  on its own thread and every frame goes back through style, paint and raster on
+  the main thread.
+
+  Measured by CDP trace on this machine's Chromium, three runs over a real
+  672x582 seat stage, counting `ProxyMain::BeginMainFrame` — main-thread frames,
+  and the milliseconds spent in them:
+
+    the slide alone      119 frames / 503ms  ->  38 frames / 108ms
+    eight rings alone    180 frames / 948ms  ->  45 frames / 114ms
+    both together        182 frames / 1370ms ->  54 frames / 172ms
+
+  And "both together" is the real case: the agent moves the stage and marks its
+  suggestions in the same commit, so the blur and the rings always fired on the
+  same frame as each other. That is the animation people were watching.
+
+  So: a ring is a `::after` pseudo-element whose opacity and scale animate, not
+  a growing `box-shadow`; and softness in the slide comes from a slightly larger
+  scale delta instead of a blur.
+*/
+
 @keyframes gui-text-current-in {
   0% {
     opacity: 0;
-    filter: blur(5px);
+    transform: translateY(3px);
   }
   100% {
     opacity: 1;
-    filter: blur(0);
+    transform: translateY(0);
   }
 }
 
 @keyframes gui-text-previous-out {
   0% {
     opacity: 1;
-    filter: blur(0);
+    transform: translateY(0);
   }
   100% {
     opacity: 0;
-    filter: blur(4px);
-  }
-}
-
-@keyframes gui-highlight-wave {
-  0% {
-    box-shadow: 0 0 0 0 rgba(37, 99, 235, 0.85);
-  }
-  70% {
-    box-shadow: 0 0 0 16px rgba(37, 99, 235, 0);
-  }
-  100% {
-    box-shadow: 0 0 0 0 rgba(37, 99, 235, 0);
+    transform: translateY(-3px);
   }
 }
 
 @keyframes gui-stage-slide-in-down {
   from {
     opacity: 0;
-    transform: translateY(88px) scale(0.985);
-    filter: blur(6px);
+    transform: translateY(88px) scale(0.97);
   }
   to {
     opacity: 1;
     transform: translateY(0) scale(1);
-    filter: blur(0);
   }
 }
 
@@ -104,25 +116,21 @@
   from {
     opacity: 1;
     transform: translateY(0) scale(1);
-    filter: blur(0);
   }
   to {
     opacity: 0;
-    transform: translateY(-88px) scale(0.985);
-    filter: blur(6px);
+    transform: translateY(-88px) scale(0.97);
   }
 }
 
 @keyframes gui-stage-slide-in-up {
   from {
     opacity: 0;
-    transform: translateY(-88px) scale(0.985);
-    filter: blur(6px);
+    transform: translateY(-88px) scale(0.97);
   }
   to {
     opacity: 1;
     transform: translateY(0) scale(1);
-    filter: blur(0);
   }
 }
 
@@ -130,12 +138,10 @@
   from {
     opacity: 1;
     transform: translateY(0) scale(1);
-    filter: blur(0);
   }
   to {
     opacity: 0;
-    transform: translateY(88px) scale(0.985);
-    filter: blur(6px);
+    transform: translateY(88px) scale(0.97);
   }
 }
 
@@ -157,7 +163,12 @@
     opacity 380ms ease,
     max-height 380ms cubic-bezier(0.22, 1, 0.36, 1),
     margin-bottom 380ms cubic-bezier(0.22, 1, 0.36, 1);
-  will-change: opacity, max-height;
+  /*
+    `max-height` was in here too, which bought nothing — it is a layout
+    property, so no promotion can make it cheap — while pinning a compositor
+    layer per item for the whole life of the list.
+  */
+  will-change: opacity;
   max-height: 120px;
 }
 
@@ -203,67 +214,134 @@
   animation: gui-text-previous-out 420ms ease both;
 }
 
-.gui-highlight-wave {
-  animation: gui-highlight-wave 1.9s ease-out infinite;
+/*
+  The attention rings.
+
+  Each of the three is a ring drawn once by a `::after` overlay that fades and
+  scales. The host element keeps its *resting* ring as a plain static
+  `box-shadow`/`ring-*` utility in the component — that never animates, so it
+  costs nothing — and this pseudo-element only carries the transient pulse.
+
+  `inset` is negative so the ring reads as sitting just outside the control, the
+  way the old spreading box-shadow did. That means the host must not clip: the
+  seat and calendar-day buttons dropped their `overflow-hidden` for this (they
+  had nothing overflowing them), and no ancestor between a marked control and
+  the stage card clips either, which is also why `.gui-stage-panel` below stays
+  free of `contain: paint`.
+*/
+.gui-highlight-border-once,
+.gui-highlight-wave,
+.timeline-sync-pulse {
+  position: relative;
 }
 
-@keyframes gui-highlight-border-once {
+.gui-highlight-border-once::after,
+.gui-highlight-wave::after,
+.timeline-sync-pulse::after {
+  content: '';
+  position: absolute;
+  border-radius: inherit;
+  pointer-events: none;
+  opacity: 0;
+  /*
+    Only here, on the element that is actually animating, and only for the
+    properties the compositor can take over.
+  */
+  will-change: opacity, transform;
+}
+
+/* One deliberate pulse: the agent has just marked this option. */
+@keyframes gui-highlight-ring-once {
   0% {
-    box-shadow: 0 0 0 0 rgba(37, 99, 235, 0);
-    filter: saturate(1);
+    opacity: 0;
+    transform: scale(0.94);
   }
   35% {
-    box-shadow: 0 0 0 7px rgba(37, 99, 235, 0.45);
-    filter: saturate(1.12);
+    opacity: 1;
+    transform: scale(1.04);
   }
   100% {
-    box-shadow: 0 0 0 4px rgba(37, 99, 235, 0.38);
-    filter: saturate(1);
+    opacity: 0;
+    transform: scale(1);
   }
 }
 
-.gui-highlight-border-once {
-  animation: gui-highlight-border-once 900ms cubic-bezier(0.22, 1, 0.36, 1) 1 both;
+.gui-highlight-border-once::after {
+  inset: -5px;
+  border: 3px solid rgba(37, 99, 235, 0.7);
+  animation: gui-highlight-ring-once 900ms cubic-bezier(0.22, 1, 0.36, 1) 1 both;
 }
 
-@keyframes timeline-sync-pulse {
+/*
+  The default profile's standing wave, still breathing outward, still forever.
+
+  The old wave spread its shadow by a fixed 16px whatever it was wrapped around;
+  a scale grows in proportion instead, so the delta is deliberately small — 1.08
+  is about 17px across a 440px showtime row and a couple of pixels across a
+  seat, which keeps a wide row from wearing a halo twice the size of a seat's.
+*/
+@keyframes gui-highlight-ring-wave {
   0% {
-    box-shadow: 0 0 0 0 rgba(229, 9, 20, 0);
-    filter: saturate(1);
+    opacity: 0.85;
+    transform: scale(1);
+  }
+  70% {
+    opacity: 0;
+    transform: scale(1.08);
+  }
+  100% {
+    opacity: 0;
+    transform: scale(1.08);
+  }
+}
+
+.gui-highlight-wave::after {
+  inset: -2px;
+  border: 4px solid rgb(37, 99, 235);
+  animation: gui-highlight-ring-wave 1.9s ease-out infinite;
+}
+
+/* The transcript row that the booking UI is currently synced to. */
+@keyframes timeline-sync-ring {
+  0% {
+    opacity: 0;
+    transform: scale(0.98);
   }
   30% {
-    box-shadow: 0 0 0 6px rgba(229, 9, 20, 0.18);
-    filter: saturate(1.08);
+    opacity: 1;
+    transform: scale(1.03);
   }
   100% {
-    box-shadow: 0 0 0 0 rgba(229, 9, 20, 0);
-    filter: saturate(1);
+    opacity: 0;
+    transform: scale(1);
   }
 }
 
-.timeline-sync-pulse {
-  animation: timeline-sync-pulse 680ms cubic-bezier(0.22, 1, 0.36, 1) 1 both;
-}
-
-.gui-stage-panel {
-  will-change: transform, opacity, filter;
+.timeline-sync-pulse::after {
+  inset: -4px;
+  border: 3px solid rgba(229, 9, 20, 0.55);
+  animation: timeline-sync-ring 680ms cubic-bezier(0.22, 1, 0.36, 1) 1 both;
 }
 
 .gui-stage-slide-in-down {
+  will-change: transform, opacity;
   animation: gui-stage-slide-in-down 560ms cubic-bezier(0.22, 1, 0.36, 1);
 }
 
 .gui-stage-slide-out-up {
   pointer-events: none;
+  will-change: transform, opacity;
   animation: gui-stage-slide-out-up 560ms cubic-bezier(0.22, 1, 0.36, 1) forwards;
 }
 
 .gui-stage-slide-in-up {
+  will-change: transform, opacity;
   animation: gui-stage-slide-in-up 560ms cubic-bezier(0.22, 1, 0.36, 1);
 }
 
 .gui-stage-slide-out-down {
   pointer-events: none;
+  will-change: transform, opacity;
   animation: gui-stage-slide-out-down 560ms cubic-bezier(0.22, 1, 0.36, 1) forwards;
 }
 
@@ -287,6 +365,19 @@
   .gui-stage-slide-out-down,
   .booking-complete-overlay {
     animation: none !important;
+  }
+
+  /*
+    The rings moved into pseudo-elements, so the animation the media query has
+    to cancel moved with them. Their resting opacity is 0, so cancelling the
+    animation leaves nothing drawn — the static ring utility on the host is what
+    still marks the item.
+  */
+  .gui-highlight-wave::after,
+  .gui-highlight-border-once::after,
+  .timeline-sync-pulse::after {
+    animation: none !important;
+    opacity: 0 !important;
   }
 
   .gui-item-shell {

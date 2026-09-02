@@ -167,7 +167,7 @@ export function DateStage({
               onClick={() => day.isAvailable && day.isCurrentMonth && onSelect(day.date)}
               disabled={!day.isAvailable || !day.isCurrentMonth}
               className={`
-                relative aspect-square flex items-center justify-center overflow-hidden rounded-lg border text-sm transition-all
+                relative aspect-square flex items-center justify-center rounded-lg border text-sm transition-[color,background-color,border-color,opacity]
                 ${isOutsideMonth
                   ? 'border-transparent bg-transparent text-fg-faint/45'
                   : day.isSelected
