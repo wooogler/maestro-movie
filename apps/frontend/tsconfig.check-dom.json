@@ -1,0 +1,23 @@
+{
+  /*
+    Checks that RENDER components, as opposed to the pure-logic `*.check.ts`
+    scripts next door.
+
+    Their own config because they need two things tsconfig.node.json
+    deliberately withholds — a JSX factory and the DOM lib. Widening that file
+    instead would let an ordinary logic check reach for `document` and still
+    typecheck, which is exactly the mistake it exists to prevent.
+  */
+  "extends": "./tsconfig.node.json",
+  "compilerOptions": {
+    "tsBuildInfoFile": "./node_modules/.tmp/tsconfig.check-dom.tsbuildinfo",
+    "lib": ["ES2023", "DOM"],
+    "jsx": "react-jsx",
+    // Node for the script half (process.exit), vite/client because these pull
+    // in real app modules that read import.meta.env.
+    "types": ["node", "vite/client"]
+  },
+  "include": ["src/**/*.dom.check.ts"],
+  // `extends` inherits the parent's exclude, which lists exactly these files.
+  "exclude": []
+}

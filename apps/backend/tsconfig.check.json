@@ -1,0 +1,13 @@
+{
+  // The executable specs are dev scripts, not shipped code, so the main build
+  // excludes them — they were being compiled into dist/ for no reason. They are
+  // still typechecked, here, with a rootDir wide enough for logPaths.check.ts to
+  // import the agent-side path builder it is asserting agreement with.
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "noEmit": true,
+    "rootDir": "../.."
+  },
+  "include": ["src/**/*.check.ts"],
+  "exclude": ["node_modules", "dist"]
+}

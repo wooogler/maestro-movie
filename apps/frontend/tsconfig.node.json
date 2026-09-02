@@ -22,5 +22,7 @@
     "noFallthroughCasesInSwitch": true,
     "noUncheckedSideEffectImports": true
   },
-  "include": ["vite.config.ts"]
+  "include": ["vite.config.ts", "src/**/*.check.ts"],
+  // Render checks need JSX and the DOM lib; they live in tsconfig.check-dom.json.
+  "exclude": ["src/**/*.dom.check.ts"]
 }

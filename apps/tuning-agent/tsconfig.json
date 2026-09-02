@@ -13,5 +13,9 @@
     "moduleResolution": "node"
   },
   "include": ["src/**/*"],
-  "exclude": ["node_modules", "dist"]
+  // The *.regress.ts harnesses are dev scripts run with tsx, never shipped.
+  // highlightPrompt.regress.ts imports the frontend's tool definitions on
+  // purpose — the tool descriptions are part of what it regresses — and that
+  // path sits outside this project's rootDir, so the build skips them.
+  "exclude": ["node_modules", "dist", "src/**/*.regress.ts"]
 }

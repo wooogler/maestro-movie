@@ -24,5 +24,8 @@
     "noFallthroughCasesInSwitch": true,
     "noUncheckedSideEffectImports": true
   },
-  "include": ["src"]
+  "include": ["src"],
+  // `*.check.ts` files are node scripts run by `npm run check`, not app code.
+  // They are typechecked by tsconfig.node.json, which has the node globals.
+  "exclude": ["src/**/*.check.ts"]
 }
