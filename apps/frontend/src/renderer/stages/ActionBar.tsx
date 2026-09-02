@@ -4,6 +4,8 @@
  * Back/Continue 버튼
  */
 
+import { useLanguage } from '../../i18n';
+
 interface ActionBarProps {
   onBack?: () => void;
   onNext?: () => void;
@@ -17,12 +19,16 @@ interface ActionBarProps {
 export function ActionBar({
   onBack,
   onNext,
-  backLabel = 'Back',
-  nextLabel = 'Continue',
+  backLabel,
+  nextLabel,
   backDisabled = false,
   nextDisabled = false,
   showBack = true,
 }: ActionBarProps) {
+  const { s } = useLanguage();
+  const back = backLabel ?? s.back;
+  const next = nextLabel ?? s.continue;
+
   return (
     <div className="mt-6 flex w-full flex-col items-center gap-3">
       <div className="flex w-full max-w-sm flex-col justify-center gap-3 sm:w-auto sm:max-w-none sm:flex-row sm:gap-4">
@@ -31,13 +37,13 @@ export function ActionBar({
             type="button"
             className={`w-full rounded-lg px-6 py-3 transition-colors sm:w-auto ${
               backDisabled
-                ? 'bg-dark-border/50 text-fg-faint cursor-not-allowed'
+                ? 'bg-dark-border/50 text-fg-muted cursor-not-allowed'
                 : 'bg-dark-border text-fg-strong hover:bg-dark-lighter'
             }`}
             onClick={() => onBack()}
             disabled={backDisabled}
           >
-            {backLabel}
+            {back}
           </button>
         )}
 
@@ -52,7 +58,7 @@ export function ActionBar({
             onClick={() => onNext()}
             disabled={nextDisabled}
           >
-            {nextLabel}
+            {next}
           </button>
         )}
       </div>

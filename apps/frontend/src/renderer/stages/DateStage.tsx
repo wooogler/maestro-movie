@@ -8,7 +8,8 @@ import { useMemo } from 'react';
 import type { DateItem } from '../../spec';
 import { ActionBar } from './ActionBar';
 import type { StageProps } from './types';
-import { formatLocalDate, getFixedCurrentDate } from '../../utils/studyDate';
+import { formatLocalDate, resolveScenarioToday } from '../../utils/studyDate';
+import { useLanguage } from '../../i18n';
 
 interface CalendarDay {
   date: string; // YYYY-MM-DD
@@ -23,13 +24,12 @@ interface CalendarDay {
 function generateCalendarDays(
   year: number,
   month: number,
+  todayStr: string,
   items: DateItem[],
   selectedId?: string,
   highlightedIds?: string[]
 ): CalendarDay[] {
   const days: CalendarDay[] = [];
-  const today = getFixedCurrentDate();
-  const todayStr = formatLocalDate(today);
 
   // First day of the month
   const firstDay = new Date(year, month, 1);
@@ -106,28 +106,35 @@ export function DateStage({
   onBack,
   motionProfile = 'default',
 }: StageProps<DateItem>) {
+  const { s } = useLanguage();
   const canProceed = !!spec.state.selected;
   const hasRestoredSelection = spec.meta?.selectionRestored === true;
 
-  // Fix month view to current study month.
-  const fixedCurrentDate = getFixedCurrentDate();
-  const viewYear = fixedCurrentDate.getFullYear();
-  const viewMonth = fixedCurrentDate.getMonth();
+  // Fix the month view to the scenario's month. There is no month navigation —
+  // deliberately, so the calendar cannot wander off the seeded world — which is
+  // why this has to be the month the showings are actually in. The spec states
+  // the day it was built for; scenarios that state nothing use the study date.
+  const specToday = typeof spec.meta?.today === 'string' ? spec.meta.today : undefined;
+  const scenarioToday = resolveScenarioToday(specToday);
+  const todayStr = formatLocalDate(scenarioToday);
+  const viewYear = scenarioToday.getFullYear();
+  const viewMonth = scenarioToday.getMonth();
 
   // Generate calendar days for current view
   const calendarDays = useMemo(
     () => generateCalendarDays(
       viewYear,
       viewMonth,
+      todayStr,
       spec.items,
       spec.state.selected?.id,
       spec.modification.highlight?.itemIds
     ),
-    [viewYear, viewMonth, spec.items, spec.state.selected?.id, spec.modification.highlight]
+    [viewYear, viewMonth, todayStr, spec.items, spec.state.selected?.id, spec.modification.highlight]
   );
 
   // Format month display
-  const monthYearDisplay = new Date(viewYear, viewMonth).toLocaleString('en-US', {
+  const monthYearDisplay = new Date(viewYear, viewMonth).toLocaleString(s.locale, {
     month: 'long',
     year: 'numeric',
   });
@@ -142,7 +149,7 @@ export function DateStage({
       {/* Calendar grid */}
       <div className="grid grid-cols-7 gap-1 w-full max-w-md">
         {/* 요일 헤더 */}
-        {['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'].map((day) => (
+        {s.weekdayShort.map((day) => (
           <div
             key={day}
             className="text-center text-sm text-fg-faint py-2 font-medium"
@@ -155,8 +162,8 @@ export function DateStage({
         {calendarDays.map((day, index) => {
           const highlightClass = day.isHighlighted
             ? motionProfile === 'full-tuning'
-              ? 'border-blue-500 border-2 shadow-[0_0_0_4px_rgba(37,99,235,0.38)] gui-highlight-border-once'
-              : 'ring-[4px] ring-blue-500 gui-highlight-wave'
+              ? 'border-accent-line border-2 shadow-[0_0_0_4px_var(--app-accent-glow-strong)] gui-highlight-border-once'
+              : 'ring-[4px] ring-accent-line gui-highlight-wave'
             : '';
           const isOutsideMonth = !day.isCurrentMonth;
           const isUnavailable = day.isCurrentMonth && !day.isAvailable;
@@ -172,7 +179,7 @@ export function DateStage({
                   ? 'border-transparent bg-transparent text-fg-faint/45'
                   : day.isSelected
                   ? hasRestoredSelection
-                    ? 'border-primary/45 bg-primary/12 text-fg-strong font-semibold'
+                    ? 'border-primary bg-primary/12 text-fg-strong font-semibold'
                     : 'border-primary bg-primary text-primary-fg font-semibold'
                   : day.isAvailable
                   ? 'border-dark-border bg-dark-light text-fg-strong hover:bg-dark-lighter'
@@ -182,7 +189,7 @@ export function DateStage({
                   ? 'text-fg-faint'
                   : ''
                 }
-                ${day.isToday && !day.isSelected ? 'ring-1 ring-primary/50' : ''}
+                ${day.isToday && !day.isSelected && !day.isHighlighted ? 'ring-1 ring-primary/50' : ''}
                 ${highlightClass}
               `}
             >
@@ -204,17 +211,17 @@ export function DateStage({
       <div className="flex flex-wrap justify-center gap-x-4 gap-y-2 text-xs text-fg-muted sm:text-sm">
         <div className="flex items-center gap-2">
           <div className="h-4 w-4 rounded border border-dark-border bg-dark-light" />
-          <span>Available</span>
+          <span>{s.legendAvailable}</span>
         </div>
         <div className="flex items-center gap-2">
           <div className="relative h-4 w-4 rounded border border-dark-border bg-dark-border">
             <span className="absolute left-[18%] right-[18%] top-1/2 h-px -translate-y-1/2 rotate-[-32deg] bg-fg-faint/70" />
           </div>
-          <span>Unavailable</span>
+          <span>{s.legendUnavailable}</span>
         </div>
         <div className="flex items-center gap-2">
           <div className="h-4 w-4 rounded border border-primary bg-primary" />
-          <span>Selected</span>
+          <span>{s.legendSelected}</span>
         </div>
       </div>
 

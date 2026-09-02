@@ -7,6 +7,7 @@
 import type { SeatItem } from '../../spec';
 import { ActionBar } from './ActionBar';
 import type { StageProps } from './types';
+import { useLanguage } from '../../i18n';
 
 interface SeatStageProps extends StageProps<SeatItem> {
   onToggle: (id: string) => void;
@@ -19,6 +20,7 @@ export function SeatStage({
   onBack,
   motionProfile = 'default',
 }: SeatStageProps) {
+  const { s } = useLanguage();
   const formatUsd = (value: number): string =>
     new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(value);
   const selectedList = spec.state.selectedList ?? [];
@@ -49,7 +51,7 @@ export function SeatStage({
     <div className="flex w-full max-w-full flex-col items-center gap-5 sm:gap-6">
       {/* Screen indicator */}
       <div className="w-full max-w-sm sm:max-w-lg">
-        <div className="w-3/4 h-2 mx-auto bg-gradient-to-b from-gray-300 to-gray-500 rounded-t-full mb-2" />
+        <div className="w-3/4 h-2 mx-auto bg-gradient-to-b from-fg-faint to-dark-border rounded-t-full mb-2" />
         <div className="text-center text-sm text-fg-faint mb-6">SCREEN</div>
       </div>
 
@@ -80,12 +82,15 @@ export function SeatStage({
                   const isSelected = selectedIds.includes(seat.id);
                   const isOccupied = seat.status !== 'available';
                   const isHighlighted = highlightedIds.has(seat.id);
+                  // Premium seats get a gold tint rather than a gold fill: solid gold
+                  // is the agent-highlight border/ring below, and it has to stay
+                  // readable when the agent highlights a premium seat.
                   const isPremium = seat.type === 'premium';
 
                   const highlightClass = isHighlighted
                     ? motionProfile === 'full-tuning'
-                      ? 'border-blue-500 border-2 shadow-[0_0_0_4px_rgba(37,99,235,0.38)] gui-highlight-border-once'
-                      : 'ring-[4px] ring-blue-500 gui-highlight-wave'
+                      ? 'border-accent-line border-2 shadow-[0_0_0_4px_var(--app-accent-glow-strong)] gui-highlight-border-once'
+                      : 'ring-[4px] ring-accent-line gui-highlight-wave'
                     : '';
 
                   return (
@@ -99,13 +104,13 @@ export function SeatStage({
                         relative aspect-square min-w-0 w-full rounded-t-md text-[10px] transition-[color,background-color,border-color,opacity] sm:rounded-t-lg sm:text-xs
                         ${
                           isOccupied
-                            ? 'cursor-not-allowed bg-dark-border text-fg-faint font-normal'
+                            ? 'cursor-not-allowed bg-dark-light text-fg-muted font-normal'
                             : isSelected
                             ? hasRestoredSelection
-                              ? 'border border-primary/45 bg-primary/12 text-fg-strong font-semibold'
+                              ? 'border border-primary bg-primary/12 text-fg-strong font-semibold'
                               : 'bg-primary text-primary-fg font-semibold'
                             : isPremium
-                            ? 'bg-amber-900/55 text-amber-100 font-semibold hover:bg-amber-800/60'
+                            ? 'bg-dark-lighter text-fg-strong font-semibold ring-1 ring-inset ring-fg-faint/45 hover:bg-dark-border'
                             : 'bg-dark-light text-fg-strong font-semibold hover:bg-dark-lighter'
                         }
                         ${highlightClass}
@@ -128,21 +133,21 @@ export function SeatStage({
       <div className="flex flex-wrap justify-center gap-x-4 gap-y-2 text-xs text-fg-muted sm:gap-x-6 sm:text-sm">
         <div className="flex items-center gap-2">
           <div className="w-4 h-4 rounded-t bg-dark-light" />
-          <span>Standard</span>
+          <span>{s.legendStandard}</span>
         </div>
         <div className="flex items-center gap-2">
-          <div className="w-4 h-4 rounded-t bg-amber-900/55" />
-          <span>Premium</span>
+          <div className="w-4 h-4 rounded-t bg-dark-lighter ring-1 ring-inset ring-fg-faint/45" />
+          <span>{s.legendPremium}</span>
         </div>
         <div className="flex items-center gap-2">
           <div className="w-4 h-4 rounded-t bg-primary" />
-          <span>Selected</span>
+          <span>{s.legendSelected}</span>
         </div>
         <div className="flex items-center gap-2">
           <div className="relative h-4 w-4 rounded-t bg-dark-border">
             <span className="absolute left-[18%] right-[18%] top-1/2 h-px -translate-y-1/2 bg-fg-faint/70" />
           </div>
-          <span>Occupied</span>
+          <span>{s.legendOccupied}</span>
         </div>
       </div>
 

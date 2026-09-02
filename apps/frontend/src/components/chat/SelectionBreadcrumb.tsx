@@ -1,6 +1,7 @@
 import { Fragment } from 'react';
 import type { Stage, UISpec, WorkflowSelectionState } from '../../spec';
 import { formatTime12Hour } from '../../utils/displayFormats';
+import { useLanguage, type UiStrings } from '../../i18n';
 
 interface SelectionBreadcrumbProps {
   spec: UISpec;
@@ -16,14 +17,16 @@ interface BreadcrumbSegment {
   active?: boolean;
 }
 
-const STAGE_LABEL: Record<Stage, string> = {
-  movie: 'Movie',
-  theater: 'Theater',
-  date: 'Date',
-  time: 'ShowTime',
-  seat: 'Seat',
-  confirm: 'Confirm',
-};
+function stageLabels(ui: UiStrings): Record<Stage, string> {
+  return {
+    movie: ui.stepMovie,
+    theater: ui.stepTheater,
+    date: ui.stepDate,
+    time: ui.stepTime,
+    seat: ui.stepSeat,
+    confirm: ui.stepConfirm,
+  };
+}
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null;
@@ -143,34 +146,35 @@ function getSeatValues(workflow: WorkflowSelectionState, meta: Record<string, un
   return getMetaSeats(meta).map(formatSeatLabel).filter(Boolean);
 }
 
-function buildSegments(spec: UISpec, stage?: Stage): BreadcrumbSegment[] {
+function buildSegments(spec: UISpec, ui: UiStrings, stage?: Stage): BreadcrumbSegment[] {
   const workflow = getWorkflow(spec);
   const meta = getMetaRecord(spec);
+  const label = stageLabels(ui);
   const segments: BreadcrumbSegment[] = [];
 
   const movie = getMovieValue(workflow, meta);
   if (movie) {
-    segments.push({ key: 'movie', label: 'Movie', value: movie });
+    segments.push({ key: 'movie', label: label.movie, value: movie });
   }
 
   const theater = getTheaterValue(workflow, meta);
   if (theater) {
-    segments.push({ key: 'theater', label: 'Theater', value: theater });
+    segments.push({ key: 'theater', label: label.theater, value: theater });
   }
 
   const date = getDateValue(workflow, meta);
   if (date) {
-    segments.push({ key: 'date', label: 'Date', value: date });
+    segments.push({ key: 'date', label: label.date, value: date });
   }
 
   const time = getTimeValue(workflow, meta);
   if (time) {
-    segments.push({ key: 'time', label: 'ShowTime', value: time });
+    segments.push({ key: 'time', label: label.time, value: time });
   }
 
   const seatValues = getSeatValues(workflow, meta);
   if (seatValues.length > 0) {
-    segments.push({ key: 'seat', label: 'Seat', value: seatValues.join(', ') });
+    segments.push({ key: 'seat', label: label.seat, value: seatValues.join(', ') });
   }
 
   if (stage) {
@@ -178,7 +182,7 @@ function buildSegments(spec: UISpec, stage?: Stage): BreadcrumbSegment[] {
     if (existing) {
       existing.active = true;
     } else {
-      segments.push({ key: stage, label: STAGE_LABEL[stage], active: true });
+      segments.push({ key: stage, label: label[stage], active: true });
     }
   }
 
@@ -191,7 +195,8 @@ export function SelectionBreadcrumb({
   subdued = false,
   compact = false,
 }: SelectionBreadcrumbProps) {
-  const segments = buildSegments(spec, stage);
+  const { s: ui } = useLanguage();
+  const segments = buildSegments(spec, ui, stage);
 
   if (segments.length === 0) return null;
 
@@ -216,8 +221,8 @@ export function SelectionBreadcrumb({
                 segment.active && !subdued
                   ? 'bg-primary text-primary-fg'
                   : subdued
-                    ? 'bg-dark-border/50 text-fg-faint'
-                    : 'bg-primary/10 text-primary'
+                    ? 'bg-dark-border/50 text-fg-muted'
+                    : 'bg-primary/10 text-primary-text'
               }`}
             >
               {segment.label}
@@ -229,7 +234,7 @@ export function SelectionBreadcrumb({
             ) : null}
           </span>
           {index < segments.length - 1 ? (
-            <span className={subdued ? 'text-fg-faint/60' : 'text-primary/55'}>{'>'}</span>
+            <span className={subdued ? 'text-fg-faint/60' : 'text-fg-muted'}>{'>'}</span>
           ) : null}
         </Fragment>
       ))}
