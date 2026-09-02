@@ -44,3 +44,16 @@ export function consumePendingStudyLogEvents(): PendingStudyLogEventInput[] {
   writePendingEvents([]);
   return events;
 }
+
+/**
+ * Drops anything queued without writing it anywhere.
+ *
+ * The queue outlives a page navigation by design — setup happens before a
+ * session exists — which also means it outlives a visitor. A booth runs one
+ * stranger after another in the same tab, so events queued by someone who then
+ * declined to be recorded must be thrown away rather than left to be flushed
+ * into the next person's consented log.
+ */
+export function clearPendingStudyLogEvents(): void {
+  writePendingEvents([]);
+}

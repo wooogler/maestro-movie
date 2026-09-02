@@ -13,6 +13,7 @@ const WORKSPACE_ROOT = path.resolve(__dirname, '../../../../');
 const LOG_ROOT_DIR = path.resolve(WORKSPACE_ROOT, 'logs');
 const INTERACTION_LOG_DIR = path.resolve(LOG_ROOT_DIR, 'interaction');
 const LLM_TRACE_LOG_DIR = path.resolve(LOG_ROOT_DIR, 'trace');
+const DEMO_LOG_ROOT_DIR = path.resolve(LOG_ROOT_DIR, 'demo');
 
 function sanitizeFileToken(value: string, fallback: string): string {
   const sanitized = value
@@ -54,10 +55,22 @@ function getRelativeLogFile(record: StudySessionRecord): string | null {
   return value || null;
 }
 
-function buildLlmTraceRelativeFile(relativeFile: string): string {
+/**
+ * The trace that belongs to an interaction log: same stem, in the `trace`
+ * directory beside it. Only sessions that keep an interaction log go through
+ * here — a demo session has none and uses `createDemoLlmTraceFilePath`.
+ *
+ * `buildLlmTraceLogFilePath` in `apps/tuning-agent/src/runtime/studyLlmTraceLog.ts`
+ * is the same rule on the writing side, used when the backend did not hand the
+ * agent an explicit path. `npm run check:logpaths` holds the two together.
+ */
+export function buildLlmTraceRelativeFile(relativeFile: string): string {
   const parsed = path.posix.parse(relativeFile);
   const extension = parsed.ext || '.jsonl';
-  return path.posix.join('logs', 'trace', `${parsed.name}.llm-trace${extension}`);
+  const traceDir = parsed.dir
+    ? path.posix.join(path.posix.dirname(parsed.dir), 'trace')
+    : path.posix.join('logs', 'trace');
+  return path.posix.join(traceDir, `${parsed.name}.llm-trace${extension}`);
 }
 
 export function createInteractionLogFileName(
@@ -80,6 +93,43 @@ export function createInteractionLogFileName(
   return safePid
     ? `${safePid}-${safeCondition}-${safeScenario}-${safeTimestamp}.jsonl`
     : `${safeCondition}-${safeScenario}-${safeTimestamp}.jsonl`;
+}
+
+/**
+ * The stem both demo files share.
+ *
+ * It carries the session id because demo visitors run concurrently and have no
+ * participant id: a name built only from a whole-second timestamp would have
+ * two visitors who started in the same second appending to one file.
+ */
+function buildDemoLogStem(sessionId: string, createdAt: string): string {
+  return `demo-${sanitizeFileToken(sessionId, 'session')}-${formatFileTimestamp(createdAt)}`;
+}
+
+/**
+ * Where a session's trace goes.
+ *
+ * A session that also keeps an interaction log puts its trace beside it, under
+ * the same stem — that is the existing `logs/trace/<stem>.llm-trace.jsonl` and
+ * it is unchanged. A demo session's pair lives under `logs/demo/` instead, and
+ * because both demo paths are built from `buildDemoLogStem`, deriving the trace
+ * from the interaction log with `buildLlmTraceRelativeFile` lands on exactly
+ * the name this function returns.
+ */
+export function createDemoLlmTraceFilePath(sessionId: string, createdAt: string): string {
+  return path.posix.join('logs', 'demo', 'trace', `${buildDemoLogStem(sessionId, createdAt)}.llm-trace.jsonl`);
+}
+
+/**
+ * Where a *consenting* demo visitor's interaction log goes.
+ *
+ * Never `logs/interaction/`: that directory is the study corpus, and a booth
+ * visitor is not a study participant. They agreed to have this session recorded
+ * for research, not to be filed alongside a consented, counterbalanced,
+ * PID-carrying run. A demo log has no participant id in it at all.
+ */
+export function createDemoInteractionLogFilePath(sessionId: string, createdAt: string): string {
+  return path.posix.join('logs', 'demo', 'interaction', `${buildDemoLogStem(sessionId, createdAt)}.jsonl`);
 }
 
 export function createInteractionLogFilePath(
@@ -163,15 +213,28 @@ export function readInteractionLogFile(
   };
 }
 
+export function getLlmTraceFile(record: StudySessionRecord): string | null {
+  const explicit =
+    typeof record.llmTraceFile === 'string' ? record.llmTraceFile.trim() : '';
+  if (explicit) return explicit;
+  // Sessions persisted before `llmTraceFile` existed still derive it, so a
+  // restart does not lose the download for a session already in flight.
+  const relativeFile = getRelativeLogFile(record);
+  return relativeFile ? buildLlmTraceRelativeFile(relativeFile) : null;
+}
+
+export function hasLlmTrace(record: StudySessionRecord): boolean {
+  return Boolean(getLlmTraceFile(record));
+}
+
 export function readLlmTraceLogFile(
   record: StudySessionRecord
 ): { fileName: string; content: Buffer } | null {
-  const relativeFile = getRelativeLogFile(record);
-  if (!relativeFile) {
+  const llmTraceRelativeFile = getLlmTraceFile(record);
+  if (!llmTraceRelativeFile) {
     return null;
   }
 
-  const llmTraceRelativeFile = buildLlmTraceRelativeFile(relativeFile);
   const filePath = resolveLogFilePath(llmTraceRelativeFile);
   if (!fs.existsSync(filePath)) {
     return null;
@@ -183,6 +246,15 @@ export function readLlmTraceLogFile(
   };
 }
 
+/**
+ * Purges an abandoned study session's files.
+ *
+ * Only sessions this sweep can reach have one: it runs when a study session is
+ * evicted, and demo sessions are exempt from eviction. That matters now that a
+ * consenting demo visitor has an interaction log of their own — it exists
+ * because they agreed to it, and deleting it when they walk away from the booth
+ * would collect nothing.
+ */
 export function deleteInteractionLogArtifacts(record: StudySessionRecord): void {
   const relativeFile = getRelativeLogFile(record);
   if (!relativeFile) {
@@ -190,7 +262,9 @@ export function deleteInteractionLogArtifacts(record: StudySessionRecord): void 
   }
 
   const interactionFilePath = resolveLogFilePath(relativeFile);
-  const llmTraceRelativeFile = buildLlmTraceRelativeFile(relativeFile);
+  // The recorded path, not a re-derivation of it: they agree for a study
+  // session today, and this stays right if that ever stops being true.
+  const llmTraceRelativeFile = getLlmTraceFile(record) ?? buildLlmTraceRelativeFile(relativeFile);
   const llmTraceFilePath = resolveLogFilePath(llmTraceRelativeFile);
 
   if (fs.existsSync(interactionFilePath)) {
@@ -223,4 +297,9 @@ export function hasCompletedBookingLog(record: StudySessionRecord): boolean {
 export function ensureInteractionLogDir(): void {
   fs.mkdirSync(INTERACTION_LOG_DIR, { recursive: true });
   fs.mkdirSync(LLM_TRACE_LOG_DIR, { recursive: true });
+  // Created unconditionally so an operator can see whether anything has been
+  // recorded for the demo without having to run a session first. Both stay
+  // empty unless a visitor ticks the consent box on the setup screen.
+  fs.mkdirSync(path.resolve(DEMO_LOG_ROOT_DIR, 'trace'), { recursive: true });
+  fs.mkdirSync(path.resolve(DEMO_LOG_ROOT_DIR, 'interaction'), { recursive: true });
 }

@@ -247,6 +247,12 @@ export const api = {
      * browser. Mutually exclusive with `apiKey` in practice.
      */
     accessCode?: string;
+    /**
+     * The demo visitor ticked the research-recording box on the setup screen.
+     * Demo only, and the only thing that makes a demo session keep any log at
+     * all — so it is sent explicitly rather than defaulted anywhere.
+     */
+    researchConsent?: boolean;
   }) =>
     fetchApi<StudySessionState>('/study/sessions', {
       method: 'POST',
@@ -393,18 +399,48 @@ export const api = {
    * browser opens the WebRTC session with this secret; the real OpenAI key
    * stays on the backend.
    */
-  createRealtimeVoiceSession: () =>
+  createRealtimeVoiceSession: (language?: string) =>
     fetchApi<{
       clientSecret: string;
       expiresAt: number | null;
       model: string;
       transcriptionModel: string;
+      language: string;
     }>('/speech/realtime-session',
       {
         method: 'POST',
-        body: JSON.stringify({}),
+        body: JSON.stringify(language ? { language } : {}),
       }
     ),
+  /**
+   * Mints the pairing token behind the "use my phone as the mic" QR. Demo-only
+   * server-side; a study session gets 403 and the caller must treat that as
+   * "this session has no phone voice", not as a session failure.
+   */
+  createCompanionPairing: () =>
+    fetchApi<{ companionToken: string; expiresAt: string }>('/study/companion-token', {
+      method: 'POST',
+    }),
+  /**
+   * The paired phone's own Realtime credential.
+   *
+   * Carries the companion token, never the study token — the phone does not have
+   * one and must not. Lives outside `/speech` deliberately: that prefix demands
+   * a study token via the studyContext hook.
+   */
+  createCompanionRealtimeSession: (companionToken: string, language?: string) =>
+    fetchApi<{
+      clientSecret: string;
+      expiresAt: number | null;
+      model: string;
+      transcriptionModel: string;
+      language: string;
+    }>('/study/companion/realtime-session', {
+      method: 'POST',
+      includeStudyToken: false,
+      headers: { 'x-companion-session-token': companionToken },
+      body: JSON.stringify(language ? { language } : {}),
+    }),
   /**
    * Unauthenticated key check / speaker sample. This is the only call that carries
    * the inline key header: it runs before any study session exists, so there is no

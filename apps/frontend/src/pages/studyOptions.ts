@@ -67,7 +67,7 @@ const DEMO_STUDY_MODE_OPTIONS = [
   {
     id: 'demo',
     label: 'Public Demo',
-    description: 'Public demo: full TUNING experience, no participant ID, no logging.',
+    description: 'Public demo: full TUNING experience, no participant ID, recorded only with the visitor\'s consent.',
     config: {
       agentEnabled: true,
       guiAdaptationEnabled: true,
