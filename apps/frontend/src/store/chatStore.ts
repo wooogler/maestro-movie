@@ -1,5 +1,6 @@
 import { create } from 'zustand';
 import type { Stage, UISpec } from '../spec';
+import type { AgentMessageVoiceMeta } from '../voice';
 
 // =============================================================================
 // Message Types
@@ -41,6 +42,11 @@ export interface AgentMessage extends BaseMessage {
   type: 'agent';
   text: string;
   actionTag?: AgentMessageActionTag;
+  /**
+   * What the voice verbosity gate decided for this message. Absent in text
+   * mode, where nothing is spoken and nothing is gated.
+   */
+  voice?: AgentMessageVoiceMeta;
 }
 
 export type ChatMessage = SystemMessage | UserMessage | AgentMessage;
@@ -71,13 +77,28 @@ interface ChatActions {
   ) => void;
 
   /** Add agent explanation message */
-  addAgentMessage: (stage: Stage, text: string, specSnapshot?: UISpec | null) => string;
+  addAgentMessage: (
+    stage: Stage,
+    text: string,
+    specSnapshot?: UISpec | null,
+    voice?: AgentMessageVoiceMeta
+  ) => string;
 
   /** Attach tool-action tag to the latest agent message in the stage */
   annotateLastAgentMessage: (stage: Stage, actionTag: AgentMessageActionTag) => void;
 
   /** Update the active spec (for selections/modifications) */
   updateActiveSpec: (spec: UISpec) => void;
+
+  /**
+   * Rewrite the active spec AND every stage snapshot with the same transform.
+   *
+   * Both halves are required. `updateActiveSpec` only ever writes the snapshot
+   * for the spec's own stage, so a change applied to the active spec alone is
+   * reinstated by `restoreStageSnapshot` the next time the visitor steps back
+   * and forward — which, for an un-applied filter, means it silently comes back.
+   */
+  transformSpecs: (transform: (spec: UISpec) => UISpec) => void;
 
   /** Set current stage */
   setCurrentStage: (stage: Stage) => void;
@@ -176,13 +197,14 @@ export const useChatStore = create<ChatState & ChatActions>((set) => ({
     }));
   },
 
-  addAgentMessage: (stage, text, specSnapshot) => {
+  addAgentMessage: (stage, text, specSnapshot, voice) => {
     const message: AgentMessage = {
       id: `agt-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`,
       type: 'agent',
       timestamp: Date.now(),
       stage,
       text,
+      ...(voice ? { voice } : {}),
     };
     const clonedSnapshot = cloneSpecSnapshot(specSnapshot);
 
@@ -219,6 +241,19 @@ export const useChatStore = create<ChatState & ChatActions>((set) => ({
           ...state.stageSnapshots,
           [stage]: cloneSpecSnapshot(spec) ?? spec,
         },
+      };
+    });
+  },
+
+  transformSpecs: (transform) => {
+    set((state) => {
+      const stageSnapshots: Partial<Record<Stage, UISpec>> = {};
+      for (const [stage, spec] of Object.entries(state.stageSnapshots)) {
+        if (spec) stageSnapshots[stage as Stage] = transform(spec);
+      }
+      return {
+        activeSpec: state.activeSpec ? transform(state.activeSpec) : state.activeSpec,
+        stageSnapshots,
       };
     });
   },

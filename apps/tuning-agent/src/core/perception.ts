@@ -60,6 +60,12 @@ export function fromSnapshot(payload: SnapshotStatePayload): PerceivedContext {
       fallbackFromLegacyToggle
     ),
     guiAdaptationEnabled: normalizeGuiAdaptationEnabled(payload.guiAdaptationEnabled, true),
+    // Defaults to false: every session that is not a quick card behaves as it
+    // did before this field existed.
+    narrateAdaptations: payload.narrateAdaptations === true,
+    // Same default and the same reason: a session that is not a voice demo
+    // behaves exactly as it did before this field existed.
+    spokenBrevity: payload.spokenBrevity === true,
     lastUserMessage: null,
     lastUpdatedAt: nowIso(),
     stageMeta: payload.stageMeta,
@@ -90,6 +96,18 @@ export function applyStateUpdated(
       payload.guiAdaptationEnabled,
       previous.guiAdaptationEnabled
     ),
+    // A state update carries only what changed, so an absent flag must not
+    // silence a card mid-session — it keeps whatever the snapshot established.
+    narrateAdaptations:
+      typeof payload.narrateAdaptations === 'boolean'
+        ? payload.narrateAdaptations
+        : previous.narrateAdaptations,
+    // Voice can be toggled mid-session, so unlike the card flag this one really
+    // does change; an absent field still means "unchanged", not "off".
+    spokenBrevity:
+      typeof payload.spokenBrevity === 'boolean'
+        ? payload.spokenBrevity
+        : previous.spokenBrevity,
     lastUpdatedAt: nowIso(),
   };
 }
