@@ -54,14 +54,18 @@ fi
 # A certificate is only safe to serve if it covers every configured name and is
 # not about to expire. Checking that explicitly is what keeps a stale lineage
 # from being mistaken for an up-to-date one.
+cert_san_names() {
+  openssl x509 -in "$1" -noout -ext subjectAltName 2>/dev/null \
+    | tr ',' '\n' \
+    | sed -n 's/.*DNS:\([^[:space:]]*\).*/\1/p' \
+    | tr '\n' ' '
+}
+
 check_cert() {
   local cert=$1
   local names name
 
-  names=" $(openssl x509 -in "$cert" -noout -ext subjectAltName 2>/dev/null \
-    | tr ',' '\n' \
-    | sed -n 's/.*DNS:\([^[:space:]]*\).*/\1/p' \
-    | tr '\n' ' ')"
+  names=" $(cert_san_names "$cert")"
 
   for name in "${DOMAINS[@]}"; do
     if [[ "$names" != *" $name "* ]]; then
@@ -79,6 +83,37 @@ check_cert() {
 CURRENT_FINGERPRINT=""
 if [ -f "$DEPLOY_SSL_DIR/fullchain.pem" ]; then
   CURRENT_FINGERPRINT=$(openssl x509 -in "$DEPLOY_SSL_DIR/fullchain.pem" -noout -fingerprint -sha256 2>/dev/null || true)
+fi
+
+# Never narrow the certificate. check_cert() above verifies that the *requested*
+# names are covered, which passes trivially when the request itself has lost a
+# name -- and the request is assembled from whatever resolves first: the
+# environment, then deploy/renew.env. A cron entry written by an older version of
+# the installer still exports the singular CERTBOT_DOMAIN=tuning.cs.vt.edu, so if
+# deploy/renew.env (gitignored) ever goes missing, this script would ask for one
+# name, get a brand-new single-name lineage, pass every check, restart nginx and
+# exit 0 -- while https://maestro.cs.vt.edu serves a certificate that does not
+# cover it. Nothing downstream would notice. So: whatever the live certificate
+# answers for today must still be in the request.
+if [ -f "$DEPLOY_SSL_DIR/fullchain.pem" ]; then
+  # An unparseable certificate must not read as "no names to protect". Without
+  # this, a truncated fullchain.pem (the `cp` below is not atomic, which is how
+  # one gets created) yields an empty SAN list, the loop below runs zero times,
+  # and the guard passes — after which a narrowed domain list would be deployed
+  # and even the closing health check would not notice, because it only probes
+  # the names that were requested.
+  if ! openssl x509 -in "$DEPLOY_SSL_DIR/fullchain.pem" -noout >/dev/null 2>&1; then
+    echo "Refusing to renew: $DEPLOY_SSL_DIR/fullchain.pem exists but openssl cannot parse it." >&2
+    echo "Inspect it (and the .bak-* copies beside it) before running again." >&2
+    exit 1
+  fi
+  for deployed_name in $(cert_san_names "$DEPLOY_SSL_DIR/fullchain.pem"); do
+    if [[ " ${DOMAINS[*]} " != *" $deployed_name "* ]]; then
+      echo "Refusing to renew: the deployed certificate covers $deployed_name, which is not in the requested list (${DOMAINS[*]})." >&2
+      echo "Renewing would drop that name. Add it to CERTBOT_DOMAINS in $RENEW_ENV (or in the environment) and run again." >&2
+      exit 1
+    fi
+  done
 fi
 
 CERTBOT_ARGS=(

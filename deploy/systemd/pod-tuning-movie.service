@@ -1,0 +1,43 @@
+# The only thing that brings this deployment back after a host reboot.
+#
+# `restart: unless-stopped` in docker-compose.yml does NOT survive a reboot under
+# rootless podman, and podman-restart.service is disabled both user- and
+# system-wide. This unit is what starts the pod. It otherwise exists only as an
+# untracked file in ~/.config/systemd/user/ on one host, where losing it removes
+# boot recovery with no symptom until the next reboot -- so this copy belongs in
+# version control. Keep the two in sync.
+#
+# Install (as the deploy user, not root):
+#   mkdir -p ~/.config/systemd/user
+#   cp deploy/systemd/pod-tuning-movie.service ~/.config/systemd/user/
+#   systemctl --user daemon-reload
+#   systemctl --user enable --now pod-tuning-movie
+#   sudo loginctl enable-linger "$USER"   # or the unit dies at logout
+#
+# ExecStart names the pod literally, and podman-compose derives the pod name from
+# the compose project name -- which docker-compose.yml now pins to
+# `tuning-movie` so a renamed checkout cannot break this.
+#
+# Note: `podman-compose down` REMOVES the pod. Between a down and the next
+# `up -d`, this unit's ExecStart fails (exit 125) and a reboot comes up with
+# nothing running. To restart without removing the pod, use
+# `systemctl --user restart pod-tuning-movie`.
+
+[Unit]
+Description=Tuning Movie Pod (podman-compose)
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+# KillMode=none: never let systemd kill the pod's processes (incl. rootlessport
+# port-forwarder) if this unit stops or fails. A killed rootlessport takes 80/443
+# down even while containers stay "Up".
+KillMode=none
+ExecStart=/usr/bin/podman pod start pod_tuning-movie
+ExecStop=/usr/bin/podman pod stop -t 30 pod_tuning-movie
+TimeoutStartSec=300
+
+[Install]
+WantedBy=default.target

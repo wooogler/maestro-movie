@@ -1,5 +1,13 @@
 version: '3.8'
 
+# Pins the compose project name. podman-compose otherwise derives it from the
+# checkout's directory name (podman_compose.py:2261-2265) and names the pod
+# pod_${project_name}. ~/.config/systemd/user/pod-tuning-movie.service starts
+# `pod_tuning-movie` by that literal name at boot, so a checkout renamed to
+# anything else would come back from a reboot with nothing running. Committed
+# copy of that unit: deploy/systemd/pod-tuning-movie.service.
+name: tuning-movie
+
 services:
   # Real study/demo sessions are served by per-session tuning-agent child
   # processes that this backend spawns itself (one per session, from
@@ -18,7 +26,7 @@ services:
       - PORT=3000
       - DATABASE_URL=/app/apps/backend/data/tuning-movie.db
       - AGENT_ENABLE_OPENAI=${AGENT_ENABLE_OPENAI:-true}
-      - AGENT_OPENAI_MODEL=${AGENT_OPENAI_MODEL:-gpt-5.4}
+      - AGENT_OPENAI_MODEL=${AGENT_OPENAI_MODEL:-gpt-5.6-terra}
       - AGENT_OPENAI_API_MODE=${AGENT_OPENAI_API_MODE:-responses}
       # OPENAI_API_KEY is only needed when conference access codes are enabled:
       # redeeming a single-use code attaches this key to that one session,
@@ -30,11 +38,13 @@ services:
       #   - use a key minted for the demo alone, in its own OpenAI project with
       #     a hard budget limit set in the dashboard. That project cap is the
       #     only ceiling that survives a bug in this application.
-      #   - keep SPEECH_PREVIEW_ALLOW_ENV_KEY unset: it would let the
+      #   - SPEECH_PREVIEW_ALLOW_ENV_KEY must stay off: it would let the
       #     unauthenticated /speech/synthesize-preview route spend this key.
-      #   - keep ALLOW_OPERATOR_KEY_FALLBACK unset: POST /study/sessions is
+      #   - ALLOW_OPERATOR_KEY_FALLBACK must stay off: POST /study/sessions is
       #     unauthenticated and only demo sessions require a key, so with the
       #     fallback on, anyone could create a non-demo session and spend it.
+      #     Both are pinned to `false` further down rather than left unset, so
+      #     a lab value in .env cannot reach a deployment.
       - OPENAI_API_KEY=${OPENAI_API_KEY:-}
       - DEMO_ACCESS_CODES_ENABLED=${DEMO_ACCESS_CODES_ENABLED:-false}
       - DEMO_ACCESS_CODE_TTL_HOURS=${DEMO_ACCESS_CODE_TTL_HOURS:-24}
@@ -42,7 +52,8 @@ services:
       - DEMO_ACCESS_MAX_GLOBAL_FAILURES=${DEMO_ACCESS_MAX_GLOBAL_FAILURES:-100}
       # Realtime voice configuration. Baked into the ephemeral client secret the
       # backend mints; the browser never sees the real key.
-      - OPENAI_REALTIME_MODEL=${OPENAI_REALTIME_MODEL:-gpt-realtime-2.1}
+      - OPENAI_REALTIME_MODEL=${OPENAI_REALTIME_MODEL:-gpt-realtime-2.1-mini}
+      - OPENAI_REALTIME_REASONING_EFFORT=${OPENAI_REALTIME_REASONING_EFFORT:-minimal}
       - OPENAI_REALTIME_VOICE=${OPENAI_REALTIME_VOICE:-alloy}
       - OPENAI_REALTIME_SPEED=${OPENAI_REALTIME_SPEED:-1.0}
       - OPENAI_REALTIME_STT_MODEL=${OPENAI_REALTIME_STT_MODEL:-gpt-4o-mini-transcribe}
@@ -51,7 +62,11 @@ services:
       - OPENAI_REALTIME_VAD_SILENCE_MS=${OPENAI_REALTIME_VAD_SILENCE_MS:-900}
       - OPENAI_REALTIME_VAD_PREFIX_MS=${OPENAI_REALTIME_VAD_PREFIX_MS:-300}
       - REALTIME_TOKEN_TTL_SECONDS=${REALTIME_TOKEN_TTL_SECONDS:-600}
-      # Relay session logs stay off; demo mode writes no logs of any kind.
+      # Relay message logs (logs/study) stay off, and demo sessions are held
+      # out of them even when this is true — see appendSessionLog in
+      # apps/backend/src/routes/agentRelay.ts. This says nothing about demo
+      # recording: a visitor who ticks the research-recording box still gets
+      # an interaction log and a planner trace under logs/demo/, mounted below.
       - AGENT_RELAY_LOG_ENABLED=${AGENT_RELAY_LOG_ENABLED:-false}
       # Max simultaneous public demo sessions. Demo sessions never evict each
       # other; creation over this cap is rejected with a clear error.
@@ -62,6 +77,34 @@ services:
       - DEMO_SESSION_IDLE_TIMEOUT_MS=${DEMO_SESSION_IDLE_TIMEOUT_MS:-900000}
       - AGENT_LLM_DEBUG=${AGENT_LLM_DEBUG:-false}
       - AGENT_MONITOR_ENABLED=${AGENT_MONITOR_ENABLED:-false}
+      # Everything below is read by deployed code but used to be absent from
+      # this list, so setting it in .env had no effect on the container at all.
+      # Without a secret, sessionService.ts mints a random one per process, so
+      # every restart silently invalidated every live session and view token.
+      - STUDY_SESSION_SECRET=${STUDY_SESSION_SECRET:-}
+      - STUDY_SESSION_TTL_MS=${STUDY_SESSION_TTL_MS:-14400000}
+      # Study worlds only; the demo dataset carries its own todayIso.
+      - FIXED_CURRENT_DATE=${FIXED_CURRENT_DATE:-2026-03-11}
+      - DEMO_ACCESS_IP_WINDOW_MS=${DEMO_ACCESS_IP_WINDOW_MS:-600000}
+      - DEMO_ACCESS_GLOBAL_WINDOW_MS=${DEMO_ACCESS_GLOBAL_WINDOW_MS:-600000}
+      - OPENAI_TTS_MODEL=${OPENAI_TTS_MODEL:-gpt-4o-mini-tts}
+      - OPENAI_TTS_VOICE=${OPENAI_TTS_VOICE:-alloy}
+      - OPENAI_TTS_FORMAT=${OPENAI_TTS_FORMAT:-wav}
+      - OPENAI_TTS_SPEED=${OPENAI_TTS_SPEED:-1.5}
+      # Companion-phone credential: lifetime and mint rate limit. This token can
+      # open OpenAI Realtime sessions against the session's key, so the window is
+      # a real setting, not a detail.
+      - COMPANION_TOKEN_TTL_MINUTES=${COMPANION_TOKEN_TTL_MINUTES:-60}
+      - COMPANION_MINT_WINDOW_MINUTES=${COMPANION_MINT_WINDOW_MINUTES:-10}
+      - COMPANION_MINTS_PER_WINDOW=${COMPANION_MINTS_PER_WINDOW:-12}
+      - OPENAI_KEY_VALIDATION_TIMEOUT_MS=${OPENAI_KEY_VALIDATION_TIMEOUT_MS:-5000}
+      # The two guard rails named above are pinned off here instead of being
+      # interpolated from .env, deliberately: .env doubles as the local dev
+      # config (where ALLOW_OPERATOR_KEY_FALLBACK=true is useful) and a public
+      # deployment must not inherit that. Pinning them also keeps them off if
+      # anyone ever adds `env_file: .env` to this service.
+      - SPEECH_PREVIEW_ALLOW_ENV_KEY=false
+      - ALLOW_OPERATOR_KEY_FALLBACK=false
     volumes:
       - ./apps/backend/data:/app/apps/backend/data:z
       # Access codes live here; without this a rebuild would invalidate every
@@ -70,6 +113,11 @@ services:
       - ./logs/interaction:/app/logs/interaction:z
       - ./logs/trace:/app/logs/trace:z
       - ./logs/survey:/app/logs/survey:z
+      # Consented demo recordings. Without these two mounts they land in the
+      # container's writable layer and `podman-compose down` — i.e. every
+      # deploy — destroys research data a visitor explicitly agreed to donate.
+      - ./logs/demo:/app/logs/demo:z
+      - ./logs/agent-runtime:/app/logs/agent-runtime:z
     networks:
       - tuning-movie-network
     healthcheck:
@@ -81,8 +129,19 @@ services:
 
   # Standalone single-session agent (AGENT_SESSION_ID=default). It does not
   # serve study or demo sessions — the backend spawns its own per-session agent
-  # processes for those. Useful for manual relay testing only; a public demo
-  # deployment can leave OPENAI_API_KEY empty here (or drop this service).
+  # processes for those.
+  #
+  # As configured it cannot do anything at all: agentRelay.ts rejects
+  # `relay.join` for role `agent` without a per-session `agentToken`, which only
+  # agentSupervisor.ts mints for the children it spawns. AGENT_RELAY_TOKEN is in
+  # no env file and no compose service, so this container logs that refusal
+  # (`SESSION_NOT_ACTIVE: relay.join for agent requires payload.agentToken.`)
+  # once and then retries every ~1200 ms forever — ~2,100 lines per hour to the
+  # journald driver, indefinitely. It still passes its healthcheck (pid 1 is
+  # node), and nginx has depends_on on it, so it cannot simply be deleted —
+  # remove nginx's depends_on in the same change, and note that /monitor-api/
+  # lives in this container.
+  # A public demo deployment can leave OPENAI_API_KEY empty here.
   agent:
     build:
       context: .
@@ -99,7 +158,7 @@ services:
       - AGENT_MONITOR_WEB_PORT=3501
       - AGENT_MONITOR_ENABLED=${AGENT_MONITOR_ENABLED:-true}
       - AGENT_ENABLE_OPENAI=${AGENT_ENABLE_OPENAI:-true}
-      - AGENT_OPENAI_MODEL=${AGENT_OPENAI_MODEL:-gpt-5.4}
+      - AGENT_OPENAI_MODEL=${AGENT_OPENAI_MODEL:-gpt-5.6-terra}
       - AGENT_OPENAI_API_MODE=${AGENT_OPENAI_API_MODE:-responses}
       - AGENT_LLM_DEBUG=${AGENT_LLM_DEBUG:-false}
       - OPENAI_API_KEY=${OPENAI_API_KEY:-}
@@ -129,6 +188,10 @@ services:
       - ./deploy/nginx/conf.d:/etc/nginx/conf.d:ro,z
       - ./deploy/certbot/www:/var/www/certbot:z
       - ./deploy/ssl:/etc/nginx/ssl:ro,z
+      # Without this, the access and error logs live only in the container's
+      # writable layer, so every recreate erases the record of whatever went
+      # wrong before it.
+      - ./logs/nginx:/var/log/nginx:z
     depends_on:
       backend:
         condition: service_healthy

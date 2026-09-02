@@ -22,19 +22,19 @@ if [ "$EUID" -ne 0 ]; then
   exit 1
 fi
 
-echo -e "${GREEN}[1/7] Updating system packages...${NC}"
+echo -e "${GREEN}[1/8] Updating system packages...${NC}"
 dnf update -y
 
-echo -e "${GREEN}[2/7] Installing base packages...${NC}"
+echo -e "${GREEN}[2/8] Installing base packages...${NC}"
 dnf install -y epel-release
 dnf install -y git curl wget vim htop
 
-echo -e "${GREEN}[3/7] Installing Podman stack...${NC}"
+echo -e "${GREEN}[3/8] Installing Podman stack...${NC}"
 dnf install -y podman podman-compose
 podman --version
 podman-compose --version || true
 
-echo -e "${GREEN}[4/7] Configuring rootless UID/GID mappings...${NC}"
+echo -e "${GREEN}[4/8] Configuring rootless UID/GID mappings...${NC}"
 if ! grep -q "^${DEPLOY_USER}:" /etc/subuid 2>/dev/null; then
   usermod --add-subuids 100000-165535 "$DEPLOY_USER"
 fi
@@ -42,20 +42,29 @@ if ! grep -q "^${DEPLOY_USER}:" /etc/subgid 2>/dev/null; then
   usermod --add-subgids 100000-165535 "$DEPLOY_USER"
 fi
 
-echo -e "${GREEN}[5/7] Configuring firewall...${NC}"
+echo -e "${GREEN}[5/8] Configuring firewall...${NC}"
 if command -v firewall-cmd >/dev/null 2>&1; then
   firewall-cmd --permanent --add-service=http
   firewall-cmd --permanent --add-service=https
   firewall-cmd --reload
 fi
 
-echo -e "${GREEN}[6/7] Configuring SELinux for containers...${NC}"
+echo -e "${GREEN}[6/8] Configuring SELinux for containers...${NC}"
 if command -v getenforce >/dev/null 2>&1 && [ "$(getenforce)" != "Disabled" ]; then
   setsebool -P container_manage_cgroup on
   setsebool -P httpd_can_network_connect on
 fi
 
-echo -e "${GREEN}[7/7] Preparing app directories...${NC}"
+# Without this, rootless nginx cannot bind 80/443 and the whole stack comes up
+# with the web tier dead. The live host has it in /etc/sysctl.d/99-rootless-ports.conf
+# and this script never set it -- so following this guide on a fresh host left
+# nginx unable to start, with nothing in the docs to explain why.
+echo -e "${GREEN}[7/8] Allowing rootless binds to 80/443...${NC}"
+echo 'net.ipv4.ip_unprivileged_port_start=80' > /etc/sysctl.d/99-rootless-ports.conf
+sysctl --system >/dev/null
+cat /proc/sys/net/ipv4/ip_unprivileged_port_start
+
+echo -e "${GREEN}[8/8] Preparing app directories...${NC}"
 mkdir -p "$APP_DIR"
 mkdir -p "$APP_DIR/apps/backend/data"
 mkdir -p "$APP_DIR/deploy/ssl"
@@ -65,5 +74,12 @@ echo ""
 echo -e "${GREEN}Setup complete.${NC}"
 echo "Next:"
 echo "1) Copy repository to $APP_DIR"
-echo "2) cd $APP_DIR && podman-compose build"
-echo "3) podman-compose up -d"
+echo "2) Put TLS cert files in $APP_DIR/deploy/ssl/{fullchain.pem,privkey.pem} -- nginx will not start without them"
+echo "3) cd $APP_DIR && podman-compose build"
+echo "4) podman-compose up -d"
+echo "5) Install the boot unit so the stack survives a reboot:"
+echo "     mkdir -p ~/.config/systemd/user"
+echo "     cp $APP_DIR/deploy/systemd/pod-tuning-movie.service ~/.config/systemd/user/"
+echo "     systemctl --user daemon-reload && systemctl --user enable --now pod-tuning-movie"
+echo "     sudo loginctl enable-linger $DEPLOY_USER"
+echo "6) Install TLS renewal: $APP_DIR/deploy/scripts/install-cert-renew-cron.sh"

@@ -5,11 +5,19 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 APP_DIR=${APP_DIR:-"$REPO_ROOT"}
 
-# renew-tls-cert.sh needs a domain list, so bake it into the cron entry. It also
-# reads deploy/renew.env, which is the easier place to change domains later.
+# Read the same settings file renew-tls-cert.sh reads, in the same way. Without
+# this the documented flow -- put the domains in deploy/renew.env, then run this
+# installer -- exited 1, because nothing here ever opened that file.
+RENEW_ENV=${CERTBOT_RENEW_ENV:-"$APP_DIR/deploy/renew.env"}
+if [ -f "$RENEW_ENV" ]; then
+  # shellcheck source=/dev/null
+  . "$RENEW_ENV"
+fi
+
 CERTBOT_DOMAINS=${CERTBOT_DOMAINS:-${CERTBOT_DOMAIN:-}}
 if [ -z "$CERTBOT_DOMAINS" ]; then
-  echo "Set CERTBOT_DOMAINS to your deployment domains (e.g. 'example.edu www.example.edu')." >&2
+  echo "Set CERTBOT_DOMAINS to your deployment domains (e.g. 'example.edu www.example.edu')," >&2
+  echo "either in $RENEW_ENV or in the environment." >&2
   exit 1
 fi
 
@@ -22,7 +30,11 @@ CRON_LOG_DIR=${CRON_LOG_DIR:-"$APP_DIR/deploy/certbot/logs"}
 
 mkdir -p "$CERTBOT_CONFIG_DIR" "$CERTBOT_WORK_DIR" "$CERTBOT_LOGS_DIR" "$WEBROOT_DIR" "$CRON_LOG_DIR"
 
-ENTRY="23 3,15 * * * cd $APP_DIR && CERTBOT_DOMAINS='$CERTBOT_DOMAINS' $APP_DIR/deploy/scripts/renew-tls-cert.sh >> $CRON_LOG_DIR/renew-cron.log 2>&1 # tuning-movie-cert-renew"
+# The domain list is deliberately NOT baked into the entry. renew-tls-cert.sh
+# sources deploy/renew.env itself, and an exported value wins over that file's
+# `:=` defaults -- so baking it in here is what used to invert the documented
+# promise that renew.env is where domains are changed without reinstalling cron.
+ENTRY="23 3,15 * * * cd $APP_DIR && $APP_DIR/deploy/scripts/renew-tls-cert.sh >> $CRON_LOG_DIR/renew-cron.log 2>&1 # tuning-movie-cert-renew"
 TMPFILE=$(mktemp)
 trap 'rm -f "$TMPFILE"' EXIT
 
@@ -36,3 +48,6 @@ crontab "$TMPFILE"
 
 echo "Installed cron entry:"
 echo "$ENTRY"
+echo ""
+echo "Domains come from $RENEW_ENV at run time: $CERTBOT_DOMAINS"
+echo "That file is gitignored and load-bearing -- keep it, or the renewal refuses to run."

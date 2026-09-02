@@ -19,7 +19,21 @@ function parsePositiveIntEnv(raw: string | undefined, fallback: number): number 
   return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
 }
 
-/** Failures from one IP before that IP is locked out. */
+/**
+ * Failures from one IP before that IP is locked out.
+ *
+ * Behind the deployment's nginx this is not per-IP at all. The Fastify server
+ * sets no `trustProxy`, so `request.ip` is the socket's peer address, and
+ * rootless podman's published-port forwarder rewrites the source — every
+ * visitor arrives as nginx's own container address (2000+ requests, one "IP",
+ * many user agents). So this is a single bucket for the whole internet, and
+ * since the per-IP branch trips at 10 while the global branch needs 100, ten
+ * wrong codes from anyone lock out every visitor for IP_WINDOW_MS. Fixing it
+ * needs a real client address to reach nginx first (host networking, a
+ * source-preserving publish path, or PROXY protocol) and only then
+ * `trustProxy` with an explicit trusted-hop list — turning `trustProxy` on
+ * alone would read a client-supplied X-Forwarded-For and be worse.
+ */
 const MAX_FAILURES_PER_IP = parsePositiveIntEnv(
   process.env.DEMO_ACCESS_MAX_FAILURES_PER_IP,
   10
