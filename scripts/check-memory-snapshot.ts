@@ -77,6 +77,8 @@ const snapshot = {
   pendingConflict: null,
   backtrackContinuation: null,
   stageBindings: memory.getStageBindings(),
+  forgottenPreferences: memory.getForgottenPreferences(),
+  revokedAdaptations: [],
 };
 
 const parsed = parseAgentMemorySnapshot(overTheWire(snapshot));
@@ -91,14 +93,118 @@ check('stage binding survives', parsed?.stageBindings[0]?.stage === 'time');
 check('filter keeps the link back to its preference', parsed?.stageBindings[0]?.filters[0]?.preferenceIds[0] === 'pref_imax');
 check('filter operator survives', parsed?.stageBindings[0]?.filters[0]?.operator === 'eq');
 
-section('2. GUI ADAPTATION — a stage with no adaptation has nothing to explain');
+section('2. REMOVED BY HAND — the tombstone, the revocation, and the way back');
+{
+  const store = new AgentMemory();
+  const seat = {
+    id: 'prf_couple',
+    description: 'Needs two couple seats together.',
+    strength: 'hard' as const,
+    relevantStages: ['seat' as const],
+  };
+  store.applyPreferenceProfile({ revision: 1, preferences: [seat] });
+  check('a profile seeds memory before any conversation', store.getPreferences().length === 1);
+  check(
+    'the same revision again is a no-op',
+    store.applyPreferenceProfile({ revision: 1, preferences: [] }).applied === false
+  );
+  check('...and does not empty the list', store.getPreferences().length === 1);
+
+  store.recordStageFilter(
+    {
+      stage: 'seat',
+      parentContextKey: 'root|m1|t_troy|s1',
+      valueField: 'type',
+      items: [{ id: 'H1', type: 'couple' }],
+    },
+    {
+      filter: { field: 'type', operator: 'eq', value: 'couple' },
+      preferenceBindings: [{ id: 'prf_couple', strength: 'hard' }],
+    },
+    '2026-11-03T19:18:00.000Z'
+  );
+
+  const { removed, revoked } = store.forgetPreference('prf_couple', '2026-11-03T19:21:00.000Z');
+  check('removing returns what was removed', removed?.id === 'prf_couple');
+  check('the preference is gone', store.getPreferences().length === 0);
+  check('the filter it justified is revoked', revoked[0]?.filters[0]?.field === 'type');
+  check('the revocation names the stage to un-apply on', revoked[0]?.stage === 'seat');
+  check('it shows up as forgotten', store.getForgottenPreferences()[0]?.id === 'prf_couple');
+
+  // The three ways a removed preference comes back, all of which the store must
+  // refuse at write time.
+  store.setPreferences([seat]);
+  check('the original id cannot be written back', store.getPreferences().length === 0);
+  store.setPreferences([{ ...seat, id: 'pref_minted_fresh' }]);
+  check('...nor the same wording under a new id', store.getPreferences().length === 0);
+  store.setPreferences([{ ...seat, id: 'pref_other', description: 'NEEDS TWO COUPLE SEATS TOGETHER.' }]);
+  check('...nor a change of case', store.getPreferences().length === 0);
+
+  check('restoring brings it back with its id', store.restorePreference('prf_couple')?.id === 'prf_couple');
+  check('and it is no longer forgotten', store.getForgottenPreferences().length === 0);
+  store.setPreferences([seat]);
+  check('restoring lifts the wording block too', store.getPreferences().length === 1);
+
+  // Clearing everything must behave exactly like removing each entry by hand,
+  // or a presenter emptying the memory between visitors would leave the
+  // resurrection paths open on whatever the bulk path skipped.
+  const bulk = new AgentMemory();
+  bulk.applyPreferenceProfile({
+    revision: 1,
+    preferences: [
+      seat,
+      { id: 'pref_late', description: 'After 9 PM.', strength: 'soft', relevantStages: ['time'] },
+    ],
+  });
+  check('two preferences to clear', bulk.getPreferences().length === 2);
+  const cleared = bulk.forgetAllPreferences('2026-11-03T19:22:00.000Z');
+  check('clearing reports everything it removed', cleared.removed.length === 2);
+  check('and the list is empty', bulk.getPreferences().length === 0);
+  check('each is individually restorable', bulk.getForgottenPreferences().length === 2);
+  bulk.setPreferences([seat]);
+  check('a cleared preference cannot be written back', bulk.getPreferences().length === 0);
+  check('and can be restored one at a time', bulk.restorePreference('prf_couple')?.id === 'prf_couple');
+  check('leaving the other still forgotten', bulk.getPreferences().length === 1);
+
+  const wiped = new AgentMemory();
+  wiped.applyPreferenceProfile({ revision: 1, preferences: [seat] });
+  wiped.forgetPreference('prf_couple', '2026-11-03T19:21:00.000Z');
+  wiped.reset();
+  check('a reset clears the tombstone', wiped.getForgottenPreferences().length === 0);
+  check(
+    'and lets the same revision seed again',
+    wiped.applyPreferenceProfile({ revision: 1, preferences: [seat] }).applied === true
+  );
+
+  const parsedEdit = parseAgentMemorySnapshot(
+    overTheWire({
+      updatedAt: '2026-11-03T19:21:00.000Z',
+      reason: 'preference-deleted',
+      stage: 'seat',
+      preferences: [],
+      deadEnds: [],
+      attemptedBranches: [],
+      committedWorkflow: null,
+      pendingConflict: null,
+      backtrackContinuation: null,
+      stageBindings: [],
+      forgottenPreferences: [seat],
+      revokedAdaptations: revoked,
+    })
+  );
+  check('the host reads back what was forgotten', parsedEdit?.forgottenPreferences[0]?.id === 'prf_couple');
+  check('the host reads back the revocation', parsedEdit?.revokedAdaptations[0]?.filters[0]?.operator === 'eq');
+  check('...including which stage it belongs to', parsedEdit?.revokedAdaptations[0]?.stage === 'seat');
+}
+
+section('3. GUI ADAPTATION — a stage with no adaptation has nothing to explain');
 const quiet = new AgentMemory();
 quiet.setPreferences([
   { id: 'pref_x', description: 'Any seat is fine', strength: 'soft', relevantStages: ['seat'] },
 ]);
 check('no bindings before any filter or highlight', quiet.getStageBindings().length === 0);
 
-section('3. MALFORMED INPUT — the panel degrades, it does not throw');
+section('4. MALFORMED INPUT — the panel degrades, it does not throw');
 check('null payload', parseAgentMemorySnapshot(null) === null);
 check('string payload', parseAgentMemorySnapshot('nope') === null);
 check('array payload', parseAgentMemorySnapshot([1, 2]) === null);

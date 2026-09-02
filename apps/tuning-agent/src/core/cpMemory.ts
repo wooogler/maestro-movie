@@ -162,6 +162,36 @@ export function createPreferenceId(): string {
   return `pref_${randomBytes(6).toString('hex')}`;
 }
 
+/**
+ * Preferences the host seeded from a profile carry their own prefix.
+ *
+ * This is the only place provenance can live. `Preference` is rebuilt
+ * field-by-field in three places — `normalizePreferenceList` below,
+ * `materializePreferences` in the extractor, and `parseAgentMemorySnapshot` on
+ * the host — so an extra field would be stripped on the first write even for
+ * entries nobody touched. The id survives all three because it is what identity
+ * is keyed on.
+ */
+export const PROFILE_PREFERENCE_ID_PREFIX = 'prf_';
+
+export function isProfilePreferenceId(id: string): boolean {
+  return id.startsWith(PROFILE_PREFERENCE_ID_PREFIX);
+}
+
+/**
+ * What a tombstone blocks on, beyond the id.
+ *
+ * Deliberately case-folded, unlike `normalizeDescription` in the extractor. A
+ * removed preference can come back with a brand-new id: the extractor mints one
+ * whenever it cannot match an entry against the *surviving* list, so re-emitting
+ * the same sentence produces a fresh id that no id-based check would catch.
+ * Matching on the folded text closes that, and folding case means capitalisation
+ * cannot defeat it.
+ */
+export function preferenceDescriptionKey(description: string): string {
+  return normalizeWhitespace(description).toLowerCase();
+}
+
 export function normalizeConflictScope(scope: ConflictScope): ConflictScope {
   return {
     stage: scope.stage,

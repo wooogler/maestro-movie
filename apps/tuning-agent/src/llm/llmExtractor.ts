@@ -1,5 +1,9 @@
 import { refreshModelEnvVars } from "../core/envRefresh";
-import { createPreferenceId, normalizePreferenceList } from "../core/cpMemory";
+import {
+  createPreferenceId,
+  isProfilePreferenceId,
+  normalizePreferenceList,
+} from "../core/cpMemory";
 import { resolveOpenAiApiKey } from "./openaiKey";
 import { fetchOpenAiWithRetry } from "./resilientFetch";
 import { CONFLICT_STAGES } from "../types";
@@ -260,10 +264,18 @@ function materializePreferences(
     });
   }
 
-  // Carry forward hard constraints the model neither restated nor retracted.
+  // Carry forward hard constraints the model neither restated nor retracted,
+  // and profile-seeded entries at EITHER strength.
+  //
+  // A seeded preference was never said out loud, so the model has no reason to
+  // restate it; under the hard-only rule a soft one would vanish on the
+  // visitor's first sentence — and intermittently at that, since a `hasUpdate:
+  // false` response skips this rewrite entirely. Retraction still removes it:
+  // `retractedIds` remains the only way out, which is what keeps "forget the
+  // closer-theater thing" working on a seeded preference.
   const carriedForward = existingPreferences.filter(
     (item) =>
-      item.strength === "hard" &&
+      (item.strength === "hard" || isProfilePreferenceId(item.id)) &&
       !returnedIds.has(item.id) &&
       !retractedIds.has(item.id),
   );
@@ -306,6 +318,14 @@ const OPENAI_API_URL = "https://api.openai.com/v1/responses";
 const OPENAI_CHAT_COMPLETIONS_API_URL =
   "https://api.openai.com/v1/chat/completions";
 const DEFAULT_OPENAI_TEMPERATURE = 0;
+/**
+ * Explicit for the same reason as in llmPlanner: gpt-5.4 defaulted to `none`
+ * when this was omitted and the GPT-5.6 family defaults to `medium`, so leaving
+ * it out would have changed extraction behaviour -- and the cost of every turn
+ * -- as a side effect of the model swap. It also keeps `temperature` legal,
+ * which GPT-5.6 refuses once reasoning is active.
+ */
+const DEFAULT_OPENAI_REASONING_EFFORT = "none" as const;
 type OpenAiApiMode = "responses" | "chat";
 
 function getOpenAIApiMode(): OpenAiApiMode {
@@ -314,9 +334,9 @@ function getOpenAIApiMode(): OpenAiApiMode {
 
 function resolveOpenAIReasoning(
   kind: ExtractionKind,
-): { effort: "low" | "medium"; summary?: "auto" } | undefined {
+): { effort: "none" | "low" | "medium"; summary?: "auto" } | undefined {
   void kind;
-  return undefined;
+  return { effort: DEFAULT_OPENAI_REASONING_EFFORT };
 }
 
 function resolveOpenAITemperature(): number | undefined {
@@ -339,7 +359,7 @@ function isUnsupportedTemperatureError(
 }
 
 function getOpenAIModel(): string {
-  return process.env.AGENT_OPENAI_MODEL || "gpt-5.4";
+  return process.env.AGENT_OPENAI_MODEL || "gpt-5.6-terra";
 }
 
 // OpenAI auth errors echo a partially masked key back in the error body; strip

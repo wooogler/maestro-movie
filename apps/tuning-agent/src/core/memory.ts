@@ -1,6 +1,8 @@
 import {
+  isProfilePreferenceId,
   normalizeDeadEnds,
   normalizePreferenceList,
+  preferenceDescriptionKey,
 } from './cpMemory';
 import { countSelectableFilteredItems } from './filterSimulation';
 import type {
@@ -9,9 +11,13 @@ import type {
   AttemptedBranch,
   DeadEnd,
   EpisodicRecord,
+  FilterExpression,
+  ForgottenPreference,
   PerceivedContext,
   PreferenceBinding,
   Preference,
+  PreferenceProfilePayload,
+  RevokedAdaptation,
   StageAlternativeMemory,
   StageBinding,
 } from '../types';
@@ -96,6 +102,19 @@ export class AgentMemory {
   private attemptedBranches = new Map<string, AttemptedBranch>();
   private stageAlternatives = new Map<string, StageAlternativeMemory>();
   private committedWorkflowState: Record<string, unknown> | null = null;
+  /**
+   * Preferences the visitor removed by hand, keyed by id.
+   *
+   * Consulted at WRITE time by `setPreferences`, which is the only production
+   * path that writes preferences. That placement is what makes a removal stick
+   * without a lock or a queue: the extractor captures the preference list
+   * before a multi-second model call and writes it back afterwards, so a
+   * removal landing inside that window would otherwise be overwritten — and,
+   * for a hard preference, actively reinstated by the carry-forward rule.
+   */
+  private forgotten = new Map<string, ForgottenPreference>();
+  /** Highest profile revision applied, so re-sent snapshots are no-ops. */
+  private profileRevision = 0;
 
   reset(): void {
     this.context = null;
@@ -105,6 +124,11 @@ export class AgentMemory {
     this.attemptedBranches = new Map();
     this.stageAlternatives = new Map();
     this.committedWorkflowState = null;
+    // Cleared with the rest: a tombstone that outlived its session would block
+    // the next visitor from ever stating that preference, and a stale revision
+    // would stop the profile being re-seeded after the reset that just wiped it.
+    this.forgotten = new Map();
+    this.profileRevision = 0;
   }
 
   getPreferences(): Preference[] {
@@ -415,25 +439,208 @@ export class AgentMemory {
   }
 
   setPreferences(items: Preference[]): void {
-    this.preferences = normalizePreferenceList(items);
+    this.preferences = this.rejectForgotten(normalizePreferenceList(items));
+    this.reconcileAdaptations();
+  }
+
+  /**
+   * Drops anything the visitor removed by hand.
+   *
+   * Blocks on the id AND on the folded description, because a removed
+   * preference has three ways back and they do not all keep the id:
+   *   1. the extractor reporting no update returns the list it was handed —
+   *      the pre-call snapshot — with the original id intact;
+   *   2. the hard carry-forward reinstates any hard preference the model
+   *      neither restated nor retracted, also with the original id;
+   *   3. the model re-emitting the same sentence gets a NEWLY MINTED id,
+   *      because description matching only ever looks at the surviving list.
+   * The id covers the first two; the description key covers the third.
+   */
+  private rejectForgotten(items: Preference[]): Preference[] {
+    if (this.forgotten.size === 0) return items;
+    const blockedDescriptions = new Set(
+      Array.from(this.forgotten.values(), (entry) => entry.descriptionKey)
+    );
+    return items.filter(
+      (item) =>
+        !this.forgotten.has(item.id) &&
+        !blockedDescriptions.has(preferenceDescriptionKey(item.description))
+    );
+  }
+
+  /**
+   * Re-checks every stored adaptation against the current preference list,
+   * drops what no longer holds, and RETURNS what it dropped.
+   *
+   * The retention predicates use `every`, so a trace dies the moment any one of
+   * its bindings breaks — not when the last one does. Reading it the other way
+   * would leave the booking screen filtered by a requirement that no longer
+   * exists while `getStageAlternativeCount` fell through to the full inventory,
+   * which is exactly the divergence the revocation channel exists to close.
+   *
+   * Idempotent: once a trace is dropped it can never be reported again.
+   */
+  reconcileAdaptations(): RevokedAdaptation[] {
     const preferencesById = new Map(this.preferences.map((item) => [item.id, item]));
     this.deadEnds = this.deadEnds.filter((item) => shouldRetainDeadEnd(item, preferencesById));
 
+    const revoked: RevokedAdaptation[] = [];
     const nextStageAlternatives = new Map<string, StageAlternativeMemory>();
     for (const [key, record] of this.stageAlternatives.entries()) {
-      const filters = record.filters.filter((trace) =>
-        shouldRetainAlternativeFilter(record.stage, trace, preferencesById)
+      const droppedFilters: FilterExpression[] = [];
+      const filters = record.filters.filter((trace) => {
+        if (shouldRetainAlternativeFilter(record.stage, trace, preferencesById)) return true;
+        droppedFilters.push({ ...trace.filter });
+        return false;
+      });
+      const keepHighlight = shouldRetainAlternativeHighlight(
+        record.stage,
+        record.highlight,
+        preferencesById
       );
-      const highlight = shouldRetainAlternativeHighlight(record.stage, record.highlight, preferencesById)
-        ? record.highlight
-        : null;
+      const clearHighlight = record.highlight !== null && !keepHighlight;
+      if (droppedFilters.length > 0 || clearHighlight) {
+        revoked.push({ stage: record.stage, filters: droppedFilters, clearHighlight });
+      }
       nextStageAlternatives.set(key, {
         ...record,
         filters,
-        highlight,
+        highlight: keepHighlight ? record.highlight : null,
       });
     }
     this.stageAlternatives = nextStageAlternatives;
+    return revoked;
+  }
+
+  /**
+   * Removes one preference on the visitor's instruction and reports the GUI
+   * adaptations that just lost their justification.
+   *
+   * Dead ends naming the removed preference go with it. A dead end is a fact
+   * relative to a constraint — "no showing satisfies both of these" — so once
+   * the constraint is deliberately withdrawn the conclusion no longer holds,
+   * and leaving it would keep blacklisting options for a reason the visitor
+   * just cancelled. Note this is narrower than the retention rule in
+   * `shouldRetainDeadEnd`, which stays exactly as it is for extractor churn:
+   * only a deliberate removal forces the issue.
+   */
+  forgetPreference(id: string, timestamp: string): {
+    removed: Preference | null;
+    revoked: RevokedAdaptation[];
+  } {
+    const target = this.preferences.find((item) => item.id === id.trim());
+    if (!target) return { removed: null, revoked: [] };
+
+    const removed: Preference = { ...target, relevantStages: target.relevantStages.slice() };
+    this.forgotten.set(removed.id, {
+      preference: removed,
+      descriptionKey: preferenceDescriptionKey(removed.description),
+      removedAt: timestamp,
+    });
+    this.preferences = this.preferences.filter((item) => item.id !== removed.id);
+    this.deadEnds = this.deadEnds.filter((item) => !item.preferenceIds.includes(removed.id));
+    return { removed, revoked: this.reconcileAdaptations() };
+  }
+
+  /**
+   * Withdraws every preference at once, for a presenter clearing the memory
+   * between visitors.
+   *
+   * Built out of `forgetPreference` rather than emptying the list, so a bulk
+   * clear cannot drift from a single removal: each entry still gets its
+   * tombstone, each is still individually restorable, and the dead ends that
+   * named it still go with it.
+   */
+  forgetAllPreferences(timestamp: string): {
+    removed: Preference[];
+    revoked: RevokedAdaptation[];
+  } {
+    const removed: Preference[] = [];
+    const revoked: RevokedAdaptation[] = [];
+    for (const id of this.preferences.map((item) => item.id)) {
+      const result = this.forgetPreference(id, timestamp);
+      if (result.removed) removed.push(result.removed);
+      revoked.push(...result.revoked);
+    }
+    return { removed, revoked };
+  }
+
+  /**
+   * Puts one back, id and all.
+   *
+   * Restoring by re-adding the words would mint a new id, and everything that
+   * referenced the preference — dead ends, filter traces, conflict references —
+   * is keyed on the old one. Deleting the ledger entry lifts the id block and
+   * the description block together, which is what lets the visitor state it
+   * again afterwards.
+   */
+  restorePreference(id: string): Preference | null {
+    const entry = this.forgotten.get(id.trim());
+    if (!entry) return null;
+    this.forgotten.delete(entry.preference.id);
+    this.preferences = normalizePreferenceList([...this.preferences, entry.preference]);
+    return entry.preference;
+  }
+
+  getForgottenPreferences(): Preference[] {
+    return Array.from(this.forgotten.values())
+      .sort((a, b) => a.removedAt.localeCompare(b.removedAt))
+      .map((entry) => ({
+        ...entry.preference,
+        relevantStages: entry.preference.relevantStages.slice(),
+      }));
+  }
+
+  /**
+   * Seeds memory from a host-owned profile, so a session can open with
+   * preferences already in it.
+   *
+   * Reports `applied: false` for a revision already applied, which is what
+   * makes the ride-along payload safe to attach to every snapshot: the seed
+   * lands once per revision and a re-sent snapshot cannot undo a removal made
+   * since.
+   *
+   * `revoked` matters when one profile REPLACES another — switching presets
+   * drops the first one's preferences, and any GUI adaptation they were holding
+   * up has to come off the screen with them.
+   *
+   * Merges by id rather than concatenating, because `normalizePreferenceList`
+   * UNIONS `relevantStages` across entries sharing an id — appending the
+   * profile to the live list would quietly widen a preference back to every
+   * stage it had ever been scoped to.
+   */
+  applyPreferenceProfile(payload: PreferenceProfilePayload): {
+    applied: boolean;
+    revoked: RevokedAdaptation[];
+  } {
+    if (payload.revision <= this.profileRevision) return { applied: false, revoked: [] };
+    this.profileRevision = payload.revision;
+
+    const seeded = normalizePreferenceList(payload.preferences);
+    const seededIds = new Set(seeded.map((item) => item.id));
+
+    // A new revision is an operator saying "this is the memory now", so it
+    // outranks any tombstone covering what it seeds. Without this, loading a
+    // preset a second time would come back short by whatever the previous
+    // visitor happened to remove from it — and silently, since the write-time
+    // filter reports nothing.
+    for (const item of seeded) {
+      const descriptionKey = preferenceDescriptionKey(item.description);
+      for (const [id, entry] of this.forgotten.entries()) {
+        if (id === item.id || entry.descriptionKey === descriptionKey) {
+          this.forgotten.delete(id);
+        }
+      }
+    }
+    // Profile-origin entries are REPLACED wholesale, not merged: switching from
+    // one preset to another has to drop the first one's preferences, and they
+    // are only identifiable by their id prefix. Anything the conversation
+    // produced is left alone.
+    const kept = this.preferences.filter(
+      (item) => !seededIds.has(item.id) && !isProfilePreferenceId(item.id)
+    );
+    this.preferences = this.rejectForgotten(normalizePreferenceList([...seeded, ...kept]));
+    return { applied: true, revoked: this.reconcileAdaptations() };
   }
 
   upsertDeadEnds(items: DeadEnd[]): void {

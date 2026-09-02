@@ -39,6 +39,24 @@ interface PlannerInput {
    * Absent or "en" leaves the prompt exactly as it was before this existed.
    */
   language?: string;
+  /**
+   * A quick-demo card is running: describe each GUI adaptation out loud.
+   * Absent or false leaves the prompt exactly as it was before this existed.
+   *
+   * A sibling of `workflow` rather than a field on it, like `language`: the
+   * workflow object is serialized into the user message the model reads, and
+   * this is an instruction about the prompt, not a fact about the booking.
+   */
+  narrateAdaptations?: boolean;
+  /**
+   * Write for the ear: one sentence, only what the screen does not show, and an
+   * empty string when there is nothing worth saying. Voice-mode demo sessions
+   * only — absent or false leaves the prompt exactly as it was.
+   *
+   * Mutually exclusive with `narrateAdaptations`, which asks for the opposite;
+   * `buildSystemPrompt` resolves that rather than trusting the caller.
+   */
+  spokenBrevity?: boolean;
 }
 
 interface PlannerAction {
@@ -285,7 +303,8 @@ const CORE_SYSTEM_PROMPT =
   "Context:\n" +
   "- Use history and workflow together to infer intent, prioritizing unresolved recent preferences.\n" +
   "- Treat workflow.currentStage, available tools, and proceedRule as hard boundaries.\n" +
-  "- Treat workflow.currentView as the authoritative screen state for the current stage. History entries for the current stage carry only tool annotations, not screen data.\n" +
+  "- Treat workflow.currentView as the authoritative screen state for the current stage. History entries for the current stage carry only tool annotations, not screen data. Authoritative about the screen is not the same as complete about the stage.\n" +
+  "- currentView.items is what this stage holds. currentView.visibleItems is only what the screen is showing of it, and currentView.hiddenByFilterCount, when present, is how many selectable options an active filter is holding back. Judge what the stage still offers from items; judge what the user can click right now from visibleItems.\n" +
   "- Use workflow.state for earlier-stage context. Do not assume later-stage information.\n" +
   "\n" +
   "Guardrails:\n" +
@@ -297,7 +316,7 @@ const CORE_SYSTEM_PROMPT =
 
 const CP_MEMORY_PROMPT_RULES =
   "Workflow context (CP-memory-specific fields):\n" +
-  "- workflow.priorStageAlternativeCounts (when present): earlier-stage alternative counts in nearest-first order after applying preference-linked filters. Use them to judge flexibility when suggesting backtracking.\n" +
+  "- workflow.priorStageAlternativeCounts (when present): earlier-stage alternative counts in nearest-first order, taken over each stage's full inventory with its hard-preference filters re-applied and dead-ended or already-chosen items removed. They are not what that stage's screen was showing when you left it — when a count is larger than the screen was, the count is right. Use them to judge flexibility when suggesting backtracking.\n" +
   "- workflow.backtrackContinuation (when present): the previous prev action declared that backtracking is still in progress. Its targetStage field names the destination stage.\n" +
   "\n" +
   "Memory (top-level 'memory' field):\n" +
@@ -308,15 +327,15 @@ const CP_MEMORY_PROMPT_RULES =
   "\n" +
   "Preference handling:\n" +
   "- Apply hard preferences first, then soft preferences.\n" +
-  "  1. Hard pass: identify all items satisfying every hard preference. Surface this full set — never narrow it by a soft preference.\n" +
+  "  1. Hard pass: identify all items satisfying every hard preference. Surface this full set — never narrow it by a soft preference. Surfacing means leaving every one of them visible and selectable; it does not mean marking them.\n" +
   "  2. Soft pass: among the hard-valid set, suggest the soft-preferred item but keep the full hard-valid set available so the user can choose an alternative.\n" +
-  "  3. If exactly one hard-valid item exists, suggest it. If zero exist, see dead-end rules below.\n" +
+  "  3. If exactly one hard-valid item exists, suggest it. Count hard-valid items over currentView.items, not over visibleItems — a filter changes what you can see, not what exists. If zero exist, see dead-end rules below.\n" +
   "- If hard-valid items exist but none satisfy the soft preference, suggest the closest match — do not suggest backtracking for a soft failure alone.\n" +
   "\n" +
   "Dead-end handling:\n" +
   "- workflow.currentView.deadEndItemIds (when present): item IDs that are dead-ended downstream. Never select or recommend these.\n" +
-  "- Apply preferences after excluding dead-ended items. If exactly one viable option remains, suggest it and ask the user to confirm. This is not a conflict, so do not emit conflictMemory. If multiple remain, ask the user to choose.\n" +
-  "- If no visible option satisfies a hard preference, emit conflictMemory, briefly explain why, and suggest going back to the nearest earlier stage that has remaining alternatives (based on priorStageAlternativeCounts). Name that specific stage only — do not present multiple earlier stages as options.\n" +
+  "- Apply preferences after excluding dead-ended items, over currentView.items rather than visibleItems — deadEndItemIds can name an item a filter is currently hiding. If exactly one option is viable in that set, suggest it and ask the user to confirm. This is not a conflict, so do not emit conflictMemory. If multiple remain, ask the user to choose. One option left on screen is not one option left: when currentView.hiddenByFilterCount is present, name the requirement doing the hiding before you treat the choice as forced.\n" +
+  "- If no option at this stage satisfies a hard preference — judged against the stage inventory, not against what a filter has left on screen — emit conflictMemory, briefly explain why, and suggest going back to the nearest earlier stage that has remaining alternatives (based on priorStageAlternativeCounts). Name that specific stage only — do not present multiple earlier stages as options.\n" +
   "- If prev is unavailable this turn but priorStageAlternativeCounts shows an earlier stage with count > 0, still mention going back as an option the user can request.\n" +
   "- If EVERY entry in priorStageAlternativeCounts is 0, do not conclude the user is out of options and do not offer relaxing a hard requirement as the only path. Say plainly which requirement is blocking, and ask which one they would like to revisit.\n" +
   "\n" +
@@ -332,28 +351,33 @@ const CP_MEMORY_PROMPT_RULES =
   "  In either case, do not re-explain or re-ask — act.\n" +
   "  For condition (b) intermediate hops, use a single short distinct phrase indicating progress toward the destination. Never repeat the same wording across consecutive hops.\n" +
   "- When initiating a multi-stage backtrack, attach backtrackContinuation with targetStage set to the nearest earlier stage with a positive count in priorStageAlternativeCounts. Intermediate stages will auto-continue via condition (b).\n" +
-  "- When currentStage === backtrackContinuation.targetStage, you have arrived — stop calling prev and resume normal dead-end and preference evaluation.\n" +
+  "- When currentStage === backtrackContinuation.targetStage, you have arrived — stop calling prev, and before evaluating anything, re-decide any filter still applied at this stage instead of inheriting it: it is the filter that produced the choice which failed downstream. Then resume normal dead-end and preference evaluation.\n" +
   "- If a hard requirement cannot be verified from the current GUI state and no tool can surface it, treat as a dead end.";
 
 const CP_MEMORY_DISABLED_PROMPT_RULES =
   "Backtracking:\n" +
   "- If the user wants to go back and prev is available, call prev immediately.\n" +
-  "- If no visible option satisfies the user's stated requirement and prev is available, briefly explain why and ask whether they'd like to go back.";
+  "- If no option in currentView.items satisfies the user's stated requirement and prev is available, briefly explain why and ask whether they'd like to go back. A requirement that only the hidden options fail is not a reason to leave the stage — say what is hidden instead.\n" +
+  "- When the most recent history entries name a stage later in the fixed order than workflow.currentStage, you have come back from a dead end. A filter still applied here produced the choice that failed, so do not inherit it: unless a requirement the user stated and has not withdrawn still needs it, treat it as lifted, and never describe what it leaves on screen as everything this stage has.";
 
 const GUI_ADAPTATION_ENABLED_RULES =
   "GUI adaptation rules:\n" +
   "\n" +
   "Turn sequencing for GUI tools:\n" +
-  "- If the provided tools are limited to GUI adaptation tools, continue applying pending preference-based GUI actions before responding.\n" +
+  "- If the provided tools are limited to GUI adaptation tools, continue applying pending preference-based GUI actions before responding — unless the only remaining action would be a highlight the Highlight economy rules below forbid, in which case respond with the narrowing question instead.\n" +
   "- After a GUI action, do not restate or reference what the previous turn already conveyed (e.g., avoid 'already highlighted', 'I've filtered'). If no further GUI action is needed, ask a brief confirmation question.\n" +
   "\n" +
   "assistantMessage style:\n" +
-  "- Treat assistantMessage as a brief spoken cue. Let the GUI carry visible detail — do not restate what is already on screen unless the user explicitly asked to hear it.\n" +
+  "- Treat assistantMessage as a brief spoken cue. Let the GUI carry visible detail — do not restate what is already on screen unless the user explicitly asked to hear it. Saying that the whole visible set satisfies a preference is a judgement about the set, not a restatement of it, and is allowed; naming the items one by one is not.\n" +
   "- Do not mention item metadata in assistantMessage if it is not already visible in the UI; surface it through a GUI tool first.\n" +
   "\n" +
   "How tools stack:\n" +
   "- All GUI tools accumulate — filter + sort means filtered first, then sorted within the remaining set.\n" +
   "- When a preference changes (e.g., hard→soft), use clearModification to reset before applying new tools, so hidden items are restored.\n" +
+  "\n" +
+  "Filtered stages:\n" +
+  "- currentView.hiddenByFilterCount, when present, is how many selectable options an active filter is holding back. currentView.items is the stage inventory; currentView.visibleItems is what the filter left of it. Hidden is not gone.\n" +
+  "- Whenever hiddenByFilterCount is present, say it: how many options are hidden, and which requirement is hiding them. The user cannot see why the screen is short, and what they told you is a rough account of what they actually want — saying this is how they find their way back to the rest. It is not item metadata you must surface with a tool first; the count and the requirement are things you already know.\n" +
   "\n" +
   "Tool selection by preference strength:\n" +
   "Step 1 — visibility gate (MANDATORY, always first): for each active criterion, does its field appear in visibleItems[].value?\n" +
@@ -362,26 +386,42 @@ const GUI_ADAPTATION_ENABLED_RULES =
   "Step 2 — if the field IS visible, apply by strength:\n" +
   "  Hard (user can accept ONLY matching options):\n" +
   "  - filter to hide non-matching items.\n" +
-  "  - If filter is not available, highlight ALL matching items instead — do not narrow the set by a soft preference.\n" +
+  "  - If filter is not available, do not substitute a whole-set highlight. Every matching item is already visible and selectable; name the constraint in assistantMessage, and mark only when the Highlight economy rules below allow it — never narrowing the set by a soft preference.\n" +
   "  - If no option matches, do not filter — respond explaining why.\n" +
   "  Soft (user prefers but would accept alternatives):\n" +
   "  - Ordinal field (rating, time, distance, price …): sort.\n" +
   "  - Categorical field (genre, format, type …): highlight.\n" +
-  "  - When highlighting for a soft preference, include all user-stated acceptable options — not just the top pick. Suggest the preferred one in assistantMessage.\n" +
-  "  - If a hard preference already highlighted multiple items, do not re-highlight a smaller subset. Instead, mention the soft-preferred item in assistantMessage.\n" +
-  "  - Exception: when visible items are numerous, filter is acceptable.\n" +
+  "  - When highlighting for a soft preference, do not mark only your top pick. If all the user-stated acceptable options pass the Highlight economy tests below, mark them and suggest the preferred one in assistantMessage. If they do not, mark none of them: name the preferred one and ask one question that narrows the set.\n" +
+  "  - If a hard preference already highlighted multiple items, do not re-highlight a smaller subset on your own initiative; mention the soft-preferred item in assistantMessage instead. A narrower highlight is correct when the user's own answer selected it.\n" +
+  "  - Exception: when more choices match than the Highlight economy ceiling allows and filter is available at this stage, filter is acceptable — but only on a criterion the user actually stated, and say in assistantMessage what was hidden so they can ask for it back.\n" +
+  "\n" +
+  "Highlight economy:\n" +
+  "- A highlight is read by contrast: it says these and not those. Its value is exactly what it leaves unmarked, and falls to nothing when nothing is left unmarked. Mark the fewest choices that answer the user.\n" +
+  "- Count choices, not item ids. A choice is one complete answer to what this stage asks — one thing the user could accept and be finished here. At the movie, theater, date and time stages each item is one choice, so choices and ids are the same number. At the seat stage a choice is a whole seating arrangement for the party the user described: if they need four together, D1-D4 is one choice and E5-E8 is a second — two choices, eight ids. One unbroken run of adjacent seats counts once however long it is; if the user needs a single seat, every free seat is its own choice. Party size comes from what the user said, never from the seat layout.\n" +
+  "- Mark a choice whole. Marking part of a seat block is not a smaller highlight, it is a wrong one.\n" +
+  "- Before every highlight call, BOTH tests must pass:\n" +
+  "  - Contrast test: at least one option the user could still pick must be left unmarked. If marking would cover every option still available on this screen, the mark distinguishes nothing — do not call highlight. Say in assistantMessage that they all qualify, and ask one question that narrows them.\n" +
+  "  - Ceiling test: mark at most 3 choices. One or two is the normal case; past three the marks stop narrowing anything.\n" +
+  "- Exemption: a highlight of exactly one choice is a pointer, not a filter gesture. It passes both tests automatically and stays correct even when it is the only choice on screen.\n" +
+  "- The ceiling is a gate on acting, not a quota to trim to. Mark the qualifying choices only if ALL of them fit inside it. If they do not, you may not pick which of them to mark — that is an unstated tie-breaker, which is forbidden. Narrowing comes from the user. In order:\n" +
+  "  - filter, if it is available this turn and the user stated the criterion.\n" +
+  "  - sort, if the field is ordinal and sort is available this turn.\n" +
+  "  - otherwise do not highlight. Say what the qualifying options have in common and ask one question whose answer narrows them, then mark what that answer selects. Not every stage offers filter or sort; when this turn's tool list lacks them, this branch is the only one.\n" +
+  "- The same holds when the contrast test fails: never rescue a highlight by marking an arbitrary subset. Either the user's own answer selects what gets marked, or nothing is marked.\n" +
+  "- Never call highlight with an empty item list. Deciding not to mark anything is a respond turn, or a clearModification turn if stale marks need removing.\n" +
+  "- workflow.currentView.highlightedIds is what is already marked on screen. If it would fail either test, or no longer reflects the active preferences, call clearModification with type \"highlight\" rather than leaving stale marks standing.\n" +
   "\n" +
   "augment notes:\n" +
   "- Surface only the missing criterion or criteria needed for the user's current request or the immediate next GUI action. Do not bundle extra helpful context or tie-breakers unless the user asked for them or they are required to act safely.\n" +
   "- augment replaces visibleItems display text only — raw item data is unchanged, so filter (which operates on raw fields) is independent of augment.\n" +
   "- filter operates only on native item fields present in items[].\n" +
-  "- If a criterion is not visible and remains relevant after another GUI action, augment is still required on the next turn before asking a tie-break question.\n" +
+  "- If a criterion is not visible and remains relevant after another GUI action, augment is still required on the next turn before asking a tie-break question — when augment is available at this stage. When it is not, ask the question in plain language instead.\n" +
   "\n" +
   "Pre-select confirmation:\n" +
-  "- When preference evaluation narrows to a single viable option, highlight it first. The confirmation question belongs in the follow-up respond turn, not in the highlight assistantMessage.\n" +
+  "- When preference evaluation narrows to a single viable option, highlight it first — a single-choice highlight is exempt from the Highlight economy tests, including when it is the only option on screen. The confirmation question belongs in the follow-up respond turn, not in the highlight assistantMessage.\n" +
   "\n" +
   "Guardrails:\n" +
-  "- Do not sort, filter, or augment without a user criterion or stage-relevant preference. Without one, prefer respond.";
+  "- Do not highlight, sort, filter, or augment without a user criterion or stage-relevant preference. Without one, prefer respond.";
 
 const GUI_ADAPTATION_DISABLED_RULES =
   "Response rules:\n" +
@@ -397,7 +437,7 @@ const OPENAI_TOOL_CALLING_RULES =
   '- If no GUI tool should be used now, call "respond".\n' +
   '- Fill "reason" FIRST: assess user intent and current state, then justify the chosen action. Then write "assistantMessage" consistent with that reasoning.\n' +
   '- If calling filter or highlight to apply current user preferences, include "preferenceIds" with the existing memory IDs that justify that action. Omit preferenceIds when the action is not preference-driven.\n' +
-  '- For highlight, also include "coverage": use "full" when the highlighted items are every item satisfying the relevant preference(s), and "partial" when they are only a suggested subset. Coverage describes the preference match, not the stage inventory.\n' +
+  '- For highlight, also include "coverage": use "full" when the highlighted items are every item satisfying the relevant preference(s), and "partial" when they are only a suggested subset. Coverage describes the preference match, not the stage inventory. Before writing "full", check the Highlight economy ceiling: a "full" highlight over more choices than the ceiling allows narrows nothing, so do not make the call at all. Relabelling it "partial" is not the way out.\n' +
   "- For GUI tool calls, assistantMessage should briefly state what criterion or preference is being applied, not just that an action is happening. Do not ask for permission.\n" +
   "- Base assistantMessage only on visible information and known context. Do not invent facts or claim later-stage knowledge.\n" +
   "- Never include internal item IDs in assistantMessage; use human-readable labels.\n" +
@@ -443,6 +483,79 @@ const LANGUAGE_PROMPTS: Record<string, string> = {
     "- Tool names and every tool parameter value stay exactly as the schema and the screen define them. They are identifiers, not prose.",
 };
 
+/**
+ * Appended for a scanned quick-demo card, and nothing else.
+ *
+ * The GUI adaptation rules tell the planner to "treat assistantMessage as a
+ * brief spoken cue" and "not restate what is already on screen". That is right
+ * for a booking someone is ten minutes into: the screen is in front of them and
+ * narration is noise.
+ *
+ * It is exactly wrong for a quick card. There the visitor has ninety seconds,
+ * has never seen this system, and the adaptation IS the demonstration — so a
+ * cue written to avoid describing the screen leaves them watching a list twitch
+ * with no account of why. Turning the frontend's verbosity gate up does not fix
+ * that; it only says the same stripped sentence louder. The sentence has to be
+ * written differently, which means here.
+ *
+ * Appended as its own section rather than by editing the rules above, so the
+ * study prompt stays byte-identical when this is off. `plannerPrompt.check.ts`
+ * asserts that.
+ */
+const ADAPTATION_NARRATION_RULES =
+  "Narrating the adaptation (demonstration session):\n" +
+  "- This session is a short demonstration of GUI adaptation itself, and the spoken channel is how the visitor knows an adaptation happened. Where this section conflicts with the assistantMessage style rules above, this section wins.\n" +
+  "- Whenever you call a GUI tool, say what you just did to the screen and what made you do it: the operation (hid, sorted, highlighted, added a field), its scale (\"four of the six\", \"everything over fifteen miles\"), and the requirement behind it. Restating a change the visitor can see is the point here, not a fault.\n" +
+  "- One sentence still. Name the CHANGE, never the survivors — no item-by-item recital, because the screen already lists them and reading it out is what the rule above exists to prevent.\n" +
+  "- Everything else is unchanged: the decision framework, tool selection, the highlight economy, and the rule against mentioning metadata you have not surfaced yet.";
+
+/**
+ * Appended for a voice-mode demo session, and nothing else.
+ *
+ * The rules above are written for a channel that can be skimmed. Speech cannot:
+ * the user hears it at the speed it is spoken, in the order it is spoken,
+ * while looking at the screen rather than at the transcript. The frontend gate
+ * (`apps/frontend/src/voice`) has been cutting these sentences down after the
+ * fact with regexes, which is the wrong layer — it produces fragments, it
+ * cannot read Korean it has no corpus for, and it never had the one thing the
+ * planner has, which is knowing what the sentence was FOR.
+ *
+ * So this asks for the short sentence to be written rather than cut. The gate
+ * stays as a backstop for the things a prompt genuinely cannot know: what the
+ * user actually heard, and how quiet they asked for it to be.
+ *
+ * Not appended for a study session — `plannerPrompt.check.ts` pins that — and
+ * not for a quick card, whose whole point is to narrate MORE.
+ *
+ * KNOWN AND ACCEPTED: this is not purely a wording change, despite the rule
+ * below saying so in as many words. Replaying 38 real turns with the flag on
+ * moved the chosen tool 3 times; the same turns with the same configuration on
+ * both sides moved it 0 times (`spokenBrevity.regress.ts --control`), so the
+ * excess is the flag's doing and not planner variance. Both inspected cases
+ * were defensible — one noticed a dead end the baseline filtered into — but
+ * they are decisions, not sentences.
+ *
+ * That ~8% was accepted on 2026-09-01 for the demo path, which is the only path
+ * this can reach. Zeroing it would mean choosing the tool in a call that cannot
+ * see this section at all, which is a planner restructure and a separate
+ * decision. Re-measure before a booth deploy:
+ *
+ *   OPENAI_API_KEY=... npm run regress:brevity -- --wide 24
+ *   OPENAI_API_KEY=... npm run regress:brevity -- --wide 24 --control
+ */
+const SPOKEN_BREVITY_RULES =
+  "Writing for the ear (voice session):\n" +
+  "- assistantMessage is spoken aloud and it is the only thing that is. The user is watching the screen, not reading you, and cannot skim past a word.\n" +
+  "- This section governs WORDING ONLY. It never changes which tool you call, and it never converts a question the rules above require into an action taken silently instead — you may not backtrack, select, filter or proceed without the consent those rules ask for, and being brief is never a reason to skip asking. If applying this section would change what you DO rather than what you SAY, you have misread it.\n" +
+  "- Shorter is better at every step: prefer one sentence to two, a clause to a sentence, and nothing at all to a clause.\n" +
+  "- The empty string is for a step on the way to something else: you are about to act again, the user is not being asked for anything, and they just watched the change happen. In that case assistantMessage MUST be empty rather than narrating what they saw.\n" +
+  "- But when your turn ENDS and the next move is the user\u2019s, say something. Silence is never how you hand the turn back: ask the question the rules above call for, with nothing in front of it.\n" +
+  "- Do not attach a question to a GUI action merely to give the sentence something to do. Where the rules above call for a confirmation, tie-break or narrowing question, still ask it — and let the question be the entire message, with nothing in front of it.\n" +
+  "- Never read back what is now on screen, never name the items one by one, and never explain a change whose result the user is looking at.\n" +
+  "- Never drop a question you do need answered in order to be brief, and always speak an error or a failure in full.\n" +
+  "- Never say again, in any wording, something you already said that still stands. A rephrasing of it is a repetition.\n" +
+  "- Where this section conflicts with the assistantMessage style rules or the tool-calling rules, this section wins.";
+
 export function buildLanguageSection(language: string | undefined): string | null {
   if (!language || language === "en") return null;
   return LANGUAGE_PROMPTS[language] ?? null;
@@ -455,16 +568,28 @@ export function buildLanguageSection(language: string | undefined): string | nul
 let cachedSystemPromptKey = "";
 let cachedSystemPrompt = "";
 
-function buildSystemPrompt(
+/**
+ * Exported for `plannerPrompt.check.ts`, which has one claim to defend: that a
+ * study session's prompt is byte-identical with the narration flag off. Same
+ * reason `buildLanguageSection` is exported.
+ */
+export function buildSystemPrompt(
   workflow: PlannerWorkflow,
   stageMeta?: Array<{ stage: string; goal: string; fieldGuide: string }>,
   language?: string,
+  narrateAdaptations?: boolean,
+  spokenBrevity?: boolean,
 ): string {
   const cpMemory = hasCpMemoryContext(workflow);
   const guiAdaptation = workflow.guiAdaptationEnabled !== false;
+  const narrate = narrateAdaptations === true && guiAdaptation;
+  // The two are contradictory by construction — a card wants the adaptation
+  // described, a voice session wants it left to the screen. Resolved here so a
+  // caller that sets both cannot produce a prompt arguing with itself.
+  const brevity = spokenBrevity === true && !narrate;
   // Language belongs in the key: a visitor may switch mid-session, and the
   // cached prompt would otherwise keep the language they started in.
-  const key = `cp:${cpMemory}|gui:${guiAdaptation}|meta:${stageMeta ? stageMeta.length : 0}|lang:${language ?? "en"}`;
+  const key = `cp:${cpMemory}|gui:${guiAdaptation}|meta:${stageMeta ? stageMeta.length : 0}|lang:${language ?? "en"}|narrate:${narrate}|brief:${brevity}`;
 
   if (key === cachedSystemPromptKey && cachedSystemPrompt) {
     return cachedSystemPrompt;
@@ -484,6 +609,16 @@ function buildSystemPrompt(
     sections.push(GUI_ADAPTATION_ENABLED_RULES);
   } else {
     sections.push(GUI_ADAPTATION_DISABLED_RULES);
+  }
+  // Straight after the rules it overrides, and only when there are adaptations
+  // to narrate — with GUI adaptation off there is nothing for it to describe.
+  if (narrate) {
+    sections.push(ADAPTATION_NARRATION_RULES);
+  }
+  // Same placement, same reason: after the style rules it overrides, and before
+  // the language section so "write it in Korean" applies to what it asks for.
+  if (brevity) {
+    sections.push(SPOKEN_BREVITY_RULES);
   }
   const languageSection = buildLanguageSection(language);
   if (languageSection) {
@@ -663,7 +798,7 @@ function toOpenAiTools(
       properties[TOOL_META_COVERAGE_KEY] = {
         type: "string",
         description:
-          'Use "full" when the highlighted items are every item satisfying the linked preference(s); use "partial" when the highlight is only a suggested subset. This describes the preference match only — it says nothing about how many options the stage still has.',
+          'Use "full" when the highlighted items are every item satisfying the linked preference(s); use "partial" when the highlight is only a suggested subset. This describes the preference match only — it says nothing about how many options the stage still has. It is not a completeness badge: if the marked set exceeds the Highlight economy ceiling, do not call highlight at all.',
         enum: ["full", "partial"],
       };
     }
@@ -879,6 +1014,20 @@ const OPENAI_API_URL = "https://api.openai.com/v1/responses";
 const OPENAI_CHAT_COMPLETIONS_API_URL =
   "https://api.openai.com/v1/chat/completions";
 const DEFAULT_OPENAI_TEMPERATURE = 0;
+/**
+ * Sent explicitly on every call, and that is the whole point.
+ *
+ * gpt-5.4 defaulted to `none` when the field was omitted; the GPT-5.6 family
+ * defaults to `medium`. Omitting it while moving the default model would have
+ * silently turned reasoning on for every planner turn -- slower, dearer, and
+ * measurably worse at picking the right tool (replayed against the study's own
+ * traces: 40/46 at medium vs 42/46 at none, with p95 latency 4.5s vs 2.9s).
+ *
+ * It also keeps `temperature` legal: GPT-5.6 rejects the parameter outright
+ * once reasoning is active, and the retry guard below would have quietly
+ * dropped temperature 0 rather than surfacing that.
+ */
+const DEFAULT_OPENAI_REASONING_EFFORT = "none";
 type OpenAiApiMode = "responses" | "chat";
 
 /**
@@ -911,7 +1060,7 @@ function redactApiKeys(text: string): string {
 }
 
 function getOpenAIModel(): string {
-  return process.env.AGENT_OPENAI_MODEL || "gpt-5.4";
+  return process.env.AGENT_OPENAI_MODEL || "gpt-5.6-terra";
 }
 
 function getOpenAIApiMode(): OpenAiApiMode {
@@ -920,6 +1069,10 @@ function getOpenAIApiMode(): OpenAiApiMode {
 
 function resolveOpenAITemperature(): number | undefined {
   return DEFAULT_OPENAI_TEMPERATURE;
+}
+
+function resolveOpenAIReasoningEffort(): string | undefined {
+  return DEFAULT_OPENAI_REASONING_EFFORT;
 }
 
 function isUnsupportedTemperatureError(
@@ -1014,6 +1167,7 @@ export async function planActionWithOpenAI(
   const apiKey = resolveOpenAiApiKey();
   if (!apiKey) return null;
   const temperature = resolveOpenAITemperature();
+  const reasoningEffort = resolveOpenAIReasoningEffort();
   const apiMode = getOpenAIApiMode();
   const cpMemoryEnabled = hasCpMemoryContext(input.workflow);
   const openAiTools = toOpenAiTools(
@@ -1026,7 +1180,13 @@ export async function planActionWithOpenAI(
     workflow: input.workflow,
   };
   const openAiSystemPrompt =
-    buildSystemPrompt(input.workflow, input.stageMeta, input.language) +
+    buildSystemPrompt(
+      input.workflow,
+      input.stageMeta,
+      input.language,
+      input.narrateAdaptations,
+      input.spokenBrevity,
+    ) +
     "\n" +
     OPENAI_TOOL_CALLING_RULES;
   const traceRequestId = createLlmTraceRequestId();
@@ -1069,8 +1229,18 @@ export async function planActionWithOpenAI(
             ? { tools: openAiTools, parallel_tool_calls: false }
             : {}),
         };
+  const withReasoning = reasoningEffort
+    ? {
+        ...baseBody,
+        ...(apiMode === "chat"
+          ? { reasoning_effort: reasoningEffort }
+          : { reasoning: { effort: reasoningEffort } }),
+      }
+    : baseBody;
   const body =
-    typeof temperature === "number" ? { ...baseBody, temperature } : baseBody;
+    typeof temperature === "number"
+      ? { ...withReasoning, temperature }
+      : withReasoning;
   const apiUrl =
     apiMode === "chat" ? OPENAI_CHAT_COMPLETIONS_API_URL : OPENAI_API_URL;
 

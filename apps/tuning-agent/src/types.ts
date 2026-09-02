@@ -65,6 +65,42 @@ export interface PreferenceBinding {
   strength: Preference['strength'];
 }
 
+/**
+ * A preference set the host hands over before the conversation starts, so a
+ * session can open with memory already in it.
+ *
+ * Keyed on `revision`, never on which ids happen to be missing from memory. A
+ * presence-based rule would resurrect anything the visitor retracted: a
+ * `snapshot.state` arrives after most successful tool calls, so a retracted
+ * preference would be re-seeded within a turn of being withdrawn.
+ */
+export interface PreferenceProfilePayload {
+  revision: number;
+  preferences: Preference[];
+}
+
+/** A preference the visitor removed by hand, kept so it can be restored. */
+export interface ForgottenPreference {
+  preference: Preference;
+  /** Case-folded description, so re-wording the same text cannot slip past. */
+  descriptionKey: string;
+  removedAt: string;
+}
+
+/**
+ * A GUI adaptation that just lost the preference justifying it.
+ *
+ * The agent prunes its own filter traces when a preference goes away, but the
+ * booking screen is the host's; without being told, it stays narrowed by a
+ * requirement nobody holds any more. This is the host's instruction to undo
+ * exactly that much and no more.
+ */
+export interface RevokedAdaptation {
+  stage: ConflictStage;
+  filters: FilterExpression[];
+  clearHighlight: boolean;
+}
+
 export interface AlternativeFilterTrace {
   filter: FilterExpression;
   preferenceBindings: PreferenceBinding[];
@@ -103,7 +139,27 @@ export interface SnapshotStatePayload {
   plannerCpMemoryLimit?: number;
   plannerCpEnabled?: boolean;
   guiAdaptationEnabled?: boolean;
+  /**
+   * The host is running a scanned quick-demo card: narrate each GUI adaptation
+   * instead of leaving the screen to speak for itself. Session-fixed, and it
+   * rides the snapshot for the same reason `preferenceProfile` does — the
+   * snapshot is the one lane replayed after a reset, a reconnect and a respawn.
+   */
+  narrateAdaptations?: boolean;
+  /**
+   * Write the spoken sentence short instead of letting the frontend cut it.
+   * Voice-mode demo sessions only; session-fixed and snapshot-borne for the
+   * same reason `narrateAdaptations` is.
+   */
+  spokenBrevity?: boolean;
   stageMeta?: Array<{ stage: string; goal: string; fieldGuide: string }>;
+  /**
+   * Ride-along preference memory. This payload is the only lane the agent
+   * re-requests after a reset, after a relay reconnect and after a respawn, so
+   * seeding here is what makes a preloaded memory survive all three for free.
+   * Absent means "no instruction", never "clear what you have".
+   */
+  preferenceProfile?: PreferenceProfilePayload | null;
 }
 
 export interface StateUpdatedPayload {
@@ -114,6 +170,8 @@ export interface StateUpdatedPayload {
   plannerCpMemoryLimit?: number;
   plannerCpEnabled?: boolean;
   guiAdaptationEnabled?: boolean;
+  narrateAdaptations?: boolean;
+  spokenBrevity?: boolean;
 }
 
 export interface PerceivedContext {
@@ -124,6 +182,8 @@ export interface PerceivedContext {
   toolSchema: ToolSchemaItem[];
   plannerCpMemoryLimit: number;
   guiAdaptationEnabled: boolean;
+  narrateAdaptations: boolean;
+  spokenBrevity: boolean;
   lastUserMessage: UserMessagePayload | null;
   lastUpdatedAt: string;
   stageMeta?: Array<{ stage: string; goal: string; fieldGuide: string }>;
@@ -226,4 +286,12 @@ export interface AgentMemorySnapshot {
   pendingConflict: PendingConflictSnapshot | null;
   backtrackContinuation: BacktrackContinuation | null;
   stageBindings: StageBinding[];
+  /** Removed by hand this session, and restorable from the panel. */
+  forgottenPreferences: Preference[];
+  /**
+   * Only ever non-empty on the publish that immediately follows a deliberate
+   * removal. It is an instruction to the host, not state: the host un-applies
+   * these and the next snapshot carries none.
+   */
+  revokedAdaptations: RevokedAdaptation[];
 }

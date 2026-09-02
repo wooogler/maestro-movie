@@ -4,6 +4,11 @@ import { AgentMemory } from './core/memory';
 import { applyStateUpdated, applyUserMessage, fromSnapshot } from './core/perception';
 import { planNextAction } from './core/planner';
 import {
+  buildViewFingerprint,
+  createTurnRepeatGuard,
+  MAX_ACTIONS_PER_TURN,
+} from './core/repeatGuard';
+import {
   getPlannerSystemPrompt,
   subscribeLlmTrace as subscribePlannerLlmTrace,
 } from './llm/llmPlanner';
@@ -29,16 +34,21 @@ import { RelayClient } from './runtime/relayClient';
 import { createStudyLlmTraceLogWriterFromEnv } from './runtime/studyLlmTraceLog';
 import { createStudyAgentRuntimeLogWriterFromEnv } from './runtime/studyAgentRuntimeLog';
 import { AgentMonitorServer } from './monitor/server';
+import { CONFLICT_STAGES } from './types';
 import type {
   BacktrackContinuation,
   ConflictMemory,
   ConflictScope,
+  ConflictStage,
   AttemptedBranch,
   FilterExpression,
   PlanDecision,
   PerceivedContext,
   AgentMemorySnapshot,
+  Preference,
+  PreferenceProfilePayload,
   RelayEnvelope,
+  RevokedAdaptation,
   SnapshotStatePayload,
   StateUpdatedPayload,
   UserMessagePayload,
@@ -98,6 +108,9 @@ function buildAttemptedBranchForBacktrack(
 const relayUrl = process.env.AGENT_RELAY_URL || 'ws://localhost:3000/agent/ws';
 const sessionId = process.env.AGENT_SESSION_ID || 'default';
 const agentName = process.env.AGENT_NAME || 'tuning-agent';
+// Minted per session by the backend that spawns this process. Without it the
+// relay refuses the agent role outright — see RelayClientOptions.agentToken.
+const agentToken = process.env.AGENT_RELAY_TOKEN || '';
 const studyId = process.env.AGENT_STUDY_ID || 'pilot-01';
 const participantId = process.env.AGENT_PARTICIPANT_ID || 'P01';
 const studyMode = process.env.AGENT_STUDY_MODE || 'basic-tuning-voice-off';
@@ -121,7 +134,13 @@ const monitorEnabled = isDemoMode
   ? false
   : parseBooleanEnv(process.env.AGENT_MONITOR_ENABLED) ?? !isProduction;
 const memory = new AgentMemory();
-const relay = new RelayClient({ relayUrl, sessionId, agentName, requestTimeoutMs: 12000 });
+const relay = new RelayClient({
+  relayUrl,
+  sessionId,
+  agentToken,
+  agentName,
+  requestTimeoutMs: 12000,
+});
 const studyLlmTraceLog = createStudyLlmTraceLogWriterFromEnv();
 const studyAgentRuntimeLog = createStudyAgentRuntimeLogWriterFromEnv();
 const monitor = new AgentMonitorServer({
@@ -204,6 +223,16 @@ let planningInFlight = false;
 let deferredReplanRequested = false;
 let deferredReplanTrigger: string | null = null;
 let userTurnAwaitingStateUpdate = false;
+/**
+ * Set when a hand removal revoked something on screen, so the replan waits for
+ * the host to actually un-apply it.
+ *
+ * Replanning inside the removal handler would plan against the screen the
+ * visitor just un-filtered, and the corrected `state.updated` that follows
+ * carries no user turn and no stage change — which the handler below drops.
+ */
+let userEditAwaitingStateUpdate = false;
+let userEditReplanTimer: ReturnType<typeof setTimeout> | null = null;
 let userPreferenceExtractionInFlight: Promise<void> | null = null;
 let userConversationStarted = false;
 let fatalErrorMessage: string | null = null;
@@ -223,6 +252,29 @@ interface PerceptionWaiter {
 }
 
 const perceptionWaiters = new Set<PerceptionWaiter>();
+
+/**
+ * Everything the planner has already done since the last user message. A turn
+ * fans out into several planner calls (see repeatGuard.ts), and nothing else in
+ * this loop remembers across them — `lastActionFingerprint` only covers a 700ms
+ * window, which five LLM round-trips comfortably outlast.
+ */
+const turnRepeatGuard = createTurnRepeatGuard();
+
+/**
+ * Opens a new turn. Called from every trigger that means the ledger no longer
+ * describes what the agent is answering: a user message, a stage change, and a
+ * hand edit to memory (each of which changes the screen or the goal).
+ */
+function resetTurnRepeatGuard(reason: string): void {
+  // Only worth an event when there was actually a turn to close; the common
+  // case is a fresh guard being reset again by the next trigger in the chain.
+  const hadTurn = turnRepeatGuard.executedCount() > 0 || turnRepeatGuard.isSettled();
+  turnRepeatGuard.reset(reason);
+  if (hadTurn) {
+    monitor.pushEvent('planner.turn_reset', { reason });
+  }
+}
 
 const RETRY_DELAY_MS = 1200;
 const DEFAULT_CP_MEMORY_LIMIT = Math.max(
@@ -275,10 +327,15 @@ function sendAgentStatus(
 
 let lastPublishedMemoryFingerprint = '';
 
-function buildMemorySnapshot(reason: string): AgentMemorySnapshot {
+function buildMemorySnapshot(
+  reason: string,
+  revokedAdaptations: RevokedAdaptation[] = []
+): AgentMemorySnapshot {
   return {
     updatedAt: new Date().toISOString(),
     reason,
+    forgottenPreferences: memory.getForgottenPreferences(),
+    revokedAdaptations,
     stage: memory.getContext()?.stage ?? null,
     preferences: memory.getPreferences(),
     deadEnds: memory.getDeadEnds(),
@@ -307,10 +364,13 @@ function buildMemorySnapshot(reason: string): AgentMemorySnapshot {
  * Content-deduped, so the call sites below can be liberal: publishing on every
  * planner cycle costs nothing when nothing changed.
  */
-function syncMonitorMemoryState(reason = 'memory-changed'): void {
+function syncMonitorMemoryState(
+  reason = 'memory-changed',
+  revokedAdaptations: RevokedAdaptation[] = []
+): void {
   monitor.updateMemory(memory.getPreferences(), memory.getDeadEnds());
 
-  const snapshot = buildMemorySnapshot(reason);
+  const snapshot = buildMemorySnapshot(reason, revokedAdaptations);
   const { updatedAt: _updatedAt, reason: _reason, ...comparable } = snapshot;
   const fingerprint = JSON.stringify(comparable);
   if (fingerprint === lastPublishedMemoryFingerprint) return;
@@ -321,6 +381,20 @@ function syncMonitorMemoryState(reason = 'memory-changed'): void {
   } catch {
     // Host disconnections should not fail the planner loop.
   }
+}
+
+/**
+ * Publishes memory even when nothing the fingerprint covers has moved.
+ *
+ * A removal the store had already rejected — the visitor clicking twice, or a
+ * duplicate envelope — leaves the comparable snapshot byte-identical, and the
+ * content dedupe above would withhold the publish. The panel is waiting on that
+ * echo to clear its pending state, so it would sit spinning on a removal that
+ * had in fact already happened.
+ */
+function publishMemoryNow(reason: string, revokedAdaptations: RevokedAdaptation[] = []): void {
+  lastPublishedMemoryFingerprint = '';
+  syncMonitorMemoryState(reason, revokedAdaptations);
 }
 
 function buildPendingBacktrackConflict(
@@ -366,6 +440,59 @@ function setPendingBacktrackConflict(
     ...(details ?? {}),
   });
   syncMonitorMemoryState(`pending-conflict:${reason}`);
+}
+
+const USER_EDIT_REPLAN_FALLBACK_MS = 2000;
+
+function clearUserEditReplanTimer(): void {
+  if (userEditReplanTimer === null) return;
+  clearTimeout(userEditReplanTimer);
+  userEditReplanTimer = null;
+}
+
+/**
+ * Waits for the host to un-apply what the removal revoked, then replans.
+ *
+ * The fallback timer is not belt-and-braces: the host prunes only the filters
+ * it can match, so a revocation naming a filter that is no longer on the spec
+ * produces no state change and therefore no `state.updated` at all. Without the
+ * timer the agent would sit holding a replan that never fires.
+ */
+function awaitHostUnapplyThenReplan(reason: string): void {
+  userEditAwaitingStateUpdate = true;
+  clearUserEditReplanTimer();
+  userEditReplanTimer = setTimeout(() => {
+    userEditReplanTimer = null;
+    if (!userEditAwaitingStateUpdate) return;
+    userEditAwaitingStateUpdate = false;
+    monitor.pushEvent('planner.user_edit_replan_fallback', { reason });
+    void maybePlanAndExecute(`${reason}:fallback`);
+  }, USER_EDIT_REPLAN_FALLBACK_MS);
+}
+
+/**
+ * Drops navigation state that pointed at a preference which no longer exists.
+ *
+ * These two live in module state rather than in the store, so `setPreferences`
+ * cannot reach them — a conflict banner naming a removed preference would
+ * otherwise stay on the rail after the chip it refers to is gone.
+ */
+function prunePreferenceReferences(preferenceId: string): void {
+  if (pendingBacktrackConflict) {
+    const remaining = pendingBacktrackConflict.preferenceIds.filter((id) => id !== preferenceId);
+    if (remaining.length === 0) {
+      setPendingBacktrackConflict(null, 'preference-removed', { preferenceId });
+    } else if (remaining.length !== pendingBacktrackConflict.preferenceIds.length) {
+      setPendingBacktrackConflict(
+        { ...pendingBacktrackConflict, preferenceIds: remaining },
+        'preference-removed',
+        { preferenceId }
+      );
+    }
+  }
+  if (activeBacktrackContinuation && !pendingBacktrackConflict) {
+    setActiveBacktrackContinuation(null, 'preference-removed', { preferenceId });
+  }
 }
 
 function setActiveBacktrackContinuation(
@@ -769,8 +896,53 @@ function toSnapshotPayload(value: unknown): SnapshotStatePayload {
       typeof payload.plannerCpEnabled === 'boolean' ? payload.plannerCpEnabled : undefined,
     guiAdaptationEnabled:
       typeof payload.guiAdaptationEnabled === 'boolean' ? payload.guiAdaptationEnabled : undefined,
+    narrateAdaptations:
+      typeof payload.narrateAdaptations === 'boolean' ? payload.narrateAdaptations : undefined,
+    spokenBrevity:
+      typeof payload.spokenBrevity === 'boolean' ? payload.spokenBrevity : undefined,
     stageMeta: parseStageMeta(payload.stageMeta),
+    preferenceProfile: parsePreferenceProfile(payload.preferenceProfile),
   };
+}
+
+/**
+ * Coerces a host-supplied preference profile, refusing anything the store would
+ * otherwise swallow without a word.
+ *
+ * An entry with no recognised stage is dropped rather than passed on: an empty
+ * `relevantStages` does not scope a preference to nothing, it WIDENS it to all
+ * six stages, so a typo would silently turn a seat requirement into one the
+ * planner applies while picking the movie.
+ */
+function parsePreferenceProfile(value: unknown): PreferenceProfilePayload | null {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+  const record = value as Record<string, unknown>;
+  const revision =
+    typeof record.revision === 'number' && Number.isFinite(record.revision)
+      ? Math.floor(record.revision)
+      : 0;
+  if (revision <= 0) return null;
+
+  const preferences: Preference[] = [];
+  for (const entry of Array.isArray(record.preferences) ? record.preferences : []) {
+    if (!entry || typeof entry !== 'object' || Array.isArray(entry)) continue;
+    const item = entry as Record<string, unknown>;
+    const id = typeof item.id === 'string' ? item.id.trim() : '';
+    const description = typeof item.description === 'string' ? item.description.trim() : '';
+    if (!id || !description) continue;
+    const relevantStages = (Array.isArray(item.relevantStages) ? item.relevantStages : []).filter(
+      (stage): stage is ConflictStage =>
+        typeof stage === 'string' && (CONFLICT_STAGES as readonly string[]).includes(stage)
+    );
+    if (relevantStages.length === 0) continue;
+    preferences.push({
+      id,
+      description,
+      strength: item.strength === 'soft' ? 'soft' : 'hard',
+      relevantStages,
+    });
+  }
+  return { revision, preferences };
 }
 
 function toStateUpdatedPayload(value: unknown): StateUpdatedPayload {
@@ -785,6 +957,10 @@ function toStateUpdatedPayload(value: unknown): StateUpdatedPayload {
       typeof payload.plannerCpEnabled === 'boolean' ? payload.plannerCpEnabled : undefined,
     guiAdaptationEnabled:
       typeof payload.guiAdaptationEnabled === 'boolean' ? payload.guiAdaptationEnabled : undefined,
+    narrateAdaptations:
+      typeof payload.narrateAdaptations === 'boolean' ? payload.narrateAdaptations : undefined,
+    spokenBrevity:
+      typeof payload.spokenBrevity === 'boolean' ? payload.spokenBrevity : undefined,
   };
 }
 
@@ -1176,6 +1352,21 @@ async function maybePlanAndExecute(trigger: string): Promise<void> {
 
   const context = memory.getContext();
   if (!context) return;
+
+  /*
+    The turn was settled by a repeat suppression or the per-turn budget. Every
+    trigger that can still arrive for it — the resync snapshot, a deferred
+    replan queued before the suppression — would plan against the same screen
+    and reach the same conclusion. Only a reset (user message, stage change,
+    hand edit, session reset) opens the next turn.
+  */
+  if (turnRepeatGuard.isSettled()) {
+    monitor.pushEvent('planner.turn_settled_skip', {
+      trigger,
+      stage: context.stage ?? null,
+    });
+    return;
+  }
   // NOTE: userConversationStarted gate removed to allow llmPlanner
   // to act proactively from the first stage (e.g. greeting on snapshot).
 
@@ -1293,6 +1484,55 @@ async function maybePlanAndExecute(trigger: string): Promise<void> {
       return;
     }
 
+    /*
+      The per-turn guard. It sits after the 700ms debounce because that one
+      catches a double-send of the same envelope; this one catches a planner
+      that keeps re-deciding the same thing across whole LLM round-trips.
+    */
+    const viewFingerprint = buildViewFingerprint(planningContext.uiSpec);
+    const guardVerdict =
+      action.type === 'tool.call'
+        ? turnRepeatGuard.evaluate({
+            toolName: plannedToolName,
+            params: action.payload.params,
+            viewFingerprint,
+            assistantMessage: decisionExplainText,
+          })
+        : null;
+
+    if (guardVerdict && guardVerdict.kind !== 'execute') {
+      /*
+        A suppressed action may still carry something worth saying — but only if
+        it is not the sentence the visitor already heard this turn. "Applying
+        your 10:00 PM start and 3D requirements", spoken five times, is what
+        this dedupe is for.
+      */
+      if (guardVerdict.speak && decisionExplainText.trim()) {
+        if (readingDelayPromise) await readingDelayPromise;
+        await maybeSendAssistantMessage(planningContext, decisionExplainText, 'respond');
+        turnRepeatGuard.noteSpoken(decisionExplainText);
+      }
+      monitor.pushEvent(
+        guardVerdict.kind === 'repeat' ? 'planner.repeat_suppressed' : 'planner.turn_budget_exhausted',
+        {
+          trigger,
+          stage: planningContext.stage ?? null,
+          signature: guardVerdict.signature,
+          ...(guardVerdict.kind === 'repeat'
+            ? { repeatCount: guardVerdict.repeatCount }
+            : { executedCount: guardVerdict.executedCount, limit: MAX_ACTIONS_PER_TURN }),
+          spoke: guardVerdict.speak && decisionExplainText.trim().length > 0,
+        }
+      );
+      // Settling here is what actually stops the cycle: the deferred replan the
+      // previous action queued would otherwise re-enter with the same view.
+      turnRepeatGuard.settle();
+      deferredReplanRequested = false;
+      deferredReplanTrigger = null;
+      monitor.updateState({ pendingUserMessages: 0 });
+      return;
+    }
+
     if (!isActionSafe(planningContext, action)) {
       memory.addRecord({
         timestamp: new Date().toISOString(),
@@ -1325,11 +1565,41 @@ async function maybePlanAndExecute(trigger: string): Promise<void> {
     lastAgentToolName = toolName || null;
 
     if (action.type !== 'agent.message') {
-      await maybeSendAssistantMessage(
-        planningContext,
-        decisionExplainText || `I will run ${getToolName(action)} next. Reason: ${action.reason}`,
-        toolName || 'respond'
-      );
+      /*
+        The fallback sentence exists so a planner that writes nothing cannot act
+        in total silence with no account of why. Under the spoken-brevity rules
+        writing nothing is a DECISION the prompt explicitly asks for — the
+        screen carries the whole story and there is nothing to ask — so keeping
+        the fallback there would turn every deliberate silence into "I will run
+        filter next."
+
+        Empty text stops at `maybeSendAssistantMessage`'s own guard, before the
+        envelope is built, so no `agent.message` is sent and no speech-barrier
+        credit is issued. That is the one thing the frontend gate cannot do: its
+        silent path has to hand a credit back.
+      */
+      const missingMessageFallback = planningContext.spokenBrevity
+        ? ''
+        : `I will run ${getToolName(action)} next. Reason: ${action.reason}`;
+      const spokenText = decisionExplainText || missingMessageFallback;
+      // Same dedupe as the suppression path, for the actions that DO run: two
+      // different tool calls narrated with one identical sentence are one
+      // sentence, not two.
+      if (spokenText.trim() && turnRepeatGuard.hasSpoken(spokenText)) {
+        monitor.pushEvent('assistant_message.repeat_suppressed', {
+          trigger,
+          text: spokenText.trim(),
+        });
+      } else {
+        await maybeSendAssistantMessage(planningContext, spokenText, toolName || 'respond');
+        turnRepeatGuard.noteSpoken(spokenText);
+      }
+    }
+
+    if (guardVerdict) {
+      // The fingerprint the action ran AGAINST — a later identical signature is
+      // a repeat only if the screen still looks like this.
+      turnRepeatGuard.noteExecuted(guardVerdict.signature, viewFingerprint);
     }
 
     const outcome = await executePlannedAction(relay, action);
@@ -1602,6 +1872,8 @@ function resetRuntimeState(): void {
   deferredReplanRequested = false;
   deferredReplanTrigger = null;
   userTurnAwaitingStateUpdate = false;
+  clearUserEditReplanTimer();
+  userEditAwaitingStateUpdate = false;
   userPreferenceExtractionInFlight = null;
   userConversationStarted = false;
   fatalErrorMessage = null;
@@ -1618,6 +1890,7 @@ function resetRuntimeState(): void {
   lastActionFingerprint = '';
   lastAgentToolName = null;
   lastActionAt = 0;
+  turnRepeatGuard.reset('session-reset');
   // A barrier or reading delay left armed from the previous trial would
   // otherwise leak into the next one — the study resets between trials.
   pendingReadingDelayUntil = 0;
@@ -1678,8 +1951,141 @@ async function handleInbound(envelope: RelayEnvelope): Promise<void> {
       syncUserConversationStarted(next);
       markPerceptionUpdated();
       monitor.updateContext(memory.getContext());
+      // Seeded BEFORE the first planner call, so a preloaded memory is already
+      // in place for the opening plan rather than arriving a turn late. This is
+      // also what re-seeds after a reset: `memory.reset()` clears the applied
+      // revision, so the next snapshot's profile counts as new again.
+      if (snapshot.preferenceProfile) {
+        const { applied } = memory.applyPreferenceProfile(snapshot.preferenceProfile);
+        if (applied) {
+          monitor.pushEvent('memory.profile_applied', {
+            source: 'snapshot',
+            revision: snapshot.preferenceProfile.revision,
+            preferences: memory.getPreferences(),
+          });
+        }
+      }
       syncMonitorMemoryState('state-updated');
       await maybePlanAndExecute('snapshot.state');
+      return;
+    }
+    /*
+      Removing a preference by hand.
+
+      Applied synchronously, before any await, so it lands in the same microtask
+      as the envelope: inbound handling is fire-and-forget on the relay client,
+      and a removal that yielded first could interleave with an extraction
+      writing back the list it captured before the visitor ever clicked.
+    */
+    case 'memory.preference.delete': {
+      const payload = asRecord(envelope.payload);
+      const preferenceId =
+        typeof payload.preferenceId === 'string' ? payload.preferenceId.trim() : '';
+      if (!preferenceId) return;
+
+      const { removed, revoked } = memory.forgetPreference(preferenceId, new Date().toISOString());
+      if (!removed) {
+        // Already gone. Still publish, so a panel waiting on the echo settles.
+        publishMemoryNow('preference-delete-noop');
+        monitor.pushEvent('memory.preference_delete_ignored', { preferenceId });
+        return;
+      }
+
+      prunePreferenceReferences(removed.id);
+      monitor.pushEvent('memory.preference_deleted', {
+        preferenceId: removed.id,
+        description: removed.description,
+        strength: removed.strength,
+        relevantStages: removed.relevantStages,
+        revokedAdaptations: revoked,
+      });
+      publishMemoryNow('preference-deleted', revoked);
+
+      if (revoked.length === 0) {
+        // Nothing on screen is about to change, so there is no host echo to
+        // wait for and the replan can run straight away.
+        resetTurnRepeatGuard('user-edit');
+        await maybePlanAndExecute('memory.preference.delete');
+      } else {
+        awaitHostUnapplyThenReplan('memory.preference.delete');
+      }
+      return;
+    }
+    /*
+      Loading a preference profile mid-session.
+
+      The same payload the snapshot carries, pushed instead of ridden, so the
+      operator can re-arm the demo for the next visitor without walking back to
+      the setup screen. The revision guard still applies, so this is a no-op
+      unless the profile actually changed.
+    */
+    case 'memory.profile.load': {
+      const profile = parsePreferenceProfile(envelope.payload?.preferenceProfile);
+      if (!profile) {
+        monitor.pushEvent('memory.profile_load_rejected', { payload: envelope.payload ?? null });
+        return;
+      }
+      const { applied, revoked } = memory.applyPreferenceProfile(profile);
+      publishMemoryNow(applied ? 'profile-loaded' : 'profile-load-noop', revoked);
+      if (!applied) return;
+      monitor.pushEvent('memory.profile_applied', {
+        source: 'host-push',
+        revision: profile.revision,
+        preferences: memory.getPreferences(),
+        revokedAdaptations: revoked,
+      });
+      // Switching presets REPLACES the previous one's preferences, so a load can
+      // strand a filter exactly the way a removal does. Same treatment: wait for
+      // the host to un-apply before planning against the screen.
+      if (revoked.length === 0) {
+        resetTurnRepeatGuard('user-edit');
+        await maybePlanAndExecute('memory.profile.load');
+      } else {
+        awaitHostUnapplyThenReplan('memory.profile.load');
+      }
+      return;
+    }
+    case 'memory.preference.clear': {
+      const { removed, revoked } = memory.forgetAllPreferences(new Date().toISOString());
+      if (removed.length === 0) {
+        publishMemoryNow('preference-clear-noop');
+        return;
+      }
+      for (const item of removed) prunePreferenceReferences(item.id);
+      monitor.pushEvent('memory.preferences_cleared', {
+        count: removed.length,
+        preferences: removed,
+        revokedAdaptations: revoked,
+      });
+      publishMemoryNow('preferences-cleared', revoked);
+      if (revoked.length === 0) {
+        resetTurnRepeatGuard('user-edit');
+        await maybePlanAndExecute('memory.preference.clear');
+      } else {
+        awaitHostUnapplyThenReplan('memory.preference.clear');
+      }
+      return;
+    }
+    case 'memory.preference.restore': {
+      const payload = asRecord(envelope.payload);
+      const preferenceId =
+        typeof payload.preferenceId === 'string' ? payload.preferenceId.trim() : '';
+      if (!preferenceId) return;
+
+      const restored = memory.restorePreference(preferenceId);
+      publishMemoryNow(restored ? 'preference-restored' : 'preference-restore-noop');
+      if (!restored) {
+        monitor.pushEvent('memory.preference_restore_ignored', { preferenceId });
+        return;
+      }
+      monitor.pushEvent('memory.preference_restored', {
+        preferenceId: restored.id,
+        description: restored.description,
+      });
+      // Nothing to un-apply — a restored preference has to earn its filter back
+      // through the planner, exactly as it did the first time.
+      resetTurnRepeatGuard('user-edit');
+      await maybePlanAndExecute('memory.preference.restore');
       return;
     }
     case 'state.updated': {
@@ -1742,7 +2148,21 @@ async function handleInbound(envelope: RelayEnvelope): Promise<void> {
         return;
       }
 
+      // The host finished un-applying what a hand removal revoked. This is the
+      // first moment the screen agrees with memory, so it is the first moment
+      // worth planning from.
+      if (userEditAwaitingStateUpdate) {
+        userEditAwaitingStateUpdate = false;
+        clearUserEditReplanTimer();
+        resetTurnRepeatGuard('user-edit');
+        await maybePlanAndExecute('state.updated:preference-removed');
+        return;
+      }
+
       if (stageChanged) {
+        // A new stage is a new screen: nothing in the ledger describes it any
+        // more, and a tool that repeats here is repeating against new options.
+        resetTurnRepeatGuard('stage-change');
         const stageChangeOriginTool = lastAgentToolName;
         if (userDrivenSelectionTransition || userDrivenNavigationTransition) {
           lastAgentToolName = null;
@@ -1821,6 +2241,7 @@ async function handleInbound(envelope: RelayEnvelope): Promise<void> {
       if (!userMessage.text.trim()) return;
       userConversationStarted = true;
       lastAgentToolName = null;
+      resetTurnRepeatGuard('user-message');
       if (activeBacktrackContinuation) {
         setActiveBacktrackContinuation(null, 'user-message', {
           stage: current.stage,
@@ -1932,6 +2353,7 @@ async function main(): Promise<void> {
       // The socket is new, so the host's view and ours may have diverged while
       // we were away. Re-establish the session rather than resuming blind.
       sessionReady = false;
+      resetTurnRepeatGuard('relay-reconnected');
       monitor.updateState({ relayConnected: true, sessionReady: false, phase: 'relay-connected' });
       void ensureSessionReady('relay-reconnected').catch((error) => {
         monitor.pushEvent('relay.resync_failed', {

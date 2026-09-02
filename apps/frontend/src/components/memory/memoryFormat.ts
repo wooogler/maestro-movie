@@ -112,10 +112,3 @@ export function describeFilter(filter: AgentStageBinding['filters'][number]): st
     : String(filter.value ?? '');
   return `${filter.field} ${operator} ${value}`;
 }
-
-export function formatUpdatedAt(iso: string): string {
-  if (!iso) return '';
-  const parsed = new Date(iso);
-  if (Number.isNaN(parsed.getTime())) return '';
-  return parsed.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
-}
