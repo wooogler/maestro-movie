@@ -2,6 +2,14 @@ import type { AgentMessage as AgentMessageType } from '../../store/chatStore';
 import type { UISpec } from '../../spec';
 import { renderMessageText } from './renderMessageText';
 import { MessageStageSnapshot } from './MessageStageSnapshot';
+import { VOICE_CATEGORY_LABELS } from '../voice/verbosityFormat';
+
+function voiceNoteTitle(voice: NonNullable<AgentMessageType['voice']>): string {
+  const reason = voice.rule
+    ? `skipped by the “${voice.rule}” rule`
+    : `“${VOICE_CATEGORY_LABELS[voice.category]}” is set to ${voice.mode}`;
+  return `Not read aloud — ${reason}.`;
+}
 
 interface AgentMessageProps {
   message: AgentMessageType;
@@ -37,17 +45,32 @@ export function AgentMessage({
   snapshotInteractionLocked = false,
 }: AgentMessageProps) {
   const actionTag = message.actionTag;
-  const bubbleClass = highlighted
-    ? 'timeline-sync-pulse border border-primary/45 bg-primary/5 text-info-text'
-    : speaking
-    ? 'border border-rose-400/70 bg-rose-500/[0.08] text-info-text'
+  const voice = message.voice;
+  // Voice mode hides some sentences rather than dropping them. Say so, or the
+  // transcript looks like it is showing things the agent never produced.
+  const voiceNote = !voice
+    ? null
+    : !voice.spoken
+    ? { label: 'not spoken', title: voiceNoteTitle(voice) }
+    : voice.spokenText !== undefined && voice.spokenText !== message.text
+    ? { label: 'shortened', title: `Spoken aloud as: “${voice.spokenText}”` }
+    : null;
+  // Speaking is gold, not teal: the gold accent marks a live voice turn, and it has
+  // to stay distinct from the teal timeline-sync highlight above it. The resting
+  // bubble is teal-tinted chrome itself now, so the sync flash has to run deeper
+  // teal than it does — otherwise the flash only reads via its pulse animation.
+  const restingClass = speaking
+    ? 'border border-accent-line/70 bg-accent/[0.10] text-info-text'
     : 'border border-info-border bg-info-bg text-info-text';
+  const bubbleClass = highlighted
+    ? `timeline-sync-pulse ring-2 ring-primary/60 ${restingClass}`
+    : restingClass;
 
   return (
     <div className="flex gap-3 py-4 justify-start">
-      <div className="flex-shrink-0 w-8 h-8 rounded-full bg-blue-500 flex items-center justify-center self-start mt-1">
+      <div className="flex-shrink-0 w-8 h-8 rounded-full bg-primary flex items-center justify-center self-start mt-1">
         <svg
-          className="w-4 h-4 text-white"
+          className="w-4 h-4 text-primary-fg"
           fill="none"
           stroke="currentColor"
           viewBox="0 0 24 24"
@@ -71,6 +94,14 @@ export function AgentMessage({
                 title={actionTag.reason}
               >
                 {actionTag.toolName}
+              </span>
+            ) : null}
+            {voiceNote ? (
+              <span
+                className="text-[10px] uppercase tracking-wide rounded-full px-2 py-0.5 border border-dark-border bg-dark-lighter text-fg-muted"
+                title={voiceNote.title}
+              >
+                {voiceNote.label}
               </span>
             ) : null}
           </div>

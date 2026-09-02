@@ -141,16 +141,16 @@ export function StudyEndPage({
             </div>
           </div>
 
-          {error ? <p className="mt-4 text-sm text-red-300">{error}</p> : null}
+          {error ? <p className="mt-4 text-sm text-danger-text">{error}</p> : null}
 
           {studySession && showPerTrialSurveyButton ? (
             <button
               type="button"
               onClick={handleOpenSurvey}
-              className="mt-8 w-full rounded-xl border-2 border-sky-400 bg-sky-500 px-5 py-4 text-center font-semibold text-white shadow-lg shadow-sky-500/40 transition-all hover:bg-sky-400 hover:shadow-sky-400/50 active:scale-[0.98]"
+              className="mt-8 w-full rounded-xl border-2 border-primary bg-primary px-5 py-4 text-center font-semibold text-primary-fg shadow-lg shadow-primary/40 transition-all hover:bg-primary-hover hover:shadow-primary/50 active:scale-[0.98]"
             >
               <span className="block text-base">Open Survey</span>
-              <span className="mt-1 inline-block rounded-md border border-amber-400 bg-amber-400 px-2 py-0.5 text-lg font-black tracking-wide text-slate-900">
+              <span className="mt-1 inline-block rounded-md border border-accent-line bg-accent px-2 py-0.5 text-lg font-black tracking-wide text-accent-fg">
                 {conditionCode}{setLabel ? ` / ${setLabel}` : ''}
               </span>
             </button>

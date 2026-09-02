@@ -13,13 +13,18 @@ export function UserMessage({
 }: UserMessageProps) {
   const isBack = message.action === 'back';
   const isInput = message.action === 'input';
-  const bubbleClass = highlighted
-    ? 'timeline-sync-pulse border border-primary/45 bg-primary/5 text-fg-strong'
-    : isBack
+  // A typed/spoken turn is gold (language), a GUI click stays teal (the system) —
+  // the two have to read as different kinds of turn side by side in the transcript.
+  const identityClass = isBack
     ? 'border border-dark-border bg-dark-lighter text-fg'
     : isInput
-    ? 'border border-blue-500/70 bg-blue-600 text-white'
+    ? 'border border-accent-line/70 bg-accent text-accent-fg'
     : 'border border-primary/70 bg-primary text-primary-fg';
+  // The sync flash rides on top of the bubble rather than replacing it, so a
+  // turn keeps saying which kind of turn it was while it pulses.
+  const bubbleClass = highlighted
+    ? `timeline-sync-pulse ring-2 ring-primary/60 ${identityClass}`
+    : identityClass;
 
   return (
     <div className="py-4">

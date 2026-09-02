@@ -176,6 +176,41 @@
   margin-bottom: 0;
 }
 
+/*
+  The column count rides on a custom property set on the wrapper, not on an
+  inline grid-template-columns, so a container query can cap it — an inline
+  declaration wins over any stylesheet rule on the same element, narrow
+  container or not, which is also why the property is set one level up.
+*/
+.gui-item-group {
+  container-type: inline-size;
+}
+
+.gui-item-grid {
+  display: grid;
+  gap: 0.5rem;
+  grid-template-columns: repeat(var(--gui-grid-columns, 1), minmax(0, 1fr));
+}
+
+/* Three columns need about 90px each before a time label wraps mid-label. */
+@container (max-width: 300px) {
+  .gui-item-grid {
+    --gui-grid-columns: 2;
+  }
+}
+
+/*
+  Multi-column mode: the grid's gap does the spacing the bottom margin does in a
+  column. The height collapse of an exiting item is kept, so a row that empties
+  completely — the usual shape of a filter, which takes out a contiguous block of
+  showtimes — closes as smoothly as a column does. A row that only half empties
+  holds its cell until the item is dropped.
+*/
+.gui-item-shell-grid {
+  height: 100%;
+  margin-bottom: 0;
+}
+
 .gui-item-enter {
   animation: gui-item-enter 440ms cubic-bezier(0.22, 1, 0.36, 1);
 }
@@ -190,8 +225,8 @@
 
 .gui-item-text-shift {
   box-shadow:
-    inset 0 0 0 1px rgba(229, 9, 20, 0.18),
-    0 0 0 4px rgba(229, 9, 20, 0.08);
+    inset 0 0 0 1px color-mix(in srgb, var(--app-accent) 45%, transparent),
+    0 0 0 4px var(--app-accent-glow);
 }
 
 .gui-item-text-flash {
@@ -268,7 +303,7 @@
 
 .gui-highlight-border-once::after {
   inset: -5px;
-  border: 3px solid rgba(37, 99, 235, 0.7);
+  border: 3px solid color-mix(in srgb, var(--app-accent) 70%, transparent);
   animation: gui-highlight-ring-once 900ms cubic-bezier(0.22, 1, 0.36, 1) 1 both;
 }
 
@@ -297,7 +332,7 @@
 
 .gui-highlight-wave::after {
   inset: -2px;
-  border: 4px solid rgb(37, 99, 235);
+  border: 4px solid var(--app-accent);
   animation: gui-highlight-ring-wave 1.9s ease-out infinite;
 }
 
@@ -319,7 +354,7 @@
 
 .timeline-sync-pulse::after {
   inset: -4px;
-  border: 3px solid rgba(229, 9, 20, 0.55);
+  border: 3px solid color-mix(in srgb, var(--app-primary) 55%, transparent);
   animation: timeline-sync-ring 680ms cubic-bezier(0.22, 1, 0.36, 1) 1 both;
 }
 

@@ -1,4 +1,5 @@
 import { useLayoutEffect, useRef, useState } from 'react';
+import { useLanguage } from '../../i18n';
 
 const MAX_TEXTAREA_HEIGHT_PX = 160;
 
@@ -21,11 +22,14 @@ interface ChatInputProps {
   highlightVoiceToggle?: boolean;
   voiceToggleDisabled?: boolean;
   onToggleVoiceMode?: () => void;
+  /** Current verbosity preset, shown on the pill so the setting is visible at rest. */
+  voiceVerbosityLabel?: string | null;
+  onOpenVoiceSettings?: () => void;
 }
 
 export function ChatInput({
   disabled = true,
-  placeholder = 'Type a message...',
+  placeholder,
   chatWidthPx = 768,
   onSubmit,
   voiceModeAvailable = false,
@@ -34,6 +38,8 @@ export function ChatInput({
   highlightVoiceToggle = false,
   voiceToggleDisabled = false,
   onToggleVoiceMode,
+  voiceVerbosityLabel = null,
+  onOpenVoiceSettings,
 }: ChatInputProps) {
   const [text, setText] = useState('');
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
@@ -48,7 +54,8 @@ export function ChatInput({
   const micButtonDisabled = voiceToggleDisabled || !onToggleVoiceMode;
   const shouldHighlightVoiceToggle =
     highlightVoiceToggle && !voiceModeEnabled && !micButtonDisabled;
-  const micButtonTitle = voiceModeEnabled ? 'Turn off voice mode' : 'Turn on voice mode';
+  const { s } = useLanguage();
+  const micButtonTitle = voiceModeEnabled ? s.turnOffVoice : s.turnOnVoice;
 
   const handleSubmit = () => {
     const trimmed = text.trim();
@@ -105,7 +112,7 @@ export function ChatInput({
         <div
           className={`rounded-[30px] p-1 transition-[background-color,border-color,box-shadow] duration-200 ${
             isVoiceInputHighlighted
-              ? 'border border-rose-500/70 bg-rose-500/[0.08] shadow-[0_0_0_3px_rgba(244,63,94,0.18)]'
+              ? 'border border-accent-line/70 bg-accent/[0.10] shadow-[0_0_0_3px_var(--app-accent-glow)]'
               : 'border border-transparent'
           }`}
         >
@@ -116,7 +123,7 @@ export function ChatInput({
               disabled={disabled && !isVoiceComposer}
               readOnly={isVoiceComposer}
               tabIndex={isVoiceComposer ? -1 : 0}
-              placeholder={placeholder}
+              placeholder={placeholder ?? s.inputPlaceholder}
               value={text}
               onChange={(e) => setText(e.target.value)}
               onFocus={(e) => {
@@ -130,12 +137,23 @@ export function ChatInput({
               }}
               className={`flex-1 resize-none rounded-3xl border bg-dark-light px-4 py-3 leading-6 text-fg-strong placeholder:text-fg placeholder:font-medium placeholder:opacity-100 transition-colors focus:outline-none ${
                 isVoiceInputHighlighted
-                  ? 'border-rose-400/70 focus:border-rose-300'
+                  ? 'border-accent-line/70 focus:border-accent-hover'
                   : 'border-dark-border focus:border-primary'
               } ${disabled && !isVoiceComposer ? 'cursor-not-allowed opacity-50' : ''} ${
                 isVoiceComposer ? 'cursor-default select-none' : ''
               }`}
             />
+            {isVoiceComposer && onOpenVoiceSettings ? (
+              <button
+                type="button"
+                onClick={onOpenVoiceSettings}
+                title={s.voiceSettingsHint}
+                aria-label={s.voiceSettingsTitle}
+                className="self-center shrink-0 rounded-full border border-dark-border bg-dark-light/70 px-2.5 py-1.5 text-[10px] font-semibold uppercase tracking-[0.14em] text-fg-muted transition-colors hover:border-primary hover:text-fg-strong"
+              >
+                {voiceVerbosityLabel ?? s.voice}
+              </button>
+            ) : null}
             {isVoiceComposer ? (
               <button
                 type="button"
@@ -145,9 +163,9 @@ export function ChatInput({
                 aria-label={micButtonTitle}
                 className={`self-center flex h-10 w-10 shrink-0 items-center justify-center rounded-full border transition-colors ${
                   voiceModeEnabled
-                    ? 'border-rose-400 bg-rose-500 text-white hover:bg-rose-400'
+                    ? 'border-accent-line bg-accent text-accent-fg hover:bg-accent-hover'
                     : shouldHighlightVoiceToggle
-                    ? 'animate-pulse border-primary bg-primary/12 text-primary shadow-[0_0_0_4px_rgba(76,130,255,0.18)] hover:bg-primary/18'
+                    ? 'animate-pulse border-primary bg-primary/12 text-primary-text shadow-[0_0_0_4px_var(--app-primary-glow)] hover:bg-primary/18'
                     : 'border-info-border/60 bg-dark-light text-info-label hover:border-info-border hover:text-info-text'
                 } ${micButtonDisabled ? 'cursor-not-allowed opacity-50' : ''}`}
               >
@@ -178,7 +196,7 @@ export function ChatInput({
                 onClick={handleSubmit}
                 className={`self-center flex h-10 w-10 shrink-0 items-center justify-center rounded-full transition-colors ${
                   isVoiceInputHighlighted
-                    ? 'bg-rose-500 text-white hover:bg-rose-400'
+                    ? 'bg-accent text-accent-fg hover:bg-accent-hover'
                     : 'bg-primary text-primary-fg'
                 } ${disabled ? 'cursor-not-allowed opacity-50' : ''}`}
               >

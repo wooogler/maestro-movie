@@ -1,41 +1,110 @@
 @import "tailwindcss";
 
+/* UIST 2026 palette.
+   Teal is the system: brand, GUI selections, the agent's own identity.
+   Gold is the baton: language turns, live voice, and anything the agent is
+   touching right now. Charcoal and white carry the surfaces. Red is left to
+   mean only "error" or "blocked".
+   Each hue ships in the pair UIST specifies -- the darker value reads on light
+   backgrounds, the lighter one on dark. */
+
 :root,
 :root[data-theme='dark'] {
-  --app-surface-0: #0f0f0f;
-  --app-surface-1: #1a1a1a;
-  --app-surface-2: #2a2a2a;
-  --app-border: #333;
-  --app-text-strong: #f9fafb;
-  --app-text-main: #d1d5db;
-  --app-text-muted: #9ca3af;
-  --app-text-faint: #6b7280;
-  --app-primary-fg: #0f0f0f;
-  --app-info-bg: rgba(59, 130, 246, 0.15);
-  --app-info-border: rgba(96, 165, 250, 0.4);
-  --app-info-text: #dbeafe;
-  --app-info-label: #93c5fd;
+  --app-surface-0: #131211;
+  --app-surface-1: #1e1d1b;
+  --app-surface-2: #292826;
+  --app-border: #3a3835;
+  --app-text-strong: #faf8f4;
+  --app-text-main: #d8d3ca;
+  --app-text-muted: #a8a296;
+  --app-text-faint: #8a8479;
+
+  --app-primary: #00ada5;
+  --app-primary-hover: #2bc2ba;
+  --app-primary-fg: #131211;
+  --app-primary-text: #6fd8d1;
+  --app-primary-glow: rgba(0, 173, 165, 0.2);
+  --app-primary-glow-strong: rgba(0, 173, 165, 0.38);
+
+  --app-accent: #cea665;
+  --app-accent-hover: #dcbb84;
+  --app-accent-fg: #1e1d1b;
+  --app-accent-text: #ddbc85;
+  --app-accent-line: #cea665;
+  --app-accent-glow: rgba(206, 166, 101, 0.2);
+  --app-accent-glow-strong: rgba(206, 166, 101, 0.38);
+
+  --app-danger: #f0625f;
+  --app-danger-text: #ffa9a3;
+
+  --app-info-bg: rgba(0, 173, 165, 0.14);
+  --app-info-border: rgba(0, 173, 165, 0.4);
+  --app-info-text: #d9f2f0;
+  --app-info-label: #6fd8d1;
 }
 
 :root[data-theme='light'] {
   --app-surface-0: #ffffff;
-  --app-surface-1: #f8fafc;
-  --app-surface-2: #e2e8f0;
-  --app-border: #cbd5e1;
-  --app-text-strong: #0f172a;
-  --app-text-main: #1f2937;
-  --app-text-muted: #475569;
-  --app-text-faint: #64748b;
+  --app-surface-1: #f8f6f2;
+  --app-surface-2: #e9e5dd;
+  --app-border: #d5d0c6;
+  --app-text-strong: #292826;
+  --app-text-main: #3d3b37;
+  --app-text-muted: #6a665e;
+  --app-text-faint: #736e65;
+
+  --app-primary: #028392;
+  --app-primary-hover: #016e7b;
   --app-primary-fg: #ffffff;
-  --app-info-bg: rgba(37, 99, 235, 0.1);
-  --app-info-border: rgba(37, 99, 235, 0.35);
-  --app-info-text: #1e3a8a;
-  --app-info-label: #1d4ed8;
+  /* Teal at reading size. Full-strength #028392 only manages 4.2:1 on the
+     off-white card surface, and less again on a teal tint. */
+  --app-primary-text: #015f6b;
+  --app-primary-glow: rgba(2, 131, 146, 0.18);
+  --app-primary-glow-strong: rgba(2, 131, 146, 0.34);
+
+  --app-accent: #bd8c3d;
+  --app-accent-hover: #a5762c;
+  /* White on UIST gold only reaches 3.0:1; charcoal reaches 4.9:1. */
+  --app-accent-fg: #292826;
+  --app-accent-text: #7e5a1e;
+  /* Gold as a stroke. The fill value has to stay light enough to carry
+     charcoal text, which leaves it under 3:1 as a border on a light surface --
+     so the agent-touched outline, the one signal the demo turns on, gets its
+     own darker gold. */
+  --app-accent-line: #9c7027;
+  --app-accent-glow: rgba(189, 140, 61, 0.2);
+  --app-accent-glow-strong: rgba(189, 140, 61, 0.38);
+
+  --app-danger: #c62828;
+  --app-danger-text: #a41f1f;
+
+  --app-info-bg: rgba(2, 131, 146, 0.09);
+  --app-info-border: rgba(2, 131, 146, 0.35);
+  --app-info-text: #0a4a53;
+  --app-info-label: #026f7c;
 }
 
 @theme {
-  --color-primary: #e50914;
-  --color-primary-hover: #f40612;
+  /* Fixed UIST swatches, for the few surfaces that stay light whatever the
+     app theme is (the study survey cards). Everything else uses the
+     theme-aware tokens below. */
+  --color-uist-teal: #028392;
+  --color-uist-teal-bright: #00ada5;
+  --color-uist-gold: #bd8c3d;
+  --color-uist-gold-bright: #cea665;
+  --color-uist-charcoal: #292826;
+
+  --color-primary: var(--app-primary);
+  --color-primary-hover: var(--app-primary-hover);
+  --color-primary-fg: var(--app-primary-fg);
+  --color-primary-text: var(--app-primary-text);
+  --color-accent: var(--app-accent);
+  --color-accent-hover: var(--app-accent-hover);
+  --color-accent-fg: var(--app-accent-fg);
+  --color-accent-text: var(--app-accent-text);
+  --color-accent-line: var(--app-accent-line);
+  --color-danger: var(--app-danger);
+  --color-danger-text: var(--app-danger-text);
   --color-dark: var(--app-surface-0);
   --color-dark-light: var(--app-surface-1);
   --color-dark-lighter: var(--app-surface-2);
@@ -44,7 +113,6 @@
   --color-fg: var(--app-text-main);
   --color-fg-muted: var(--app-text-muted);
   --color-fg-faint: var(--app-text-faint);
-  --color-primary-fg: var(--app-primary-fg);
   --color-info-bg: var(--app-info-bg);
   --color-info-border: var(--app-info-border);
   --color-info-text: var(--app-info-text);
@@ -56,15 +124,102 @@ body {
   color: var(--app-text-main);
 }
 
+/*
+ * The app shell's height.
+ *
+ * This belongs to the ONE shell element in `App.tsx` and nothing else. A page
+ * that repeats it nests a 100dvh box inside a parent that is 100dvh minus the
+ * safe-area insets and clips its overflow, and pays the insets twice — which
+ * costs the bottom of the page on exactly the installed-on-a-tablet setup the
+ * insets exist for. Pages take `h-full`.
+ *
+ * `100vh` on iOS Safari is the *large* viewport — the height the page would
+ * have if the address bar and toolbar were hidden. They are not hidden on
+ * arrival, so the bottom ~130px of a `100vh` shell sits underneath them. In a
+ * layout like this one, where every ancestor is `overflow-hidden` with
+ * `min-h-0` so the panes scroll internally, there is nothing to scroll the
+ * page itself: the composer and the stage's Continue button are simply
+ * unreachable.
+ *
+ * `100dvh` tracks the viewport as the toolbars come and go, so the shell always
+ * ends where the visible area ends. The `100vh` line above it is the fallback
+ * for browsers that do not know `dvh`; they get exactly today's behaviour.
+ */
+.app-viewport {
+  height: 100vh;
+  height: 100dvh;
+}
+
+/*
+ * Installed on a tablet the page owns the whole display, including the strip
+ * behind the home indicator and whatever the rounded corners cut off. Padding
+ * the shell by the safe-area insets keeps the header's controls and the
+ * composer out of both. In a browser tab every inset is 0, so this is inert.
+ *
+ * The top inset is in the list for the same reason the others are. Without it
+ * `viewport-fit=cover` puts the toolbar — Memory, Settings, Reset, Finish —
+ * underneath the system status bar on an installed tablet, which is the top half
+ * of the "the GUI is cut off at both ends" report this rule was extended for.
+ */
+.app-viewport {
+  padding-top: env(safe-area-inset-top);
+  padding-left: env(safe-area-inset-left);
+  padding-right: env(safe-area-inset-right);
+  padding-bottom: env(safe-area-inset-bottom);
+}
+
 /* Demo memory panel: a newly extracted preference or a freshly recorded dead end
    announces itself once, then settles into the list. */
 @keyframes memory-flash {
   0% {
-    background-color: color-mix(in srgb, var(--color-primary) 35%, transparent);
+    background-color: color-mix(in srgb, var(--app-accent) 35%, transparent);
     transform: translateX(-4px);
   }
   100% {
     background-color: transparent;
     transform: translateX(0);
+  }
+}
+
+/* Workflow graph: a dead end does not appear, it grows out of the trunk — the
+   branch swings out from the stage node it left from. */
+@keyframes memory-branch-grow {
+  0% {
+    opacity: 0;
+    transform: translateX(-10px) scaleX(0.9);
+  }
+  100% {
+    opacity: 1;
+    transform: translateX(0) scaleX(1);
+  }
+}
+
+.memory-branch-enter {
+  transform-origin: left center;
+  animation: memory-branch-grow 520ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+/* The stage the agent is working on right now keeps a slow halo, so the eye
+   finds the live end of the trunk without reading any of it. */
+@keyframes memory-node-pulse {
+  0% {
+    box-shadow: 0 0 0 0 var(--app-primary-glow-strong);
+  }
+  70% {
+    box-shadow: 0 0 0 7px transparent;
+  }
+  100% {
+    box-shadow: 0 0 0 0 transparent;
+  }
+}
+
+.memory-node-active {
+  animation: memory-node-pulse 1900ms ease-out infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .memory-branch-enter,
+  .memory-node-active {
+    animation: none !important;
   }
 }

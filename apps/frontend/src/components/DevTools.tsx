@@ -177,7 +177,7 @@ function JsonViewer({ data }: { data: unknown }) {
               alert(`Invalid JSON: ${(e as Error).message}`);
             }
           }}
-          className="px-3 py-1 bg-green-600 text-white text-xs rounded hover:bg-green-700 transition-colors"
+          className="px-3 py-1 bg-accent text-accent-fg text-xs rounded hover:bg-accent-hover transition-colors"
         >
           Validate
         </button>
@@ -186,7 +186,7 @@ function JsonViewer({ data }: { data: unknown }) {
             navigator.clipboard.writeText(jsonText);
             alert('Copied to clipboard!');
           }}
-          className="px-3 py-1 bg-blue-600 text-white text-xs rounded hover:bg-blue-700 transition-colors"
+          className="px-3 py-1 bg-primary text-primary-fg text-xs rounded hover:bg-primary-hover transition-colors"
         >
           Copy
         </button>
@@ -430,14 +430,14 @@ function AgentToolsPanel({ tools, onApply, hasSpec, uiSpec }: AgentToolsPanelPro
         {lastResult && (
           <span
             className={`text-xs ${
-              lastResult.startsWith('Error') ? 'text-red-400' : 'text-green-400'
+              lastResult.startsWith('Error') ? 'text-danger-text' : 'text-green-400'
             }`}
           >
             {lastResult}
           </span>
         )}
         {!hasSpec && (
-          <span className="text-yellow-500 text-xs">No spec loaded</span>
+          <span className="text-accent-text text-xs">No spec loaded</span>
         )}
       </div>
     </div>

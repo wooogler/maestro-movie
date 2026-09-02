@@ -226,7 +226,7 @@ export function PostStudySurveyPage({
                 }}
                 className={`rounded-2xl border border-dashed p-3 transition-colors ${
                   isDraggingAssignedCondition
-                    ? 'border-sky-300 bg-sky-50/60'
+                    ? 'border-uist-teal/50 bg-uist-teal/[0.06]'
                     : 'border-stone-200 bg-stone-50/50'
                 }`}
               >
@@ -235,6 +235,8 @@ export function PostStudySurveyPage({
                   const isAssigned = assignedConditionIds.has(option.id);
                   const isDragged = draggedConditionId === option.id;
 
+                  // The teal border and tint carry the active card; its text stays
+                  // charcoal because teal on the teal tint is only 3.9:1.
                   return (
                     <button
                       key={option.id}
@@ -250,7 +252,7 @@ export function PostStudySurveyPage({
                         isAssigned
                           ? 'cursor-not-allowed border-stone-200 bg-stone-100 text-slate-400 opacity-60'
                           : isDragged
-                          ? 'border-sky-400 bg-sky-50 text-sky-700 shadow-[0_0_0_1px_rgba(14,165,233,0.2)]'
+                          ? 'border-uist-teal bg-uist-teal/10 text-uist-charcoal shadow-[0_0_0_1px_rgba(2,131,146,0.2)]'
                           : 'border-stone-200 bg-stone-50 text-slate-600 hover:border-stone-300 hover:bg-white'
                       }`}
                     >
@@ -286,11 +288,11 @@ export function PostStudySurveyPage({
                     }}
                     className="flex min-h-[250px] flex-col rounded-2xl border border-stone-300 bg-stone-50 p-4"
                   >
-                    <div className="mb-4 rounded-xl border border-sky-200 bg-sky-50 px-3 py-2 text-center">
-                      <div className="text-xs font-semibold uppercase tracking-[0.18em] text-sky-500">
+                    <div className="mb-4 rounded-xl border border-uist-teal/30 bg-uist-teal/10 px-3 py-2 text-center">
+                      <div className="text-xs font-semibold uppercase tracking-[0.18em] text-uist-teal/80">
                         Rank
                       </div>
-                      <div className="mt-1 text-2xl font-semibold text-sky-700">{rank}</div>
+                      <div className="mt-1 text-2xl font-semibold text-uist-teal">{rank}</div>
                     </div>
 
                     {option ? (
@@ -301,7 +303,7 @@ export function PostStudySurveyPage({
                         onDragEnd={() => setDraggedConditionId(null)}
                         className={`flex h-full flex-col items-start justify-between rounded-2xl border px-4 py-4 text-left transition-all ${
                           isDragged
-                            ? 'border-sky-400 bg-sky-50 text-sky-700 shadow-[0_0_0_1px_rgba(14,165,233,0.2)] opacity-80'
+                            ? 'border-uist-teal bg-uist-teal/10 text-uist-charcoal shadow-[0_0_0_1px_rgba(2,131,146,0.2)] opacity-80'
                             : 'border-stone-200 bg-white text-slate-600 hover:border-stone-300'
                         }`}
                       >
@@ -342,7 +344,7 @@ export function PostStudySurveyPage({
               value={rankingReason}
               onChange={(event) => setRankingReason(event.target.value)}
               rows={6}
-              className="w-full rounded-xl border border-stone-300 bg-stone-50 px-4 py-3 text-base leading-7 text-slate-700 outline-none focus:border-sky-500"
+              className="w-full rounded-xl border border-stone-300 bg-stone-50 px-4 py-3 text-base leading-7 text-slate-700 outline-none focus:border-uist-teal"
               placeholder="Please describe why you ranked the conditions this way."
             />
           </div>
@@ -389,7 +391,7 @@ export function PostStudySurveyPage({
                           onClick={() => handleLikertChange(question.id, value)}
                           className={`flex min-h-40 flex-col items-center justify-between rounded-sm border px-3 py-4 text-center transition-all ${
                             selected
-                              ? 'border-sky-500 bg-sky-50 text-sky-700 shadow-[0_0_0_1px_rgba(14,165,233,0.18)]'
+                              ? 'border-uist-teal bg-uist-teal/10 text-uist-charcoal shadow-[0_0_0_1px_rgba(2,131,146,0.2)]'
                               : 'border-stone-200 bg-stone-100 text-slate-500 hover:border-stone-300 hover:bg-stone-50'
                           }`}
                         >
@@ -402,13 +404,13 @@ export function PostStudySurveyPage({
                           <div
                             className={`mt-4 flex h-12 w-12 items-center justify-center rounded-full border ${
                               selected
-                                ? 'border-sky-500 bg-white'
+                                ? 'border-uist-teal bg-white'
                                 : 'border-slate-400 bg-transparent'
                             }`}
                           >
                             <div
                               className={`rounded-full transition-all ${
-                                selected ? 'h-5 w-5 bg-sky-500' : 'h-0 w-0 bg-transparent'
+                                selected ? 'h-5 w-5 bg-uist-teal' : 'h-0 w-0 bg-transparent'
                               }`}
                             />
                           </div>
@@ -423,7 +425,7 @@ export function PostStudySurveyPage({
         </section>
 
         {error ? (
-          <div className="mt-6 rounded-xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-600">
+          <div className="mt-6 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
             {error}
           </div>
         ) : null}

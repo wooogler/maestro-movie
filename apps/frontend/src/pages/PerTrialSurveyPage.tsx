@@ -319,6 +319,8 @@ export function PerTrialSurveyPage({
                     <div className={SURVEY_SCALES[question.scaleId].gridClassName}>
                       {SURVEY_SCALES[question.scaleId].values.map((value) => {
                         const selected = responses[question.id] === value;
+                        // The teal border, tint and dot carry the selection; the label
+                        // stays charcoal because teal on the teal tint is only 3.9:1.
                         return (
                           <button
                             key={value}
@@ -326,7 +328,7 @@ export function PerTrialSurveyPage({
                             onClick={() => handleSelect(question.id, value)}
                             className={`flex min-h-40 flex-col items-center justify-between rounded-sm border px-3 py-4 text-center transition-all ${
                               selected
-                                ? 'border-sky-500 bg-sky-50 text-sky-700 shadow-[0_0_0_1px_rgba(14,165,233,0.18)]'
+                                ? 'border-uist-teal bg-uist-teal/10 text-uist-charcoal shadow-[0_0_0_1px_rgba(2,131,146,0.2)]'
                                 : 'border-stone-200 bg-stone-100 text-slate-500 hover:border-stone-300 hover:bg-stone-50'
                             }`}
                           >
@@ -339,14 +341,14 @@ export function PerTrialSurveyPage({
                             <div
                               className={`mt-4 flex h-12 w-12 items-center justify-center rounded-full border ${
                                 selected
-                                  ? 'border-sky-500 bg-white'
+                                  ? 'border-uist-teal bg-white'
                                   : 'border-slate-400 bg-transparent'
                               }`}
                             >
                               <div
                                 className={`rounded-full transition-all ${
                                   selected
-                                    ? 'h-5 w-5 bg-sky-500'
+                                    ? 'h-5 w-5 bg-uist-teal'
                                     : 'h-0 w-0 bg-transparent'
                                 }`}
                               />
@@ -363,7 +365,7 @@ export function PerTrialSurveyPage({
         </div>
 
         {error ? (
-          <div className="mt-6 rounded-xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-600">
+          <div className="mt-6 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
             {error}
           </div>
         ) : null}
