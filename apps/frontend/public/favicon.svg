@@ -1,0 +1,38 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64" role="img" aria-label="TUNING Movie">
+  <defs>
+    <linearGradient id="tile" x1="4" y1="2" x2="60" y2="62" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#05A2B2"/>
+      <stop offset=".5" stop-color="#028392"/>
+      <stop offset="1" stop-color="#01515D"/>
+    </linearGradient>
+    <linearGradient id="shaft" x1="20" y1="52" x2="38.8" y2="16.7" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#EFDCB6"/>
+      <stop offset="1" stop-color="#FFFAF0"/>
+    </linearGradient>
+    <linearGradient id="grip" x1="15" y1="47" x2="26" y2="58" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#D9A657"/>
+      <stop offset="1" stop-color="#A9762C"/>
+    </linearGradient>
+    <!-- the smear decays backwards in time, brightest where the tip just was -->
+    <linearGradient id="trail" x1="38.78" y1="16.68" x2="58.97" y2="43" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#D9A657" stop-opacity=".95"/>
+      <stop offset=".5" stop-color="#BD8C3D" stop-opacity=".68"/>
+      <stop offset="1" stop-color="#BD8C3D" stop-opacity="0"/>
+    </linearGradient>
+  </defs>
+
+  <rect width="64" height="64" rx="14" fill="url(#tile)"/>
+
+  <!-- framing only: sits the artwork optically centred in the tile -->
+  <g transform="translate(0.35 -1.36) scale(0.9)">
+    <!-- path the tip swept: an arc about the wrist, radius = baton length, starting at the tip.
+         stroke-width matches the tip diameter (2 x 2.3) so the round cap sits flush under it -->
+    <path d="M38.78 16.68 A40 40 0 0 1 58.97 43.00" fill="none" stroke="url(#trail)" stroke-width="4.6" stroke-linecap="round"/>
+
+    <!-- baton shaft, tapering to a rounded tip -->
+    <path d="M24.24 54.25 L40.81 17.76 A2.3 2.3 0 0 0 36.75 15.60 L15.76 49.75 Z" fill="url(#shaft)"/>
+
+    <!-- baton grip -->
+    <circle cx="20" cy="52" r="7" fill="url(#grip)"/>
+  </g>
+</svg>
