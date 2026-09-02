@@ -1,5 +1,9 @@
 import type { FastifyInstance, FastifyRequest } from 'fastify';
-import { getSessionApiKeyByToken, getSessionContextByToken } from '../study/sessionService';
+import {
+  consumeCompanionApiKey,
+  getSessionApiKeyByToken,
+  getSessionContextByToken,
+} from '../study/sessionService';
 import { isDemoStudyMode } from '../study/modes';
 
 const OPENAI_SPEECH_URL = 'https://api.openai.com/v1/audio/speech';
@@ -21,8 +25,20 @@ function readEnvNumber(name: string, fallback: number, min: number, max: number)
   return Math.min(max, Math.max(min, parsed));
 }
 
-const REALTIME_MODEL = process.env.OPENAI_REALTIME_MODEL || 'gpt-realtime-2.1';
+// The mini tier is the right default here precisely because this model never
+// decides anything: create_response is forced off below, so its whole job is
+// speaking the agent's text back and yielding on barge-in. Full gpt-realtime-2.1
+// costs 3.2x per audio token for that. Set OPENAI_REALTIME_MODEL to move back.
+const REALTIME_MODEL = process.env.OPENAI_REALTIME_MODEL || 'gpt-realtime-2.1-mini';
 const REALTIME_VOICE = process.env.OPENAI_REALTIME_VOICE || 'alloy';
+// This model never decides anything -- it repeats the agent's sentence and
+// yields on barge-in -- so the lowest rung is the right one. OpenAI's own
+// guidance reserves `minimal` for "lowest latency matters most and the task is
+// simple", which is exactly this. Interruption is unaffected: barge-in is
+// server VAD, not a model judgement. Field shape is `session.reasoning.effort`;
+// a top-level `reasoning_effort` is rejected.
+const REALTIME_REASONING_EFFORT =
+  process.env.OPENAI_REALTIME_REASONING_EFFORT || 'minimal';
 const REALTIME_STT_MODEL = process.env.OPENAI_REALTIME_STT_MODEL || 'gpt-4o-mini-transcribe';
 // Realtime's speed range is narrower than /audio/speech's 0.25-4, so clamp to 1.5.
 //
@@ -60,15 +76,42 @@ const REALTIME_TOKEN_TTL_SECONDS = readEnvNumber('REALTIME_TOKEN_TTL_SECONDS', 6
 // composes every utterance and drives every GUI action. The session is minted
 // with turn_detection.create_response=false so the model can never answer on its
 // own; it only speaks text handed to it via response.create.
-const REALTIME_VOICE_INSTRUCTIONS = [
-  'You are the voice channel of a movie-booking assistant. You never decide what to say.',
-  'You only speak when you are explicitly given a message to repeat, and then you repeat it',
-  'verbatim in English: no additions, no omissions, no rephrasing, no translation.',
-  'Preserve labels such as seat ids ("C1"), times ("7:30 PM"), and prices exactly as written.',
-  'If you are not given a message to repeat, stay silent.',
-].join(' ');
+/**
+ * The realtime model is an output device here, not a speaker with opinions, so
+ * the instruction is the same in both languages apart from what "verbatim"
+ * means: the planner already wrote the message in the session's language, and
+ * the one thing that must not happen is this layer deciding to translate it
+ * either way.
+ */
+const REALTIME_VOICE_INSTRUCTIONS: Record<SessionLanguage, string> = {
+  en: [
+    'You are the voice channel of a movie-booking assistant. You never decide what to say.',
+    'You only speak when you are explicitly given a message to repeat, and then you repeat it',
+    'verbatim in English: no additions, no omissions, no rephrasing, no translation.',
+    'Preserve labels such as seat ids ("C1"), times ("7:30 PM"), and prices exactly as written.',
+    'If you are not given a message to repeat, stay silent.',
+  ].join(' '),
+  ko: [
+    'You are the voice channel of a movie-booking assistant. You never decide what to say.',
+    'You only speak when you are explicitly given a message to repeat, and then you repeat it',
+    'verbatim: no additions, no omissions, no rephrasing, no translation.',
+    'The message is written in Korean and may contain English film titles, cinema names,',
+    'formats and seat ids. Read the Korean as Korean and read those labels as they are written,',
+    'in English. Preserve seat ids ("C1"), times ("7:30 PM") and prices exactly as written.',
+    'If you are not given a message to repeat, stay silent.',
+  ].join(' '),
+};
+
+type SessionLanguage = 'en' | 'ko';
+
+function parseSessionLanguage(value: unknown): SessionLanguage {
+  return value === 'ko' ? 'ko' : 'en';
+}
 
 const STUDY_SESSION_TOKEN_HEADER = 'x-study-session-token';
+/** The paired phone's credential. Deliberately a different header name so a
+ *  companion token can never be mistaken for a study token by a handler. */
+const COMPANION_SESSION_TOKEN_HEADER = 'x-companion-session-token';
 const INLINE_API_KEY_HEADER = 'x-openai-api-key';
 // /speech/synthesize-preview is unauthenticated; keep its payload tiny.
 const PREVIEW_BODY_LIMIT_BYTES = 8 * 1024;
@@ -133,7 +176,7 @@ function isDemoSessionRequest(request: FastifyRequest): boolean {
  * where every session is created by the researcher, sets
  * `ALLOW_OPERATOR_KEY_FALLBACK=true`. A public deployment leaves it unset, and
  * every session must carry a key it earned — the visitor's own, or the operator
- * key attached server-side by a redeemed single-use access code.
+ * key attached server-side by a redeemed access code.
  */
 const ALLOW_OPERATOR_KEY_FALLBACK =
   process.env.ALLOW_OPERATOR_KEY_FALLBACK?.trim() === 'true';
@@ -231,81 +274,54 @@ export async function speechRoutes(fastify: FastifyInstance): Promise<void> {
       return reply.code(503).send({ error: 'OPENAI_API_KEY_MISSING' });
     }
 
-    const response = await fetch(OPENAI_REALTIME_CLIENT_SECRETS_URL, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        Authorization: `Bearer ${apiKey}`,
-      },
-      body: JSON.stringify({
-        expires_after: { anchor: 'created_at', seconds: REALTIME_TOKEN_TTL_SECONDS },
-        session: {
-          type: 'realtime',
-          model: REALTIME_MODEL,
-          instructions: REALTIME_VOICE_INSTRUCTIONS,
-          output_modalities: ['audio'],
-          audio: {
-            input: {
-              transcription: { model: REALTIME_STT_MODEL, language: 'en' },
-              // Suppresses room noise before VAD and transcription see the
-              // stream, so a loud booth does not keep opening turns the user
-              // never started.
-              ...(REALTIME_NOISE_REDUCTION
-                ? { noise_reduction: { type: REALTIME_NOISE_REDUCTION } }
-                : {}),
-              turn_detection: {
-                type: 'server_vad',
-                threshold: REALTIME_VAD_THRESHOLD,
-                prefix_padding_ms: REALTIME_VAD_PREFIX_MS,
-                silence_duration_ms: REALTIME_VAD_SILENCE_MS,
-                // The tuning agent composes every reply, so the model must never
-                // answer on its own; it may still cut its own speech short when
-                // the user starts talking, which is what makes barge-in work.
-                create_response: false,
-                interrupt_response: true,
-              },
-            },
-            output: { voice: REALTIME_VOICE, speed: REALTIME_SPEED },
-          },
-        },
-      }),
-    });
-
-    if (!response.ok) {
-      const message = await readOpenAiError(response);
-      if (isOpenAiAuthFailure(response)) {
-        return reply.code(401).send({
-          error: 'OPENAI_AUTH_FAILED',
-          message,
-        });
-      }
-      return reply.code(502).send({
-        error: 'OPENAI_REALTIME_SESSION_FAILED',
-        message,
-      });
-    }
-
-    const payload = (await response.json().catch(() => null)) as
-      | { value?: unknown; expires_at?: unknown }
-      | null;
-    const clientSecret = trimToNull(payload?.value);
-    if (!clientSecret) {
-      return reply.code(502).send({
-        error: 'OPENAI_REALTIME_SESSION_FAILED',
-        message: 'OpenAI returned no client secret.',
-      });
+    const language = parseSessionLanguage((request.body as { language?: unknown } | null)?.language);
+    const minted = await mintRealtimeClientSecret(apiKey, language);
+    if (!minted.ok) {
+      return reply.code(minted.status).send({ error: minted.error, message: minted.message });
     }
 
     reply.header('cache-control', 'no-store');
-    return {
-      clientSecret,
-      expiresAt: typeof payload?.expires_at === 'number' ? payload.expires_at : null,
-      model: REALTIME_MODEL,
-      // The frontend re-sends the transcription block via session.update to add
-      // the on-screen options as a prompt, so it needs the model name we minted
-      // with -- a partial block would otherwise drop it.
-      transcriptionModel: REALTIME_STT_MODEL,
-    };
+    return minted.body;
+  });
+
+  /**
+   * The paired phone's own Realtime credential.
+   *
+   * Separate from the route above because it authenticates on a companion token
+   * rather than a study token, and because what bounds it is different. The
+   * session-bound key at a conference booth IS the operator key — the
+   * access-code flow copies `OPENAI_API_KEY` into the session — so "this handler
+   * never calls getEnvOpenAiApiKey" would be a hollow guarantee. What actually
+   * bounds it is `consumeCompanionApiKey`: the pairing must be current, a phone
+   * must have actually attached to the relay to earn an allowance, and each mint
+   * spends one. Someone who photographed the QR but never paired gets nothing,
+   * and someone who does pair evicts the visitor's phone visibly.
+   *
+   * Served under /study/ rather than /speech/ deliberately: /speech is a
+   * studyContext PROTECTED_PREFIX and would demand a study token, which is
+   * exactly the credential a companion must not have.
+   */
+  fastify.post('/study/companion/realtime-session', async (request, reply) => {
+    const companionToken = readHeader(request, COMPANION_SESSION_TOKEN_HEADER);
+    if (!companionToken) {
+      return reply.code(401).send({ error: 'COMPANION_TOKEN_MISSING' });
+    }
+
+    const apiKey = consumeCompanionApiKey(companionToken);
+    if (!apiKey) {
+      // One code for every refusal: an invalid pairing, a spent allowance and a
+      // phone that never attached must not be distinguishable from outside.
+      return reply.code(403).send({ error: 'COMPANION_NOT_PAIRED' });
+    }
+
+    const language = parseSessionLanguage((request.body as { language?: unknown } | null)?.language);
+    const minted = await mintRealtimeClientSecret(apiKey, language);
+    if (!minted.ok) {
+      return reply.code(minted.status).send({ error: minted.error, message: minted.message });
+    }
+
+    reply.header('cache-control', 'no-store');
+    return minted.body;
   });
 
   // Unauthenticated public path: it runs on a caller-supplied key only. Falling
@@ -357,4 +373,113 @@ export async function speechRoutes(fastify: FastifyInstance): Promise<void> {
       return reply.send(audioBuffer);
     }
   );
+}
+
+
+interface RealtimeMintSuccess {
+  ok: true;
+  body: {
+    clientSecret: string;
+    expiresAt: number | null;
+    model: string;
+    transcriptionModel: string;
+    language: SessionLanguage;
+  };
+}
+
+interface RealtimeMintFailure {
+  ok: false;
+  status: number;
+  error: string;
+  message: string;
+}
+
+/**
+ * The one place a Realtime session is configured, shared by the kiosk route and
+ * the companion route so the two can never drift apart on VAD, voice, speed or
+ * the create_response:false rule that keeps the model an output device.
+ *
+ * The 401/502 split is preserved rather than collapsed into one failure: a bad
+ * key is a thing the operator can fix and the frontend surfaces it differently
+ * from an OpenAI outage.
+ */
+async function mintRealtimeClientSecret(
+  apiKey: string,
+  language: SessionLanguage
+): Promise<RealtimeMintSuccess | RealtimeMintFailure> {
+    const response = await fetch(OPENAI_REALTIME_CLIENT_SECRETS_URL, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${apiKey}`,
+      },
+      body: JSON.stringify({
+        expires_after: { anchor: 'created_at', seconds: REALTIME_TOKEN_TTL_SECONDS },
+        session: {
+          type: 'realtime',
+          model: REALTIME_MODEL,
+          instructions: REALTIME_VOICE_INSTRUCTIONS[language],
+          reasoning: { effort: REALTIME_REASONING_EFFORT },
+          output_modalities: ['audio'],
+          audio: {
+            input: {
+              transcription: { model: REALTIME_STT_MODEL, language },
+              // Suppresses room noise before VAD and transcription see the
+              // stream, so a loud booth does not keep opening turns the user
+              // never started.
+              ...(REALTIME_NOISE_REDUCTION
+                ? { noise_reduction: { type: REALTIME_NOISE_REDUCTION } }
+                : {}),
+              turn_detection: {
+                type: 'server_vad',
+                threshold: REALTIME_VAD_THRESHOLD,
+                prefix_padding_ms: REALTIME_VAD_PREFIX_MS,
+                silence_duration_ms: REALTIME_VAD_SILENCE_MS,
+                // The tuning agent composes every reply, so the model must never
+                // answer on its own; it may still cut its own speech short when
+                // the user starts talking, which is what makes barge-in work.
+                create_response: false,
+                interrupt_response: true,
+              },
+            },
+            output: { voice: REALTIME_VOICE, speed: REALTIME_SPEED },
+          },
+        },
+      }),
+    });
+
+    if (!response.ok) {
+      const message = await readOpenAiError(response);
+      if (isOpenAiAuthFailure(response)) {
+        return { ok: false, status: 401, error: 'OPENAI_AUTH_FAILED', message };
+      }
+      return { ok: false, status: 502, error: 'OPENAI_REALTIME_SESSION_FAILED', message };
+    }
+
+    const payload = (await response.json().catch(() => null)) as
+      | { value?: unknown; expires_at?: unknown }
+      | null;
+    const clientSecret = trimToNull(payload?.value);
+    if (!clientSecret) {
+      return {
+        ok: false,
+        status: 502,
+        error: 'OPENAI_REALTIME_SESSION_FAILED',
+        message: 'OpenAI returned no client secret.',
+      };
+    }
+
+    return {
+      ok: true,
+      body: {
+        clientSecret,
+        expiresAt: typeof payload?.expires_at === 'number' ? payload.expires_at : null,
+        model: REALTIME_MODEL,
+        // The frontend re-sends the transcription block via session.update to add
+        // the on-screen options as a prompt, so it needs the model name we minted
+        // with -- a partial block would otherwise drop it.
+        transcriptionModel: REALTIME_STT_MODEL,
+        language,
+      },
+    };
 }

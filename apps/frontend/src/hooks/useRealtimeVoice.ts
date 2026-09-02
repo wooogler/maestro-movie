@@ -35,6 +35,8 @@ export interface RealtimeVoiceCredentials {
   expiresAt: number | null;
   model: string;
   transcriptionModel: string;
+  /** Echoed back by the host so the per-screen session.update cannot drift from it. */
+  language: string;
 }
 
 interface UseRealtimeVoiceOptions {
@@ -47,11 +49,33 @@ interface UseRealtimeVoiceOptions {
   suspended?: boolean;
   /** On-screen options fed to the transcriber to bias recognition. */
   transcriptionPrompt?: string | null;
-  createSession: () => Promise<RealtimeVoiceCredentials>;
+  /**
+   * Conversation language. Part of the connection identity, not a live setting:
+   * the transcription language is fixed when the session is minted, so changing
+   * it tears the session down and opens a new one.
+   */
+  language?: string;
+  createSession: (language: string) => Promise<RealtimeVoiceCredentials>;
   onTranscript: (payload: { text: string; durationMs: number }) => void;
   onSpeakingItemChange?: (item: VoiceSpeakItem | null) => void;
   onPlaybackComplete?: (item: VoiceSpeakItem, info: { interrupted: boolean }) => void;
   onLogEvent?: (type: string, payload: unknown) => void;
+  /**
+   * Supply the element the agent's audio plays through, instead of letting this
+   * hook create one.
+   *
+   * Exists for iOS Safari, which rejects `play()` unless it descends from a user
+   * gesture. On the kiosk the session opens from the visitor's own click on the
+   * mic button, so a freshly created element is fine. On a paired phone the
+   * session opens when the *host* pushes config — no gesture anywhere near it —
+   * and the `play()` rejection below is caught, so the phone would sit there
+   * looking connected and produce no sound at all. The phone therefore unlocks
+   * an element inside its own "start" tap and hands it over here.
+   *
+   * A caller-owned element is never removed from the DOM on teardown; only the
+   * one this hook created is.
+   */
+  audioSink?: () => HTMLAudioElement | null;
 }
 
 interface UseRealtimeVoiceResult {
@@ -111,11 +135,13 @@ export function useRealtimeVoice({
   enabled,
   suspended = false,
   transcriptionPrompt = null,
+  language = 'en',
   createSession,
   onTranscript,
   onSpeakingItemChange,
   onPlaybackComplete,
   onLogEvent,
+  audioSink,
 }: UseRealtimeVoiceOptions): UseRealtimeVoiceResult {
   const supported = isRealtimeVoiceSupported();
 
@@ -131,6 +157,9 @@ export function useRealtimeVoice({
   const outputStatusRef = useRef<VoiceOutputStatus>('off');
   const errorRef = useRef<string | null>(null);
 
+  const audioSinkRef = useRef(audioSink);
+  audioSinkRef.current = audioSink;
+
   const enabledRef = useRef(enabled);
   const suspendedRef = useRef(suspended);
   const transcriptionPromptRef = useRef(transcriptionPrompt);
@@ -144,7 +173,10 @@ export function useRealtimeVoice({
   const dcRef = useRef<RTCDataChannel | null>(null);
   const micStreamRef = useRef<MediaStream | null>(null);
   const audioElementRef = useRef<HTMLAudioElement | null>(null);
+  /** False when the element came from `audioSink`; see its docstring. */
+  const ownsAudioElementRef = useRef(false);
   const transcriptionModelRef = useRef<string | null>(null);
+  const transcriptionLanguageRef = useRef<string>('en');
 
   const queueRef = useRef<VoiceSpeakItem[]>([]);
   const activeRef = useRef<ActiveSpeech | null>(null);
@@ -381,7 +413,7 @@ export function useRealtimeVoice({
             input: {
               transcription: {
                 model: transcriptionModel,
-                language: 'en',
+                language: transcriptionLanguageRef.current,
                 ...(normalized ? { prompt: normalized } : {}),
               },
             },
@@ -447,14 +479,19 @@ export function useRealtimeVoice({
       }
 
       const audioElement = audioElementRef.current;
+      const ownsAudioElement = ownsAudioElementRef.current;
       audioElementRef.current = null;
+      ownsAudioElementRef.current = false;
       if (audioElement) {
         audioElement.pause();
         audioElement.srcObject = null;
-        audioElement.remove();
+        // Only tear out an element this hook put in the DOM. A caller-supplied
+        // sink was unlocked by a user gesture that will not come again.
+        if (ownsAudioElement) audioElement.remove();
       }
 
       transcriptionModelRef.current = null;
+      transcriptionLanguageRef.current = 'en';
       sentPromptRef.current = null;
       utteranceDurationsRef.current.clear();
       lastUtteranceDurationRef.current = null;
@@ -793,7 +830,7 @@ export function useRealtimeVoice({
 
       try {
         const [credentials, micStream] = await Promise.all([
-          createSessionRef.current(),
+          createSessionRef.current(language),
           micStreamPromise,
         ]);
 
@@ -804,11 +841,16 @@ export function useRealtimeVoice({
 
         micStreamRef.current = micStream;
         transcriptionModelRef.current = credentials.transcriptionModel;
+        transcriptionLanguageRef.current = credentials.language || 'en';
 
-        const audioElement = document.createElement('audio');
+        const providedSink = audioSinkRef.current?.() ?? null;
+        const audioElement = providedSink ?? document.createElement('audio');
         audioElement.autoplay = true;
-        audioElement.style.display = 'none';
-        document.body.appendChild(audioElement);
+        if (!providedSink) {
+          audioElement.style.display = 'none';
+          document.body.appendChild(audioElement);
+        }
+        ownsAudioElementRef.current = !providedSink;
         audioElementRef.current = audioElement;
 
         const pc = new RTCPeerConnection();
@@ -924,6 +966,7 @@ export function useRealtimeVoice({
   }, [
     enabled,
     supported,
+    language,
     connectNonce,
     handleServerEvent,
     scheduleReconnect,
