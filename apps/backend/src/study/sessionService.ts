@@ -17,6 +17,7 @@ import {
 import {
   getStudyModeConfig,
   getStudyConditionCode,
+  isDemoStudyMode,
   isStudyModeId,
   normalizeStudyMode,
   DEFAULT_STUDY_MODE,
@@ -26,6 +27,8 @@ import { startAgentForSession, stopAgentForSession } from './agentSupervisor';
 import {
   appendInteractionLog,
   appendInteractionLogSafe,
+  buildLlmTraceRelativeFile,
+  createDemoInteractionLogFilePath,
   createInteractionLogFilePath,
   deleteInteractionLogArtifacts,
   hasCompletedBookingLog,
@@ -36,6 +39,7 @@ import type {
   StudySessionContext,
   StudySessionRecord,
   StudySessionTokenPayload,
+  StudySessionTokenScope,
 } from './types';
 
 interface CreateSessionInput {
@@ -54,6 +58,13 @@ interface CreateSessionInput {
    * no database clone.
    */
   presetSessionId?: string;
+  /**
+   * The demo visitor ticked the research-recording box on the setup screen.
+   * Nothing else turns demo recording on: it is the visitor's decision, made
+   * before the session exists, and it is the only reason a `logs/demo/` file is
+   * ever written.
+   */
+  researchConsent?: boolean;
 }
 
 export class StudySessionCapacityError extends Error {
@@ -75,6 +86,14 @@ interface CreateSessionResult {
   scenario: ScenarioDefinition;
   studyModeConfig: ReturnType<typeof getStudyModeConfig>;
   studyToken: string;
+  /** Read-only pairing token for a second device. Never grants the host role. */
+  viewToken: string;
+  /**
+   * The credential the agent process joins the relay with. Returned so the
+   * executable checks can assert what it cannot do; `POST /study/sessions`
+   * builds its response as an explicit literal and must never include it.
+   */
+  agentToken: string;
 }
 
 function parsePositiveIntEnv(value: string | undefined, fallback: number): number {
@@ -93,6 +112,14 @@ const DEMO_MAX_CONCURRENT_SESSIONS = parsePositiveIntEnv(
   process.env.DEMO_MAX_CONCURRENT_SESSIONS,
   10
 );
+/*
+ * `DEMO_TRACE_ENABLED` used to live here, as the operator's way to record booth
+ * traffic for planner tuning. The setup screen now asks the visitor instead,
+ * and an environment variable that recorded someone who had just been asked and
+ * said no would make that question a lie — so the switch is gone rather than
+ * ANDed with the answer. Consent alone decides.
+ */
+
 // Public demo visitors mostly just close the tab. Without a short lifetime and an
 // idle reaper their records stay 'active' for the full study TTL and hold demo
 // capacity (plus an agent child process) hostage.
@@ -167,6 +194,61 @@ function ensureScenarioTemplateDb(scenario: ScenarioDefinition): string {
 
 function shouldEnforceSingleActiveAgentSession(): boolean {
   return process.env.NODE_ENV !== 'production';
+}
+
+/**
+ * Live companion pairings: sessionId -> the `jti` of the one companion token
+ * that is currently valid, plus how many Realtime credentials that pairing may
+ * still mint.
+ *
+ * Memory-only and never persisted, so a backend restart revokes every pairing —
+ * which is the behaviour we want: a phone paired to a session that no longer has
+ * a live relay must re-pair rather than keep a standing capability.
+ *
+ * The mint gate is the reason this is a record and not just a string. The
+ * session-bound OpenAI key at a conference booth IS the operator key (the
+ * access-code flow copies it in), so a pairing that could mint unboundedly would
+ * let anyone who photographed the booth QR spend it.
+ *
+ * The gate is **live attachment**, not a one-shot budget. An earlier version
+ * granted N mints per relay join, which looked equivalent and was not: the
+ * phone's own voice session has a five-deep reconnect ladder and renews itself
+ * every 50 minutes, and every one of those attempts mints. A phone could
+ * therefore exhaust its budget without its relay socket ever dropping, and then
+ * be permanently mute with only a page reload to recover. Requiring the socket
+ * to be open right now is both a stronger bound — an attacker must hold the
+ * single companion slot, which visibly evicts the visitor's phone — and one that
+ * legitimate retries cannot trip. The rolling limit on top is a rate limit, not
+ * a budget: it refills with time.
+ */
+interface CompanionPairing {
+  jti: string;
+  /** Whether a phone is attached to the relay for this session right now. */
+  attached: boolean;
+  /** Epoch-ms of recent mints, for the rolling rate limit. */
+  mints: number[];
+}
+
+const companionPairings = new Map<string, CompanionPairing>();
+
+/** How long a scanned pairing stays usable. Never longer than the session. */
+const COMPANION_TOKEN_TTL_MS = parsePositiveIntEnv(
+  process.env.COMPANION_TOKEN_TTL_MINUTES,
+  60
+) * 60_000;
+
+/** Rolling rate limit for companion Realtime mints. Refills with time. */
+const COMPANION_MINT_WINDOW_MS = parsePositiveIntEnv(
+  process.env.COMPANION_MINT_WINDOW_MINUTES,
+  10
+) * 60_000;
+const COMPANION_MINTS_PER_WINDOW = parsePositiveIntEnv(
+  process.env.COMPANION_MINTS_PER_WINDOW,
+  12
+);
+
+function forgetCompanionPairing(sessionId: string): void {
+  companionPairings.delete(sessionId);
 }
 
 function forgetSessionApiKey(sessionId: string): void {
@@ -269,7 +351,10 @@ function safeEqualText(a: string, b: string): boolean {
   return timingSafeEqual(aBuf, bBuf);
 }
 
-function parseToken(token: string): StudySessionTokenPayload | null {
+function parseToken(
+  token: string,
+  expectedScope: StudySessionTokenScope
+): StudySessionTokenPayload | null {
   const [encodedPayload, signature] = token.split('.');
   if (!encodedPayload || !signature) return null;
   const expected = signPayload(encodedPayload);
@@ -287,18 +372,31 @@ function parseToken(token: string): StudySessionTokenPayload | null {
     ) {
       return null;
     }
+    // A token minted before `scope` existed is a study token. A view token
+    // always carries the field, so it can never be mistaken for one.
+    if ((payload.scope ?? 'study') !== expectedScope) {
+      return null;
+    }
     return payload;
   } catch {
     return null;
   }
 }
 
-function createToken(record: StudySessionRecord): string {
+function createToken(
+  record: StudySessionRecord,
+  scope: StudySessionTokenScope = 'study',
+  options?: { jti?: string; expiresAtMs?: number }
+): string {
   const payload: StudySessionTokenPayload = {
     sessionId: record.sessionId,
     relaySessionId: record.relaySessionId,
     iat: Date.parse(record.createdAt),
-    exp: Date.parse(record.expiresAt),
+    // Never outlives the session, whatever the caller asks for.
+    exp: Math.min(Date.parse(record.expiresAt), options?.expiresAtMs ?? Number.MAX_SAFE_INTEGER),
+    scope,
+    // Spread so the emitted bytes of a study/view/agent token are unchanged.
+    ...(options?.jti ? { jti: options.jti } : {}),
   };
   const encodedPayload = base64UrlEncode(JSON.stringify(payload));
   const signature = signPayload(encodedPayload);
@@ -364,6 +462,7 @@ function deactivateSession(
   stopAgentForSession(record.sessionId);
   forgetSessionApiKey(record.sessionId);
   forgetSessionActivity(record.sessionId);
+  forgetCompanionPairing(record.sessionId);
   destroySessionDb(record.sessionId);
 }
 
@@ -447,9 +546,13 @@ function restartAgentsForActiveSessions(): boolean {
       participantId: record.participantId,
       loggingParticipantId: record.loggingParticipantId,
       interactionLogFile: record.interactionLogFile,
+      llmTraceFile: record.llmTraceFile,
       studyMode: record.studyMode,
       modeConfig: studyModeConfig,
       apiKey,
+      // Scoped to this session and to the agent role alone. See the note on
+      // StudySessionTokenScope for what it is closing.
+      agentToken: createToken(record, 'agent'),
     });
   }
   return changed;
@@ -490,6 +593,7 @@ function markExpiredSessions(): boolean {
     stopAgentForSession(sessionId);
     forgetSessionApiKey(sessionId);
     forgetSessionActivity(sessionId);
+    forgetCompanionPairing(sessionId);
     destroySessionDb(sessionId);
     changed = true;
   }
@@ -632,17 +736,39 @@ export function createStudySession(input: CreateSessionInput): CreateSessionResu
       : `P-${sessionId.slice(-6)}`;
   const loggingParticipantId = normalizeLoggingParticipantId(input.loggingParticipantId);
   const apiKey = trimmedApiKey;
-  // Demo mode records nothing: an undefined log file disables backend
-  // interaction logs, the agent LLM trace writer, and the frontend logger.
+  // An undefined interaction log file disables the backend interaction log, the
+  // frontend logger and the agent runtime log in one move — that is how the
+  // tutorial records nothing about the person using it, and how a demo visitor
+  // who did not consent is recorded no differently than before this existed.
+  const isDemo = studyMode === DEMO_STUDY_MODE;
+  // The booth asks, once, on the setup screen. This flag is the answer, and it
+  // is the whole of what separates a recorded demo session from an anonymous
+  // one — there is no environment variable that can record a visitor who said
+  // no, and none that can skip asking.
+  const demoRecordingConsented = isDemo && input.researchConsent === true;
   const interactionLogFile =
-    scenario.id === TUTORIAL_SCENARIO_ID || studyMode === DEMO_STUDY_MODE
+    scenario.id === TUTORIAL_SCENARIO_ID
       ? undefined
-      : createInteractionLogFilePath(
-          loggingParticipantId,
-          conditionLabel,
-          scenario.id,
-          createdAt
-        );
+      : isDemo
+        ? demoRecordingConsented
+          ? createDemoInteractionLogFilePath(sessionId, createdAt)
+          : undefined
+        : createInteractionLogFilePath(
+            loggingParticipantId,
+            conditionLabel,
+            scenario.id,
+            createdAt
+          );
+
+  // The trace is still tracked separately, because the two are not the same
+  // decision for a *study* session. For a demo session they now move together:
+  // a trace carries the visitor's own utterances inside the prompts it
+  // captures, so it exists exactly when the visitor agreed to be recorded.
+  // Either way demo output goes to `logs/demo/`, never `logs/trace/` or
+  // `logs/interaction/`, which is what the study corpus tools glob.
+  const llmTraceFile = interactionLogFile
+    ? buildLlmTraceRelativeFile(interactionLogFile)
+    : undefined;
 
   const dbHandle = createSessionDbFromTemplate(sessionId, templateDbPath);
   try {
@@ -652,6 +778,7 @@ export function createStudySession(input: CreateSessionInput): CreateSessionResu
       participantId,
       ...(loggingParticipantId ? { loggingParticipantId } : {}),
       interactionLogFile,
+      ...(llmTraceFile ? { llmTraceFile } : {}),
       conditionLabel,
       scenarioId: scenario.id,
       studyMode,
@@ -675,6 +802,8 @@ export function createStudySession(input: CreateSessionInput): CreateSessionResu
         },
         participantId,
         loggingParticipantId: loggingParticipantId ?? null,
+        // First line of a consented demo log says why the file exists at all.
+        ...(isDemo ? { researchConsent: demoRecordingConsented } : {}),
       },
     });
 
@@ -684,6 +813,8 @@ export function createStudySession(input: CreateSessionInput): CreateSessionResu
       sessionApiKeys.set(sessionId, apiKey);
     }
 
+    const agentToken = createToken(record, 'agent');
+
     if (studyModeConfig.agentEnabled) {
       startAgentForSession({
         sessionId,
@@ -692,24 +823,32 @@ export function createStudySession(input: CreateSessionInput): CreateSessionResu
         participantId,
         loggingParticipantId,
         interactionLogFile,
+        llmTraceFile,
         studyMode,
         modeConfig: studyModeConfig,
         apiKey,
+        agentToken,
       });
     }
 
     persistSessions();
     const studyToken = createToken(record);
+    // A second device pairs with this session by scanning a QR of this token.
+    // Read-only by construction — see the scope note on StudySessionTokenPayload.
+    const viewToken = createToken(record, 'view');
     return {
       record,
       scenario,
       studyModeConfig,
       studyToken,
+      viewToken,
+      agentToken,
     };
   } catch (error) {
     sessions.delete(sessionId);
     sessionApiKeys.delete(sessionId);
     forgetSessionActivity(sessionId);
+    forgetCompanionPairing(sessionId);
     stopAgentForSession(sessionId);
     destroySessionDb(sessionId);
     throw error;
@@ -721,7 +860,7 @@ export function getSessionContextByToken(token: string): StudySessionContext | n
   if (markExpiredSessions()) {
     persistSessions();
   }
-  const payload = parseToken(token.trim());
+  const payload = parseToken(token.trim(), 'study');
   if (!payload) return null;
 
   const record = sessions.get(payload.sessionId);
@@ -731,6 +870,176 @@ export function getSessionContextByToken(token: string): StudySessionContext | n
   if (Date.parse(record.expiresAt) <= now().getTime()) return null;
 
   return buildSessionContext(record);
+}
+
+/**
+ * Resolves a read-only view token to the relay session it may watch.
+ *
+ * Returns the relay session id and nothing else on purpose: a viewer needs to be
+ * routed to a session, and handing back a `StudySessionContext` would give a
+ * second device the record, the database path and the scenario.
+ */
+/**
+ * Resolves an agent token to the relay session that agent may attach to.
+ *
+ * Same narrow return as the view resolver above, for the same reason. The agent
+ * role is the most powerful one on the relay — it can drive the booking GUI and
+ * end the session — so it must name its session through a signed token rather
+ * than a raw id, exactly as host and viewer already do.
+ */
+/**
+ * Mints the pairing token a phone scans to become this session's microphone and
+ * speaker. Demo-only, and deliberately not minted with the session: the
+ * capability should exist for the seconds a visitor is actually pairing, not for
+ * the whole session, and `POST /study/sessions` keeps its exact response shape.
+ *
+ * Minting rotates the `jti`, so scanning a fresh QR revokes the previous phone.
+ */
+export function createCompanionToken(
+  studyToken: string
+): { companionToken: string; expiresAt: string } | null {
+  const context = getSessionContextByToken(studyToken);
+  if (!context) return null;
+
+  // Spelled out as a positive demo test with an explicit refusal on the other
+  // arm. A study condition must never acquire phone voice by falling through.
+  if (!isDemoStudyMode(context.record.studyMode)) {
+    return null;
+  }
+
+  const record = context.record;
+  const expiresAtMs = Math.min(
+    Date.parse(record.expiresAt),
+    now().getTime() + COMPANION_TOKEN_TTL_MS
+  );
+  const jti = randomUUID();
+  // Not attached yet: a token that was photographed but never paired can mint
+  // nothing, because minting requires a live companion socket.
+  companionPairings.set(record.sessionId, { jti, attached: false, mints: [] });
+
+  return {
+    companionToken: createToken(record, 'companion', { jti, expiresAtMs }),
+    expiresAt: new Date(expiresAtMs).toISOString(),
+  };
+}
+
+/** Shared gate for both companion resolvers. Returns the record or null. */
+function resolveCompanionRecord(token: string): StudySessionRecord | null {
+  if (!token.trim()) return null;
+  if (markExpiredSessions()) {
+    persistSessions();
+  }
+  const payload = parseToken(token.trim(), 'companion');
+  if (!payload) return null;
+
+  // Unlike the other scopes, a companion token's own expiry is enforced. The
+  // other scopes live exactly as long as their session and the record checks
+  // below already cover them; this one is deliberately shorter-lived, and a TTL
+  // nothing reads would be decoration.
+  if (typeof payload.exp !== 'number' || payload.exp <= now().getTime()) return null;
+
+  // A companion token must carry a jti and it must be the current one. Written
+  // as an explicit string test first: comparing a missing jti against a missing
+  // pairing would be `undefined === undefined`, which fails open.
+  if (typeof payload.jti !== 'string' || !payload.jti) return null;
+  const pairing = companionPairings.get(payload.sessionId);
+  if (!pairing || pairing.jti !== payload.jti) return null;
+
+  const record = sessions.get(payload.sessionId);
+  if (!record) return null;
+  if (record.relaySessionId !== payload.relaySessionId) return null;
+  if (record.status !== 'active') return null;
+  if (!isDemoStudyMode(record.studyMode)) return null;
+  if (Date.parse(record.expiresAt) <= now().getTime()) return null;
+
+  return record;
+}
+
+/**
+ * Resolves a companion token to the relay session its phone may attach to.
+ *
+ * Narrow return, same as the view and agent resolvers. Deliberately does NOT
+ * call `touchSessionActivity`: a paired phone left on a shelf must not hold a
+ * demo slot open against the idle reaper.
+ */
+export function getRelaySessionIdByCompanionToken(token: string): string | null {
+  return resolveCompanionRecord(token)?.relaySessionId ?? null;
+}
+
+/**
+ * Records whether a phone is attached to this session's relay right now. Called
+ * by the relay on companion join and on companion disconnect; this is the gate
+ * on spending the session's OpenAI key.
+ */
+export function setCompanionAttached(relaySessionId: string, attached: boolean): void {
+  for (const record of sessions.values()) {
+    if (record.relaySessionId !== relaySessionId) continue;
+    const pairing = companionPairings.get(record.sessionId);
+    if (!pairing) return;
+    pairing.attached = attached;
+    return;
+  }
+}
+
+/**
+ * Resolves the OpenAI key backing a companion's Realtime mint, consuming one of
+ * the allowance granted at attach time. Returns null when the pairing is invalid
+ * or the allowance is spent.
+ *
+ * NOTE — and this is the guarantee that must not be overstated anywhere: at a
+ * conference booth this key IS the operator key, because the access-code flow
+ * copies `OPENAI_API_KEY` into the session. Keeping `getEnvOpenAiApiKey` out of
+ * this function proves nothing on its own. What actually bounds the exposure is
+ * the attach requirement plus this allowance.
+ */
+export function consumeCompanionApiKey(token: string): string | null {
+  const record = resolveCompanionRecord(token);
+  if (!record) return null;
+  const pairing = companionPairings.get(record.sessionId);
+  if (!pairing || !pairing.attached) return null;
+
+  const nowMs = now().getTime();
+  pairing.mints = pairing.mints.filter((at) => nowMs - at < COMPANION_MINT_WINDOW_MS);
+  if (pairing.mints.length >= COMPANION_MINTS_PER_WINDOW) return null;
+
+  const key = sessionApiKeys.get(record.sessionId);
+  if (!key || !key.trim()) return null;
+  pairing.mints.push(nowMs);
+  return key.trim();
+}
+
+export function getRelaySessionIdByAgentToken(token: string): string | null {
+  if (!token.trim()) return null;
+  if (markExpiredSessions()) {
+    persistSessions();
+  }
+  const payload = parseToken(token.trim(), 'agent');
+  if (!payload) return null;
+
+  const record = sessions.get(payload.sessionId);
+  if (!record) return null;
+  if (record.relaySessionId !== payload.relaySessionId) return null;
+  if (record.status !== 'active') return null;
+  if (Date.parse(record.expiresAt) <= now().getTime()) return null;
+
+  return record.relaySessionId;
+}
+
+export function getRelaySessionIdByViewToken(token: string): string | null {
+  if (!token.trim()) return null;
+  if (markExpiredSessions()) {
+    persistSessions();
+  }
+  const payload = parseToken(token.trim(), 'view');
+  if (!payload) return null;
+
+  const record = sessions.get(payload.sessionId);
+  if (!record) return null;
+  if (record.relaySessionId !== payload.relaySessionId) return null;
+  if (record.status !== 'active') return null;
+  if (Date.parse(record.expiresAt) <= now().getTime()) return null;
+
+  return record.relaySessionId;
 }
 
 export function getSessionContextById(sessionId: string): StudySessionContext | null {
@@ -764,6 +1073,7 @@ export function finishSessionByToken(token: string): StudySessionRecord | null {
   stopAgentForSession(context.record.sessionId);
   forgetSessionApiKey(context.record.sessionId);
   forgetSessionActivity(context.record.sessionId);
+  forgetCompanionPairing(context.record.sessionId);
   destroySessionDb(context.record.sessionId);
   persistSessions();
   return finished;
@@ -779,7 +1089,7 @@ export function getSessionApiKeyByToken(token: string): string | null {
   if (markExpiredSessions()) {
     persistSessions();
   }
-  const payload = parseToken(token.trim());
+  const payload = parseToken(token.trim(), 'study');
   if (!payload) return null;
 
   const record = sessions.get(payload.sessionId);

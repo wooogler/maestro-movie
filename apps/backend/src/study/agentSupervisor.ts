@@ -124,9 +124,16 @@ export function startAgentForSession(
     participantId: string;
     loggingParticipantId?: string;
     interactionLogFile?: string;
+    llmTraceFile?: string;
     studyMode: StudyModeId;
     modeConfig: StudyModeConfig;
     apiKey?: string;
+    /**
+     * Session-scoped credential for `relay.join` with `role: 'agent'`. Required:
+     * the relay used to accept an agent join with a raw relay session id and no
+     * credential, and handed that id back to every joiner in `relay.joined`.
+     */
+    agentToken: string;
     /** Internal: how many times this session's agent has already been respawned. */
     restartCount?: number;
   }
@@ -138,11 +145,25 @@ export function startAgentForSession(
     participantId,
     loggingParticipantId,
     interactionLogFile,
+    llmTraceFile,
     studyMode,
     modeConfig,
     apiKey,
+    agentToken,
   } = params;
   if (!modeConfig.agentEnabled) return;
+
+  // Test seam. The executable checks under `npm run check` exercise the session
+  // and token layer, and every study mode has `agentEnabled: true` — so without
+  // this the check suite would fork a real agent process per session it creates
+  // and let it write runtime logs. Announced on stderr because a deployment that
+  // set this by accident would otherwise look healthy while no agent ever runs.
+  if (process.env.AGENT_SUPERVISOR_DISABLED?.trim() === 'true') {
+    process.stderr.write(
+      `[agent-supervisor] AGENT_SUPERVISOR_DISABLED=true — not spawning an agent for ${sessionId}\n`
+    );
+    return;
+  }
 
   stopAgentForSession(sessionId);
 
@@ -159,11 +180,17 @@ export function startAgentForSession(
     env: {
       ...process.env,
       AGENT_SESSION_ID: relaySessionId,
+      // The relay authenticates the agent role on this, not on AGENT_SESSION_ID.
+      AGENT_RELAY_TOKEN: agentToken,
       AGENT_RUNTIME_SESSION_ID: sessionId,
       AGENT_STUDY_ID: scenarioId,
       AGENT_PARTICIPANT_ID: participantId,
       AGENT_LOGGING_PARTICIPANT_ID: loggingParticipantId ?? '',
       AGENT_INTERACTION_LOG_FILE: interactionLogFile ?? '',
+      // The trace path is handed over rather than derived, so the agent and the
+      // export route cannot disagree about where the file is. A demo session
+      // has only this one — no interaction log at all.
+      AGENT_LLM_TRACE_FILE: llmTraceFile ?? '',
       AGENT_STUDY_MODE: studyMode,
       AGENT_ENABLE_GUI_ADAPTATION: modeConfig.guiAdaptationEnabled ? 'true' : 'false',
       AGENT_DEFAULT_CP_MEMORY_LIMIT: String(modeConfig.cpMemoryWindow),

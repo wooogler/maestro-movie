@@ -6,7 +6,7 @@ import {
   listScenarios,
   StudySessionCapacityError,
 } from '../study/sessionService';
-import { allocateStudySessionId } from '../study/sessionService';
+import { allocateStudySessionId, createCompanionToken } from '../study/sessionService';
 import {
   getStudyModeConfig,
   isStudyModeId,
@@ -26,6 +26,7 @@ import {
   appendInteractionLog,
   hasInteractionLogging,
   readInteractionLogFile,
+  hasLlmTrace,
   readLlmTraceLogFile,
 } from '../study/interactionLogService';
 import { appendPerTrialSurveySubmission } from '../study/perTrialSurveyService';
@@ -103,6 +104,8 @@ export async function studyRoutes(fastify: FastifyInstance): Promise<void> {
         stepBriefs: scenario.stepBriefs ?? {},
         narratorPreferenceTypes: scenario.narratorPreferenceTypes,
         seatRows: scenario.seatRows ?? [],
+        ...(scenario.todayIso ? { todayIso: scenario.todayIso } : {}),
+        ...(scenario.dateWindowDays ? { dateWindowDays: scenario.dateWindowDays } : {}),
       })),
     };
   });
@@ -232,6 +235,7 @@ export async function studyRoutes(fastify: FastifyInstance): Promise<void> {
       loggingParticipantId?: unknown;
       apiKey?: unknown;
       accessCode?: unknown;
+      researchConsent?: unknown;
     };
     const scenarioId = typeof body.scenarioId === 'string' ? body.scenarioId.trim() : '';
     const studyModeInput = typeof body.studyMode === 'string' ? body.studyMode.trim() : undefined;
@@ -247,6 +251,9 @@ export async function studyRoutes(fastify: FastifyInstance): Promise<void> {
       typeof body.accessCode === 'string' && body.accessCode.trim()
         ? body.accessCode.trim()
         : undefined;
+    // Strictly `=== true`: anything else — absent, null, the string 'false' — is
+    // a visitor who did not tick the box, and must not be read as one who did.
+    const researchConsent = body.researchConsent === true;
 
     if (!scenarioId) {
       return reply.code(400).send({ error: 'scenarioId is required' });
@@ -258,8 +265,9 @@ export async function studyRoutes(fastify: FastifyInstance): Promise<void> {
     let presetSessionId: string | undefined;
 
     // A conference access code is the second way into a demo session: it grants
-    // the operator key for exactly one session, server-side, so the visitor
-    // never sees it. The code is consumed here and nowhere else.
+    // the operator key for this one session, server-side, so the visitor never
+    // sees it. The redemption is recorded here and nowhere else -- recorded, not
+    // consumed: a code is reusable unless the operator capped it.
     let redeemedAccessCode: string | undefined;
     if (accessCode) {
       if (!isDemo) {
@@ -324,7 +332,7 @@ export async function studyRoutes(fastify: FastifyInstance): Promise<void> {
     }
 
     // A demo session must run on a key it earned: the visitor's own, or the
-    // operator key unlocked by a single-use access code. Without this guard an
+    // operator key unlocked by a redeemed access code. Without this guard an
     // anonymous caller could create a demo session and spend the operator key
     // through the agent and the speech routes.
     if (isDemo && !apiKey) {
@@ -351,6 +359,10 @@ export async function studyRoutes(fastify: FastifyInstance): Promise<void> {
         loggingParticipantId,
         apiKey,
         presetSessionId,
+        // Only a demo session reads this; `createStudySession` ands it with the
+        // mode so a study session cannot have its logging turned off from the
+        // request body.
+        researchConsent,
       });
       return {
         sessionId: created.record.sessionId,
@@ -358,8 +370,10 @@ export async function studyRoutes(fastify: FastifyInstance): Promise<void> {
         participantId: created.record.participantId,
         loggingParticipantId: created.record.loggingParticipantId ?? null,
         interactionLogFile: created.record.interactionLogFile ?? null,
+        hasLlmTrace: hasLlmTrace(created.record),
         conditionLabel: created.record.conditionLabel,
         studyToken: created.studyToken,
+        viewToken: created.viewToken,
         expiresAt: created.record.expiresAt,
         studyMode: created.record.studyMode,
         studyModeConfig: created.studyModeConfig,
@@ -371,6 +385,10 @@ export async function studyRoutes(fastify: FastifyInstance): Promise<void> {
           stepBriefs: created.scenario.stepBriefs ?? {},
           narratorPreferenceTypes: created.scenario.narratorPreferenceTypes,
           seatRows: created.scenario.seatRows ?? [],
+          ...(created.scenario.todayIso ? { todayIso: created.scenario.todayIso } : {}),
+          ...(created.scenario.dateWindowDays
+            ? { dateWindowDays: created.scenario.dateWindowDays }
+            : {}),
         },
       };
     } catch (error) {
@@ -386,6 +404,33 @@ export async function studyRoutes(fastify: FastifyInstance): Promise<void> {
       }
       return reply.code(400).send({ error: message });
     }
+  });
+
+  /**
+   * Mints the pairing token behind the "use my phone as the mic" QR.
+   *
+   * On demand rather than with the session: the capability should exist for the
+   * seconds a visitor is actually pairing, and `POST /study/sessions` keeps its
+   * exact response shape in every condition — a study session's response body
+   * must not gain a field for a booth-only feature.
+   *
+   * Demo-only, and that gate lives server-side in `createCompanionToken`, not as
+   * a frontend convention.
+   */
+  fastify.post('/study/companion-token', async (request, reply) => {
+    const token = getStudyTokenFromHeader(request.headers as Record<string, unknown>);
+    if (!token) {
+      return reply.code(401).send({ error: 'COMPANION_PAIRING_UNAVAILABLE' });
+    }
+    const minted = createCompanionToken(token);
+    if (!minted) {
+      // One code for both "bad study token" and "not a demo session". A distinct
+      // 401 here would also wire an optional pairing request into the frontend's
+      // global session-kill path, so a failed pairing would end the booking.
+      return reply.code(403).send({ error: 'COMPANION_PAIRING_UNAVAILABLE' });
+    }
+    reply.header('cache-control', 'no-store');
+    return minted;
   });
 
   fastify.get('/study/sessions/me', async (request, reply) => {
@@ -404,6 +449,7 @@ export async function studyRoutes(fastify: FastifyInstance): Promise<void> {
       participantId: context.record.participantId,
       loggingParticipantId: context.record.loggingParticipantId ?? null,
       interactionLogFile: context.record.interactionLogFile ?? null,
+      hasLlmTrace: hasLlmTrace(context.record),
       conditionLabel: context.record.conditionLabel,
       scenario: {
         id: context.scenario.id,
@@ -413,6 +459,10 @@ export async function studyRoutes(fastify: FastifyInstance): Promise<void> {
         stepBriefs: context.scenario.stepBriefs ?? {},
         narratorPreferenceTypes: context.scenario.narratorPreferenceTypes,
         seatRows: context.scenario.seatRows ?? [],
+        ...(context.scenario.todayIso ? { todayIso: context.scenario.todayIso } : {}),
+        ...(context.scenario.dateWindowDays
+          ? { dateWindowDays: context.scenario.dateWindowDays }
+          : {}),
       },
       background: context.scenario.background ?? '',
       story: context.scenario.story,
@@ -539,8 +589,10 @@ export async function studyRoutes(fastify: FastifyInstance): Promise<void> {
       return reply.code(401).send({ error: 'Invalid or expired study session' });
     }
 
-    if (!hasInteractionLogging(context.record)) {
-      return reply.code(404).send({ error: 'Interaction logging is not enabled for this session' });
+    // Deliberately not `hasInteractionLogging`: the two are one decision for a
+    // demo session but not for a study one, and this route serves the trace.
+    if (!hasLlmTrace(context.record)) {
+      return reply.code(404).send({ error: 'LLM tracing is not enabled for this session' });
     }
 
     const logFile = readLlmTraceLogFile(context.record);

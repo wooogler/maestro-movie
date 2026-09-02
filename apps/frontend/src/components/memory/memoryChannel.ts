@@ -1,4 +1,11 @@
-import { parseAgentMemorySnapshot, type AgentMemorySnapshot } from '../../agent/protocol';
+import {
+  parseAgentMemorySnapshot,
+  parseMemoryCommand,
+  type AgentMemorySnapshot,
+  type MemoryCommand,
+} from '../../agent/protocol';
+
+export type { MemoryCommand };
 
 /**
  * Cross-window bridge for the booth setup: the visitor drives the booking UI on
@@ -16,6 +23,11 @@ interface MemoryChannelMessage {
   type: 'memory';
   snapshot: AgentMemorySnapshot;
   stage: string | null;
+}
+
+interface MemoryCommandMessage {
+  type: 'command';
+  command: MemoryCommand;
 }
 
 function openChannel(): BroadcastChannel | null {
@@ -59,6 +71,53 @@ export function subscribeToMemory(
     const snapshot = parseAgentMemorySnapshot(data.snapshot);
     if (!snapshot) return;
     onMessage(snapshot, typeof data.stage === 'string' ? data.stage : null);
+  };
+
+  channel.addEventListener('message', handler);
+  return () => {
+    channel.removeEventListener('message', handler);
+    channel.close();
+  };
+}
+
+/**
+ * Sends one command from the second screen. Returns false when this browser has
+ * no BroadcastChannel, so the mirror can hide controls it cannot honour rather
+ * than offering buttons that do nothing.
+ */
+export function createMemoryCommander(): {
+  send: (command: MemoryCommand) => boolean;
+  available: boolean;
+  close: () => void;
+} {
+  const channel = openChannel();
+  return {
+    available: channel !== null,
+    send: (command) => {
+      if (!channel) return false;
+      try {
+        channel.postMessage({ type: 'command', command } satisfies MemoryCommandMessage);
+        return true;
+      } catch {
+        return false;
+      }
+    },
+    close: () => channel?.close(),
+  };
+}
+
+/** Listened to by the booking window, which is the only one holding a socket. */
+export function subscribeToMemoryCommands(
+  onCommand: (command: MemoryCommand) => void
+): () => void {
+  const channel = openChannel();
+  if (!channel) return () => {};
+
+  const handler = (event: MessageEvent) => {
+    const data = event.data as Partial<MemoryCommandMessage> | null;
+    if (!data || data.type !== 'command') return;
+    const command = parseMemoryCommand(data.command);
+    if (command) onCommand(command);
   };
 
   channel.addEventListener('message', handler);

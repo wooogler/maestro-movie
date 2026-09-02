@@ -11,6 +11,13 @@ interface PendingRequest {
 interface RelayClientOptions {
   relayUrl: string;
   sessionId: string;
+  /**
+   * Session-scoped credential for the agent role. The relay resolves the session
+   * from this, not from `sessionId` — an agent join with a bare session id is
+   * refused, because the id used to be readable from any joiner's `relay.joined`
+   * reply and the agent role can drive the booking GUI and end the session.
+   */
+  agentToken: string;
   agentName?: string;
   requestTimeoutMs?: number;
   /** Set to 0 to disable automatic reconnection. */
@@ -57,6 +64,7 @@ export class RelayClient {
   private reconnectInFlight = false;
   private readonly relayUrl: string;
   private readonly sessionId: string;
+  private readonly agentToken: string;
   private readonly agentName: string;
   private readonly requestTimeoutMs: number;
   private readonly maxReconnectAttempts: number;
@@ -67,6 +75,7 @@ export class RelayClient {
   constructor(options: RelayClientOptions) {
     this.relayUrl = options.relayUrl;
     this.sessionId = options.sessionId;
+    this.agentToken = options.agentToken;
     this.agentName = options.agentName?.trim() || 'tuning-agent';
     this.requestTimeoutMs = options.requestTimeoutMs ?? 10000;
     this.maxReconnectAttempts = options.maxReconnectAttempts ?? DEFAULT_MAX_RECONNECT_ATTEMPTS;
@@ -149,7 +158,7 @@ export class RelayClient {
   private join(): Promise<RelayEnvelope> {
     return this.request('relay.join', {
       role: 'agent',
-      sessionId: this.sessionId,
+      agentToken: this.agentToken,
       agentName: this.agentName,
     });
   }
