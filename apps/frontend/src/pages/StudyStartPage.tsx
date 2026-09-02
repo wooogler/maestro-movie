@@ -9,14 +9,24 @@ import {
 import {
   CONDITION_SELECTION_OPTIONS,
   DEMO_SCENARIO_ID,
+  DEMO_STUDY_MODE,
   getInterfaceCondition,
   getInteractionMode,
+  getStudyModeConfig,
   getStudyModeFromConditionSelection,
   type StudyModeId,
 } from './studyOptions';
+import { useLanguage } from '../i18n';
+import { useVoiceVerbositySettings } from '../hooks';
+import { defaultVerbosityFor } from '../voice';
+import { SettingsModal } from '../components/settings/SettingsModal';
+import { PreferencePresetPicker } from '../components/memory';
 import type { StudyScenarioDetail } from '../study/sessionStorage';
 import { formatScenarioTitle, isHardTaskScenario } from '../utils/displayFormats';
-import { queuePendingStudyLogEvent } from '../study/pendingInteractionEvents';
+import {
+  clearPendingStudyLogEvents,
+  queuePendingStudyLogEvent,
+} from '../study/pendingInteractionEvents';
 
 type Theme = 'dark' | 'light';
 const VOICE_CHECK_STATUS_STORAGE_KEY = 'study_voice_check_status_v1';
@@ -43,6 +53,17 @@ interface StudyStartPageProps {
   onDemoCredentialModeChange: (mode: 'code' | 'key') => void;
   demoMode: boolean;
   onDemoModeChange: (demoMode: boolean) => void;
+  /** Preset whose preference memory the session opens with, or null. */
+  preferencePresetId: string | null;
+  onPreferencePresetChange: (presetId: string | null) => void;
+  /**
+   * Whether the demo visitor agreed to have this session recorded for research.
+   * Asked here, before anything is running, because this is the last screen
+   * that exists before the session — and therefore the last moment at which
+   * "record nothing" is still a choice rather than a deletion.
+   */
+  researchConsent: boolean;
+  onResearchConsentChange: (consented: boolean) => void;
   sessionNotice?: string | null;
   onDismissSessionNotice?: () => void;
 }
@@ -88,14 +109,20 @@ export function StudyStartPage({
   onDemoCredentialModeChange,
   demoMode,
   onDemoModeChange,
+  preferencePresetId,
+  onPreferencePresetChange,
+  researchConsent,
+  onResearchConsentChange,
   sessionNotice = null,
   onDismissSessionNotice,
 }: StudyStartPageProps) {
   const navigate = useNavigate();
+  const { s: ui } = useLanguage();
   const [loadingScenarios, setLoadingScenarios] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [scenarios, setScenarios] = useState<StudyScenarioDetail[]>([]);
   const [voiceCheckOpen, setVoiceCheckOpen] = useState(false);
+  const [settingsOpen, setSettingsOpen] = useState(false);
   const [tutorialVideoOpen, setTutorialVideoOpen] = useState(false);
   const [voiceCheckError, setVoiceCheckError] = useState<string | null>(null);
   const [micCheckStatus, setMicCheckStatus] = useState<'idle' | 'checking' | 'granted' | 'denied'>('idle');
@@ -110,9 +137,9 @@ export function StudyStartPage({
         getInteractionMode(selectedMode)
       );
   const pidMissing = !demoMode && !loggingParticipantId.trim();
-  // In demo mode the visitor supplies one of two credentials: a single-use
-  // access code from the presenter, or their own OpenAI key. Everything that
-  // used to gate on "no API key" now gates on "no credential of either kind".
+  // In demo mode the visitor supplies one of two credentials: an access code
+  // from the presenter, or their own OpenAI key. Everything that used to gate on
+  // "no API key" now gates on "no credential of either kind".
   const usingAccessCode = demoCredentialMode === 'code';
   const apiKeyMissing = usingAccessCode ? !accessCode.trim() : !apiKey.trim();
   // /speech/synthesize-preview runs before any session exists, so it is
@@ -270,8 +297,10 @@ export function StudyStartPage({
 
   // Never carries the API key: setup events are study log payloads.
   const queueSetupGuiAction = (action: string, extraPayload?: Record<string, unknown>) => {
-    // Demo mode logs nothing at all.
-    if (demoMode) return;
+    // A demo visitor's setup is only recorded once they have said it may be.
+    // The queue is flushed into whatever session starts next, so queueing
+    // before consent would put this visitor's actions into someone else's log.
+    if (demoMode && !researchConsent) return;
     queuePendingStudyLogEvent({
       type: 'user.gui_action',
       clientTimestamp: new Date().toISOString(),
@@ -280,11 +309,41 @@ export function StudyStartPage({
         source: 'participant',
         location: 'study-setup',
         ...(selectedScenarioId ? { selectedScenarioId } : {}),
-        studyMode: selectedMode,
+        studyMode: demoMode ? DEMO_STUDY_MODE : selectedMode,
         ...(extraPayload ?? {}),
       },
     });
   };
+
+  const handleResearchConsentChange = (consented: boolean) => {
+    onResearchConsentChange(consented);
+    if (consented) {
+      queuePendingStudyLogEvent({
+        type: 'study.consent.granted',
+        clientTimestamp: new Date().toISOString(),
+        payload: { location: 'study-setup', studyMode: DEMO_STUDY_MODE },
+      });
+      return;
+    }
+    // Un-ticking is a withdrawal, and it has to reach back as far as the queue
+    // does: anything already queued for this visitor goes with it.
+    clearPendingStudyLogEvents();
+  };
+
+  /*
+    The same settings sheet the booking UI shows, one screen earlier. Language
+    and how much the agent says out loud are both things a visitor would rather
+    set before the agent starts talking than during — and the language in
+    particular is fixed when the voice session is minted, so changing it mid-run
+    tears the session down and opens a new one.
+  */
+  const voiceVerbosity = useVoiceVerbositySettings({
+    fallback: defaultVerbosityFor(demoMode),
+    onChange: (_next, detail) => queueSetupGuiAction('changeVoiceVerbosity', detail),
+  });
+  const voiceSettingsAvailable = demoMode
+    ? true
+    : getStudyModeConfig(selectedConditionMode).voiceModeAvailable;
 
   const handleConditionChange = (mode: StudyModeId) => {
     onModeChange(mode);
@@ -415,46 +474,68 @@ export function StudyStartPage({
   };
 
   return (
-    <main className="h-full overflow-y-auto bg-dark px-4 py-4 sm:py-5">
-      <div className="mx-auto flex min-h-full w-full max-w-5xl flex-col justify-start sm:justify-center">
+    <main className="h-full overflow-y-auto bg-dark px-3 py-4 sm:px-4 sm:py-5">
+      <div className="mx-auto flex min-h-full w-full max-w-5xl flex-col justify-center">
         <div className="w-full rounded-2xl border border-dark-border bg-dark-light p-5 sm:p-6">
-          <div className="mb-5 flex flex-wrap items-start justify-between gap-3">
+          <div className="mb-5 flex flex-col items-stretch gap-4 sm:flex-row sm:flex-wrap sm:items-start sm:justify-between sm:gap-3">
             <div>
-              <h1 className="text-2xl font-semibold text-fg-strong">
-                {demoMode ? 'Demo Setup' : 'User Study Setup'}
+              <h1 className="text-3xl font-semibold text-fg-strong sm:text-2xl">
+                {demoMode ? ui.demoSetupTitle : 'User Study Setup'}
               </h1>
-              <p className="mt-1 text-sm text-fg-muted">
+              <p className="mt-2 text-base leading-relaxed text-fg-muted sm:mt-1 sm:text-sm">
                 {demoMode
-                  ? 'Enter the access code from the presenter, or paste your own OpenAI API key. Nothing is recorded.'
+                  ? ui.demoSetupSubtitle
                   : 'Select your assigned condition and one scenario before starting.'}
               </p>
             </div>
-            <div className="flex flex-wrap items-start justify-end gap-2">
+            {/*
+              A phone gets one control per row at a comfortable height. On a
+              430px screen the desktop arrangement wrapped into a ragged block
+              of half-width chips with a code field too small to aim at.
+            */}
+            <div className="flex flex-col items-stretch gap-2.5 sm:flex-row sm:flex-wrap sm:items-start sm:justify-end sm:gap-2">
               <button
                 type="button"
                 onClick={() => handleDemoModeToggle(!demoMode)}
                 aria-pressed={demoMode}
-                className={`inline-flex h-11 items-center gap-2 rounded-lg border px-4 text-sm font-semibold transition-colors ${
+                className={`inline-flex h-14 items-center justify-center gap-2 rounded-xl border px-4 text-base font-semibold transition-colors sm:h-11 sm:justify-start sm:rounded-lg sm:text-sm ${
                   demoMode
-                    ? 'border-emerald-500/60 bg-emerald-500/15 text-emerald-700 hover:bg-emerald-500/20'
+                    ? 'border-primary/60 bg-primary/15 text-primary-text hover:bg-primary/20'
                     : 'border-dark-border bg-dark text-fg hover:border-primary hover:text-fg-strong'
                 }`}
               >
-                {demoMode ? 'Demo Mode: On' : 'Demo Mode'}
+                {demoMode ? ui.demoModeOn : 'Demo Mode'}
+              </button>
+              {/*
+                Unnumbered on purpose: the numbers walk a visitor through the
+                steps they have to take, and this is one they may skip. English
+                and the balanced voice preset are already right for most of
+                them.
+              */}
+              <button
+                type="button"
+                onClick={() => {
+                  queueSetupGuiAction('openSettings');
+                  setSettingsOpen(true);
+                }}
+                title="Language and how much the agent says out loud"
+                className="inline-flex h-14 items-center justify-center gap-2 rounded-xl border border-dark-border bg-dark px-4 text-base font-semibold text-fg transition-colors hover:border-primary hover:text-fg-strong sm:h-11 sm:rounded-lg sm:text-sm"
+              >
+                {ui.settings}
               </button>
               {demoMode ? null : (
                 <label
                   className={`flex h-11 items-center gap-2 rounded-lg border px-3 transition-colors ${
                     pidMissing
-                      ? 'border-rose-400/70 bg-rose-500/10'
+                      ? 'border-danger bg-danger/10'
                       : 'border-dark-border bg-dark'
                   }`}
                 >
                   <span
                     className={`flex h-6 w-6 shrink-0 items-center justify-center rounded-full text-xs font-semibold ${
                       pidMissing
-                        ? 'bg-rose-500/15 text-rose-300'
-                        : 'bg-primary/15 text-primary'
+                        ? 'bg-danger/10 text-danger-text'
+                        : 'bg-primary/15 text-primary-text'
                     }`}
                   >
                     1
@@ -467,24 +548,24 @@ export function StudyStartPage({
                     placeholder="P12"
                     className={`h-8 w-20 rounded-md border px-2.5 text-sm text-fg-strong outline-none transition-colors placeholder:text-fg-faint ${
                       pidMissing
-                        ? 'border-rose-400/70 bg-dark focus:border-rose-300'
+                        ? 'border-danger bg-dark focus:border-danger'
                         : 'border-dark-border bg-dark-light focus:border-primary'
                     }`}
                   />
                 </label>
               )}
               <div
-                className={`flex h-11 items-center gap-2 rounded-lg border pl-3 pr-1 transition-colors ${
+                className={`flex h-14 items-center gap-2 rounded-xl border pl-3 pr-1 transition-colors sm:h-11 sm:rounded-lg ${
                   demoMode && apiKeyMissing
-                    ? 'border-rose-400/70 bg-rose-500/10'
+                    ? 'border-danger bg-danger/10'
                     : 'border-dark-border bg-dark'
                 }`}
               >
                 <span
                   className={`flex h-6 w-6 shrink-0 items-center justify-center rounded-full text-xs font-semibold ${
                     demoMode && apiKeyMissing
-                      ? 'bg-rose-500/15 text-rose-300'
-                      : 'bg-primary/15 text-primary'
+                      ? 'bg-danger/10 text-danger-text'
+                      : 'bg-primary/15 text-primary-text'
                   }`}
                 >
                   {demoMode ? '1' : '2'}
@@ -492,7 +573,7 @@ export function StudyStartPage({
                 {demoMode && usingAccessCode ? (
                   <>
                     <label className="text-sm font-medium text-fg-strong" htmlFor="demo-access-code">
-                      Code
+                      {ui.accessCodeLabel}
                     </label>
                     <input
                       type="text"
@@ -506,9 +587,9 @@ export function StudyStartPage({
                       onChange={(event) => onAccessCodeChange(event.target.value.toUpperCase())}
                       id="demo-access-code"
                       placeholder="ABC123"
-                      className={`h-8 w-32 rounded-md border px-2.5 font-mono text-sm tracking-[0.2em] text-fg-strong outline-none transition-colors placeholder:tracking-normal placeholder:text-fg-faint ${
+                      className={`h-11 w-full min-w-0 flex-1 rounded-md border px-2.5 font-mono text-base tracking-[0.2em] text-fg-strong outline-none transition-colors placeholder:tracking-normal placeholder:text-fg-faint sm:h-8 sm:w-32 sm:flex-none sm:text-sm ${
                         apiKeyMissing
-                          ? 'border-rose-400/70 bg-dark focus:border-rose-300'
+                          ? 'border-danger bg-dark focus:border-danger'
                           : 'border-dark-border bg-dark-light focus:border-primary'
                       }`}
                     />
@@ -516,7 +597,7 @@ export function StudyStartPage({
                 ) : (
                   <>
                     <label className="text-sm font-medium text-fg-strong" htmlFor="demo-api-key">
-                      API Key
+                      {demoMode ? ui.apiKeyLabel : 'API Key'}
                     </label>
                     <input
                       type="password"
@@ -526,9 +607,9 @@ export function StudyStartPage({
                       onChange={(event) => onApiKeyChange(event.target.value)}
                       id="demo-api-key"
                       placeholder="sk-..."
-                      className={`h-8 w-40 rounded-md border px-2.5 text-sm text-fg-strong outline-none transition-colors placeholder:text-fg-faint ${
+                      className={`h-11 w-full min-w-0 flex-1 rounded-md border px-2.5 text-base text-fg-strong outline-none transition-colors placeholder:text-fg-faint sm:h-8 sm:w-40 sm:flex-none sm:text-sm ${
                         demoMode && apiKeyMissing
-                          ? 'border-rose-400/70 bg-dark focus:border-rose-300'
+                          ? 'border-danger bg-dark focus:border-danger'
                           : 'border-dark-border bg-dark-light focus:border-primary'
                       }`}
                     />
@@ -554,7 +635,7 @@ export function StudyStartPage({
                         onClick={() => onDemoCredentialModeChange(mode)}
                         title={
                           mode === 'code'
-                            ? 'Use a single-use access code from the presenter'
+                            ? 'Use the access code from the presenter'
                             : 'Use your own OpenAI API key'
                         }
                         className={`h-full rounded px-2.5 text-xs font-semibold transition-colors ${
@@ -582,12 +663,12 @@ export function StudyStartPage({
                 // the task starts no matter how they are authorizing. Only the
                 // speaker sample needs a key, and it disables itself.
                 title="Check microphone permission and speaker output"
-                className="inline-flex h-11 items-center gap-2 rounded-lg border border-sky-500/35 bg-sky-500/10 px-4 text-sm font-semibold text-sky-700 transition-colors hover:border-sky-500/60 hover:bg-sky-500/15 disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:border-sky-500/35 disabled:hover:bg-sky-500/10"
+                className="inline-flex h-14 items-center gap-2 rounded-xl border border-primary/35 bg-primary/10 px-4 text-base font-semibold text-primary-text transition-colors hover:border-primary/60 hover:bg-primary/15 disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:border-primary/35 disabled:hover:bg-primary/10 sm:h-11 sm:rounded-lg sm:text-sm"
               >
-                <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-sky-500/15 text-xs font-semibold text-sky-700">
+                <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-primary/15 text-xs font-semibold text-primary-text">
                   {demoMode ? '2' : '3'}
                 </span>
-                Mic Check
+                {demoMode ? ui.micCheck : 'Mic Check'}
               </button>
               <button
                 type="button"
@@ -595,12 +676,12 @@ export function StudyStartPage({
                   queueSetupGuiAction('openTutorialVideo');
                   setTutorialVideoOpen(true);
                 }}
-                className="inline-flex h-11 items-center gap-2 rounded-lg border border-sky-500/35 bg-sky-500/10 px-4 text-sm font-semibold text-sky-700 transition-colors hover:border-sky-500/60 hover:bg-sky-500/15"
+                className="inline-flex h-14 items-center gap-2 rounded-xl border border-primary/35 bg-primary/10 px-4 text-base font-semibold text-primary-text transition-colors hover:border-primary/60 hover:bg-primary/15 sm:h-11 sm:rounded-lg sm:text-sm"
               >
-                <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-sky-500/15 text-xs font-semibold text-sky-700">
+                <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-primary/15 text-xs font-semibold text-primary-text">
                   {demoMode ? '3' : '4'}
                 </span>
-                Watch Tutorial Video
+                {demoMode ? ui.watchTutorial : 'Watch Tutorial Video'}
               </button>
               <button
                 type="button"
@@ -610,8 +691,8 @@ export function StudyStartPage({
                 onClick={onThemeToggle}
                 className={`px-3 py-1 text-xs rounded border transition-colors ${
                   theme === 'dark'
-                    ? 'border-amber-300/60 bg-amber-100/10 text-amber-200 hover:border-amber-200 hover:text-amber-100'
-                    : 'border-sky-500/45 bg-sky-500/10 text-sky-700 hover:border-sky-500 hover:text-sky-800'
+                    ? 'border-accent-line/60 bg-accent/10 text-accent-text hover:border-accent-hover hover:text-accent-text'
+                    : 'border-primary/45 bg-primary/10 text-primary-text hover:border-primary hover:text-primary-hover'
                 }`}
               >
                 {theme === 'dark' ? 'Bright Mode' : 'Dark Mode'}
@@ -620,13 +701,13 @@ export function StudyStartPage({
           </div>
 
           {sessionNotice ? (
-            <div className="mb-5 flex items-start justify-between gap-3 rounded-lg border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-sm text-amber-800">
+            <div className="mb-5 flex items-start justify-between gap-3 rounded-lg border border-accent-line/40 bg-accent/10 px-3 py-2 text-sm text-accent-text">
               <span>{sessionNotice}</span>
               {onDismissSessionNotice ? (
                 <button
                   type="button"
                   onClick={onDismissSessionNotice}
-                  className="shrink-0 text-xs font-semibold uppercase tracking-wide text-amber-800/80 transition-colors hover:text-amber-900"
+                  className="shrink-0 text-xs font-semibold uppercase tracking-wide text-accent-text transition-colors hover:text-accent-text"
                 >
                   Dismiss
                 </button>
@@ -636,16 +717,75 @@ export function StudyStartPage({
 
           <div className="space-y-4">
             {demoMode ? (
+              <>
               <section className="space-y-3">
                 <h2 className="text-sm font-semibold uppercase tracking-wide text-fg-muted">
                   Demo
                 </h2>
                 <div className="rounded-xl border border-dark-border bg-dark px-4 py-3 text-sm text-fg-muted">
-                  Your key stays in this browser tab and is used only for this session. No
-                  participant ID, no surveys, and nothing about this session is logged. Voice mode
-                  is available from the mic button once the booking task starts.
+                  {ui.demoPrivacyNote}
                 </div>
               </section>
+
+              {/*
+                The consent box. It is asked here rather than on the way out
+                because this is the last screen that exists before the session:
+                afterwards, "record nothing" would mean deleting a file rather
+                than never writing one.
+              */}
+              <section className="space-y-3">
+                <h2 className="text-sm font-semibold uppercase tracking-wide text-fg-muted">
+                  {ui.consentTitle}
+                </h2>
+                <label
+                  className={`flex cursor-pointer items-start gap-3 rounded-xl border px-4 py-3 transition-colors ${
+                    researchConsent
+                      ? 'border-primary/70 bg-primary/10'
+                      : 'border-dark-border bg-dark hover:border-dark-lighter'
+                  }`}
+                >
+                  <input
+                    type="checkbox"
+                    className="mt-1 h-5 w-5 shrink-0 accent-primary"
+                    checked={researchConsent}
+                    onChange={(event) => handleResearchConsentChange(event.target.checked)}
+                  />
+                  <div className="min-w-0">
+                    <div className="text-sm font-semibold text-fg-strong">
+                      {ui.consentCheckboxLabel}
+                    </div>
+                    <p className="mt-1.5 text-sm leading-relaxed text-fg-muted">
+                      {ui.consentBody}
+                    </p>
+                    <p className="mt-1.5 text-xs leading-relaxed text-fg-faint">
+                      {ui.consentOptOutNote}
+                    </p>
+                  </div>
+                </label>
+              </section>
+
+              {/*
+                Preference memory the session starts with.
+
+                Here because this is the only screen that exists before a
+                session: /task-review fires the session POST on mount, so a
+                picker there would race it. Nothing is stored between visitors —
+                the point is to simulate an agent that already knows something,
+                not to remember anyone.
+              */}
+              <section className="space-y-3">
+                <h2 className="text-sm font-semibold uppercase tracking-wide text-fg-muted">
+                  {ui.preferenceMemoryTitle}
+                </h2>
+                <p className="text-sm leading-relaxed text-fg-muted">
+                  {ui.preferenceMemoryBody}
+                </p>
+                <PreferencePresetPicker
+                  selectedPresetId={preferencePresetId}
+                  onSelect={onPreferencePresetChange}
+                />
+              </section>
+              </>
             ) : (
             <section className="space-y-3">
               <h2 className="text-sm font-semibold uppercase tracking-wide text-fg-muted">
@@ -686,8 +826,8 @@ export function StudyStartPage({
                     disabled={tutorialSelected || !perTrialSurveyEnabled}
                     className={`w-36 rounded-xl px-4 py-3 text-sm font-semibold transition-colors ${
                       tutorialSelected || !perTrialSurveyEnabled
-                        ? 'cursor-not-allowed border border-stone-300 bg-stone-100 text-slate-400'
-                        : 'border border-sky-500/35 bg-sky-500/10 text-sky-700 hover:border-sky-500/60 hover:bg-sky-500/15'
+                        ? 'cursor-not-allowed border border-dark-border bg-dark-light text-fg-faint'
+                        : 'border border-primary/35 bg-primary/10 text-primary-text hover:border-primary/60 hover:bg-primary/15'
                     }`}
                   >
                     {tutorialSelected ? (
@@ -697,7 +837,7 @@ export function StudyStartPage({
                     ) : (
                       <>
                         <span className="block">Open Survey</span>
-                        <span className="mt-1 inline-block rounded-md border border-amber-400 bg-amber-400 px-2 py-0.5 text-lg font-black tracking-wide text-slate-900">
+                        <span className="mt-1 inline-block rounded-md border border-accent-line bg-accent px-2 py-0.5 text-lg font-black tracking-wide text-accent-fg">
                           {conditionCode}{perTrialSetLabel ? ` / ${perTrialSetLabel}` : ''}
                         </span>
                       </>
@@ -707,7 +847,7 @@ export function StudyStartPage({
                 <button
                   type="button"
                   onClick={handleOpenPostStudySurvey}
-                  className="w-full rounded-xl border border-emerald-500/35 bg-emerald-500/10 px-4 py-3 text-sm font-semibold text-emerald-700 transition-colors hover:border-emerald-500/60 hover:bg-emerald-500/15"
+                  className="w-full rounded-xl border border-primary/35 bg-primary/10 px-4 py-3 text-sm font-semibold text-primary-text transition-colors hover:border-primary/60 hover:bg-primary/15"
                 >
                   Post-Study Survey
                 </button>
@@ -762,12 +902,12 @@ export function StudyStartPage({
           </div>
 
           {error && (
-            <div className="mt-4 rounded-lg border border-primary/40 bg-primary/10 px-3 py-2 text-sm text-primary">
+            <div className="mt-4 rounded-lg border border-danger bg-danger/10 px-3 py-2 text-sm text-danger-text">
               {error}
             </div>
           )}
 
-          <div className="mt-6 flex flex-wrap justify-end gap-3">
+          <div className="mt-6 flex flex-col gap-3 sm:flex-row sm:flex-wrap sm:justify-end">
             <button
               type="button"
               onClick={handleStartTask}
@@ -778,13 +918,24 @@ export function StudyStartPage({
                   ? apiKeyMissing
                   : loadingScenarios || !selectedScenarioId || pidMissing
               }
-              className="rounded-lg bg-primary px-4 py-2 text-sm font-medium text-primary-fg transition-colors hover:bg-primary-hover disabled:cursor-not-allowed disabled:opacity-60"
+              className="w-full rounded-xl bg-primary px-4 py-4 text-base font-semibold text-primary-fg transition-colors hover:bg-primary-hover disabled:cursor-not-allowed disabled:opacity-60 sm:w-auto sm:rounded-lg sm:py-2 sm:text-sm sm:font-medium"
             >
-              {demoMode ? 'Start Demo' : 'Start Task'}
+              {demoMode ? ui.startDemo : 'Start Task'}
             </button>
           </div>
         </div>
       </div>
+
+      {settingsOpen ? (
+        <SettingsModal
+          onClose={() => setSettingsOpen(false)}
+          voiceSettingsAvailable={voiceSettingsAvailable}
+          voiceVerbosity={voiceVerbosity.settings}
+          onPresetChange={voiceVerbosity.handlePresetChange}
+          onCategoryChange={voiceVerbosity.handleCategoryChange}
+          onSmartSkipChange={voiceVerbosity.handleSmartSkipChange}
+        />
+      ) : null}
 
       {voiceCheckOpen ? (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-dark/75 px-4">
@@ -855,7 +1006,7 @@ export function StudyStartPage({
               </div>
 
               {voiceCheckError ? (
-                <div className="rounded-lg border border-primary/40 bg-primary/10 px-3 py-2 text-sm text-primary">
+                <div className="rounded-lg border border-danger bg-danger/10 px-3 py-2 text-sm text-danger-text">
                   {voiceCheckError}
                 </div>
               ) : null}
@@ -916,7 +1067,7 @@ export function StudyStartPage({
                 href={TUTORIAL_VIDEO_WATCH_URL}
                 target="_blank"
                 rel="noreferrer"
-                className="text-sky-700 underline underline-offset-2 transition-colors hover:text-sky-800"
+                className="text-primary-text underline underline-offset-2 transition-colors hover:text-primary-hover"
               >
                 YouTube
               </a>

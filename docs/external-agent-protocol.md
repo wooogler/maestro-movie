@@ -56,6 +56,9 @@ Both host (frontend) and external agent must join a relay session first.
 
 #### `relay.join`
 
+An agent names its session through a signed, session-scoped token — never a raw
+session id:
+
 ```json
 {
   "v": "mvp-0.2",
@@ -63,10 +66,39 @@ Both host (frontend) and external agent must join a relay session first.
   "id": "join-001",
   "payload": {
     "role": "agent",
-    "sessionId": "default"
+    "agentToken": "<agent-scoped token>",
+    "agentName": "my-agent"
   }
 }
 ```
+
+**This replaced an unauthenticated join, and the reason is worth stating.** The
+agent role is the most powerful one on this relay: it can drive the booking GUI
+with `tool.call`, speak through the kiosk with `agent.message`, and end the
+session. It previously required nothing but a `relaySessionId` — and
+`relay.joined` handed that id back to *every* joiner, including a read-only
+viewer. So a photographed booth QR was enough to join as a viewer, read the
+session id out of the join reply, and reconnect as an agent with full authority
+over someone else's live session.
+
+Two things changed together, and neither is sufficient alone:
+
+- an agent join presents an `agent`-scoped token, and
+- `relay.joined` returns `sessionId` **only to the host**.
+
+The token is minted per session by the backend that spawns the agent and handed
+over in the `AGENT_RELAY_TOKEN` environment variable. It is scoped so narrowly
+that it resolves nothing but the relay session to attach to: it cannot open a
+session context, read the session's API key, download the trace, finish the
+session, or stand in for a view token. `apps/backend/src/study/relayTokenScopes.check.ts`
+asserts each of those, and runs as part of `npm run check`.
+
+> **Operators running a third-party agent:** the agent token is what you hand
+> your agent instead of a session id. Today it is produced only where the
+> backend spawns its own agent, so an out-of-process agent has no supported way
+> to obtain one yet. That is a known gap, not a decision — it needs a deliberate
+> hand-off route rather than a bare mint endpoint, since anything that issues
+> this token issues authority over a live session.
 
 #### `relay.joined`
 
@@ -77,10 +109,13 @@ Both host (frontend) and external agent must join a relay session first.
   "replyTo": "join-001",
   "payload": {
     "role": "agent",
-    "sessionId": "default"
+    "clientName": "my-agent"
   }
 }
 ```
+
+`sessionId` appears in this reply for the host role only. An agent already knows
+which session it was started for, and a viewer never needed it.
 
 ### 4.1 Client -> Host
 
@@ -140,6 +175,35 @@ Posts an agent-visible explanation to the host chat timeline. This is not a tool
   }
 }
 ```
+
+`payload.category` is optional. In voice mode the host decides how much of each
+message to speak aloud, and it groups messages by what the agent was doing when
+it produced them (see [Voice verbosity](#voice-verbosity)). Sending the name of
+the tool the message narrates — `next`, `prev`, `select`, `selectMultiple`,
+`filter`, `sort`, `highlight`, `augment`, `clearModification`, `respond`, or
+`system` — lets the host skip its text classifier and route the message exactly.
+
+The bundled agent sends it on every message. Send it if you can: the host's
+fallback classifier is English regex measured against an English corpus, and in
+any other language it recognises almost nothing and routes everything to
+`respond`. That is safe — `respond` is never silenced — but it switches the
+verbosity feature off in all but name.
+
+```json
+{
+  "v": "mvp-0.2",
+  "type": "agent.message",
+  "id": "req-005",
+  "payload": {
+    "text": "I'm highlighting the PG options.",
+    "category": "highlight"
+  }
+}
+```
+
+The field is advisory and additive. Omit it and the host classifies the text
+itself; send an unrecognised value and the host falls back to the same
+classifier. No agent has to change to work with a verbosity-aware host.
 
 #### `agent.memory`
 Publishes the agent's preference memory and workflow-navigation state. Fire-and-forget: the host never replies, and an agent that is never listened to loses nothing by sending it.
@@ -316,6 +380,144 @@ whether to wait for `tts.playback.complete` or to estimate reading time.
 }
 ```
 
+#### Viewer connections
+
+`relay.join` accepts a third role, `viewer`, alongside `host` and `agent`:
+
+```json
+{
+  "v": "mvp-0.2",
+  "type": "relay.join",
+  "id": "viewer-join",
+  "payload": { "role": "viewer", "viewToken": "<read-only token>" }
+}
+```
+
+A viewer is a read-only spectator — a second device watching the session's
+preference memory. It exists because `host` is a single slot: a second host join
+evicts the first, so opening the same session on a phone would otherwise kill the
+laptop's booking window.
+
+Three properties hold:
+
+- **It receives `agent.memory` and nothing else.** Tool calls, snapshots and the
+  conversation stay between the agent and the host.
+- **It can send nothing.** Any envelope from a viewer is answered with
+  `INVALID_MESSAGE`.
+- **It names its session only through a signed token**, never a raw session id,
+  and that token is scoped `view` — it cannot be used to join as a host, download
+  the trace, finish the session, or join as an agent. That last one is not
+  decorative: see the note under `relay.join` for the escalation it closes.
+
+The relay caches the last `agent.memory` per session and replays it when a viewer
+joins, because the agent emits that envelope only when its content changes: a
+device that pairs mid-session would otherwise sit on an empty panel until the
+participant's next preference. Viewers do not keep a session alive; when the host
+and agents are gone the viewers are closed with `SESSION_NOT_ACTIVE`.
+
+#### Companion connections
+
+`relay.join` accepts a fourth role, `companion`: a paired phone acting as the
+session's microphone and speaker while the kiosk keeps the booking GUI.
+
+```json
+{
+  "v": "mvp-0.2",
+  "type": "relay.join",
+  "id": "companion-join",
+  "payload": { "role": "companion", "companionToken": "<pairing token>" }
+}
+```
+
+**A companion never addresses the agent.** Its lane terminates at the host, and
+that is the property everything else rests on. The host keeps the short-utterance
+filter, the replay-suppression rule, the study logging, and — most importantly —
+the single `tts.playback.complete` the agent's speech barrier counts. A phone
+that could emit that directly would give the barrier two owners.
+
+| Type | Direction | Payload |
+|---|---|---|
+| `companion.hello` | companion → host | `{}`. Sent on every successful join. |
+| `companion.config` | host → companion | `{ language, transcriptionPrompt, listening }` |
+| `companion.speak` | host → companion | `{ id, text, stop? }`. `stop: true` cuts playback. |
+| `companion.transcript` | companion → host | `{ text, durationMs }`. Raw and unfiltered. |
+| `companion.playback.complete` | companion → host | `{ id, interrupted }`. Raw. |
+
+The four type sets (`AGENT_TO_HOST`, `HOST_TO_AGENT`, `HOST_TO_COMPANION`,
+`COMPANION_TO_HOST`) are pairwise disjoint by the `companion.` prefix. Note that
+`companion.playback.complete` is deliberately **not** named
+`tts.playback.complete`: that string is a host→agent type, and reusing it would
+let a phone's frame be routed to the agent.
+
+Properties that are load-bearing rather than incidental:
+
+- **Single slot, newest wins.** Two phones would each answer one
+  `companion.speak`, the host would forward both completions, and the barrier
+  counts completions as credits rather than matching ids — so the duplicate would
+  spend another utterance's credit and let the agent act over live audio. The
+  evicted phone is told why before its socket closes.
+- **`companion.hello` exists because config delivery must be pull-based.** Under
+  newest-wins, a second phone takes the slot before the first phone's close
+  handler runs, so `companionActive` never transitions false→true. An
+  edge-triggered config push would never fire and the new phone would sit mute
+  forever while the host kept forwarding utterances into it.
+- **Two failure classes, and a companion must not confuse them.** A refusal on
+  the *join reply* (`COMPANION_PAIRING_INVALID`) is permanent. `HOST_UNAVAILABLE`,
+  returned when a companion frame arrives while the host slot is momentarily
+  empty, is transient — the host reconnects on a 1200ms timer, and treating that
+  as a dead pairing would strand the phone for the rest of the session.
+- **It sees `agent.memory` and nothing else** of the agent's traffic.
+  `agent.message` is deliberately excluded: the host's voice-verbosity gate
+  decides what is spoken, so a phone receiving agent messages directly would
+  speak text the host chose to silence.
+- **It does not keep a session alive.** Like a viewer, a phone left in a pocket
+  must not hold a demo slot or an agent process open.
+- **Presence.** `relay.presence` gains `companionActive: true` only while a phone
+  is attached; the key is absent otherwise, so the envelope is byte-identical in
+  sessions that have no phone.
+
+The pairing token is minted on demand at `POST /study/companion-token` (host
+credential, demo sessions only) and carries its own scope, its own enforced
+expiry, and a revocation handle — minting a new one revokes the previous phone.
+It cannot open a session context, read the session's key, download the trace,
+finish the session, or stand in for a view or agent token.
+
+**On spending the session's OpenAI key.** The phone mints its own Realtime
+credential at `POST /study/companion/realtime-session`. It is worth being precise
+about what bounds this, because the obvious claim is false: at a conference booth
+the session-bound key *is* the operator key, since the access-code flow copies
+`OPENAI_API_KEY` into the session. "This handler never reads the environment"
+therefore proves nothing. What actually bounds it is that a mint requires a phone
+to have **attached to the relay** — which grants a small, bounded allowance — so
+photographing the QR is not enough, and anyone who does attach evicts the
+visitor's phone visibly.
+
+#### `conversation.language`
+Names the language the participant is conversing in. Sent when the agent joins
+and again on every change, so an agent that connects mid-session is never left
+guessing.
+
+```json
+{
+  "v": "mvp-0.2",
+  "type": "conversation.language",
+  "payload": {
+    "language": "ko"
+  }
+}
+```
+
+`payload.language` is a BCP-47 primary subtag; the host currently sends `en` or
+`ko`. The setting is host-owned — the agent is told, it does not choose — and an
+agent that ignores this message keeps behaving exactly as it did before the
+message existed.
+
+It governs the spoken channel only. Tool names, tool parameter values and item
+ids stay in the host's vocabulary in every language: the screen still reads
+"Street Fighter" and seat "C1", so an agent that translated them would select
+nothing. `reason` likewise stays English — it is a trace field, not something
+the participant hears.
+
 #### `tts.playback.complete`
 Sent when spoken playback of the agent's most recent `agent.message` ends. In
 voice mode the host speaks each `agent.message` through an OpenAI Realtime
@@ -326,6 +528,41 @@ agent may take its next action.
 stopped programmatically, meaning the utterance was only partially heard. The
 payload fields are informational: an agent may ignore them and treat any
 `tts.playback.complete` as "the floor is free" (the reference agent does).
+
+**The host may send this for a message it never spoke.** Voice verbosity lets
+the participant silence whole categories of narration, and a silenced message is
+still added to the chat timeline — it simply does not become audio. The host
+reports it complete immediately, with `interrupted: true`, so the agent's turn
+does not stall waiting for playback that will never start. Agents must therefore
+treat this message as "the floor is free", never as "the user heard that line".
+
+#### Voice verbosity
+
+Participants can choose how much the agent says out loud without changing what
+the agent decides. The host classifies each `agent.message` — moving between
+steps, picking an option, changing what is on screen, or conversation — and
+speaks it in full, speaks a shortened form, or stays silent. It additionally
+drops sentences that repeat something just said, recite options already visible
+on screen, or run on without a participant turn.
+
+Two guarantees hold for every setting:
+
+- **Nothing is lost.** Everything the agent says reaches the chat timeline and
+  the study log; only the audio is filtered.
+- **A question is never silenced.** Any utterance containing a question is
+  spoken, shortened at worst, whatever the participant has configured.
+- **Errors are always spoken,** and the automatic rules shorten conversation
+  rather than muting it — an agent that repeats a failure notice verbatim will
+  still be heard.
+
+This is entirely host-side. The agent's planning is untouched, and the only
+protocol consequences are the `tts.playback.complete` note above and the
+optional `payload.category` on `agent.message`.
+
+The host's own classifier reads English. In a `ko` session it recognises a
+narrow set of Korean narration endings and sends everything else to `respond`,
+so an agent that does not tag its messages will simply be more talkative in
+Korean than in English — never quieter, and never silent where it should not be.
 
 Agents should not block indefinitely on this message — playback can fail, and
 the host may drop the connection mid-utterance. The reference agent releases

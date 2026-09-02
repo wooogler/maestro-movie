@@ -3,7 +3,12 @@ import type { ToolDefinition } from '../agent/tools';
 import {
   PROTOCOL_VERSION,
   parseAgentMemorySnapshot,
+  parseDeviceRoster,
+  parseMemoryCommand,
   type AgentMemorySnapshot,
+  type DeviceRosterPayload,
+  type MemoryCommand,
+  type PreferenceProfilePayload,
   type RelayEnvelope,
   type SnapshotPayload,
 } from '../agent/protocol';
@@ -20,24 +25,101 @@ interface UseAgentBridgeOptions {
   studyToken?: string;
   plannerCpMemoryLimit?: number;
   guiAdaptationEnabled?: boolean;
+  /** A quick-demo card is running; see `SnapshotPayload.narrateAdaptations`. */
+  narrateAdaptations?: boolean;
+  /** Voice-mode demo session; see `SnapshotPayload.spokenBrevity`. */
+  spokenBrevity?: boolean;
+  /**
+   * Preference memory to open the session with, or null for none. Sent on every
+   * snapshot; the agent applies each revision once, so re-sending is a no-op
+   * and cannot undo a removal the visitor made since.
+   */
+  preferenceProfile?: PreferenceProfilePayload | null;
+  /**
+   * May return a promise, and the reply is held until it settles.
+   *
+   * The host uses that to land a GUI change with the sentence that describes
+   * it: the agent sends its narration first and the tool call immediately
+   * after, but speech takes a beat to start while a tool call applies in
+   * milliseconds. The agent's request timeout is 12s and it waits for playback
+   * to COMPLETE before planning again, so a hold of a second or two costs a
+   * turn nothing.
+   */
   onToolCall: (
     toolName: string,
     params: Record<string, unknown>,
     context?: ToolApplyContext
-  ) => UISpec | null | void;
-  onAgentMessage: (text: string) => void;
+  ) => UISpec | null | void | Promise<UISpec | null | void>;
+  onAgentMessage: (text: string, category?: string | null) => void;
   onSessionEnd: () => void;
   enabled?: boolean;
+  /**
+   * Raw speech captured by a paired phone. Raw on purpose: the short-utterance
+   * filter, the `voice` source tag and the study logging all live on the host,
+   * so a companion transcript must enter through the same funnel as the kiosk's
+   * own — never a second one.
+   */
+  onCompanionTranscript?: (payload: { text: string; durationMs: number }) => void;
+  /** Raw playback report from the phone; the host still owns the replay rule. */
+  onCompanionPlaybackComplete?: (payload: { id: string | null; interrupted: boolean }) => void;
+  /**
+   * A phone announced itself. This, not a presence edge, is what triggers the
+   * config push — see the note on `companion.hello` in the relay.
+   */
+  onCompanionHello?: () => void;
+  /** The phone asking to take voice, or hand it back. */
+  onCompanionClaim?: (claimed: boolean) => void;
+  /**
+   * The phone asking to change preference memory. Routed through the host like
+   * every other companion frame: the phone never addresses the agent, so the
+   * write still leaves from the one socket that was ever allowed to make it.
+   */
+  onCompanionMemoryCommand?: (command: MemoryCommand) => void;
 }
 
 interface UseAgentBridgeResult {
   sendUserMessageToAgent: (text: string, stage: Stage) => void;
   sendSessionResetToAgent: (reason?: string) => void;
   sendVoiceModeChange: (enabled: boolean) => void;
+  sendConversationLanguage: (language: string) => void;
+  /**
+   * Remove one preference from the agent's memory, or put one back.
+   *
+   * Returns false when the frame could not be sent — the socket reconnects on a
+   * flat timer, and a removal dropped into that window must be distinguishable
+   * from one the agent simply has not echoed yet.
+   */
+  sendPreferenceDelete: (preferenceId: string) => boolean;
+  sendPreferenceRestore: (preferenceId: string) => boolean;
+  /** Withdraw everything at once, for clearing between visitors. */
+  sendPreferenceClear: () => boolean;
+  /**
+   * Push a profile mid-session, rather than waiting for the next snapshot to
+   * carry it. The agent applies a revision once, so this and the ride-along
+   * payload cannot double-apply the same load.
+   */
+  sendPreferenceProfileLoad: (profile: PreferenceProfilePayload) => boolean;
   sendTtsPlaybackComplete: (info?: {
     interrupted?: boolean;
     messageId?: string | null;
   }) => void;
+  /** Hand an utterance to the paired phone instead of speaking it here. */
+  sendCompanionSpeak: (item: { id: string | null; text: string; stop?: boolean }) => void;
+  /** Push the phone everything it needs that only the host knows. */
+  sendCompanionConfig: (config: {
+    language: string;
+    transcriptionPrompt: string | null;
+    listening: boolean;
+  }) => void;
+  /**
+   * True while a phone is attached to this session.
+   *
+   * Read it as a fact about the phone ONLY while `isConnected` is also true.
+   * The host's own relay socket reconnects on a flat 1200ms timer, and presence
+   * is unavailable exactly while that is happening — an absent `companionActive`
+   * during a host reconnect means "unknown", not "the phone left".
+   */
+  companionActive: boolean;
   isConnected: boolean;
   isJoined: boolean;
   joinedSessionId: string | null;
@@ -46,6 +128,12 @@ interface UseAgentBridgeResult {
   agentStatusSupported: boolean;
   /** Latest preference memory / workflow navigation state, or null before the agent publishes one. */
   agentMemory: AgentMemorySnapshot | null;
+  /**
+   * Who is attached to this session. Null until the first roster lands, and
+   * always null outside the demo — the relay does not send this envelope to a
+   * study session at all.
+   */
+  deviceRoster: { roster: DeviceRosterPayload; atMs: number } | null;
 }
 
 type AgentActivityPhase = 'idle' | 'planning' | 'executing';
@@ -102,18 +190,32 @@ export function useAgentBridge({
   studyToken,
   plannerCpMemoryLimit = 10,
   guiAdaptationEnabled = true,
+  narrateAdaptations = false,
+  spokenBrevity = false,
+  preferenceProfile = null,
   onToolCall,
   onAgentMessage,
   onSessionEnd,
   enabled = true,
+  onCompanionTranscript,
+  onCompanionPlaybackComplete,
+  onCompanionHello,
+  onCompanionClaim,
+  onCompanionMemoryCommand,
 }: UseAgentBridgeOptions): UseAgentBridgeResult {
   const [isConnected, setIsConnected] = useState(false);
   const [isJoined, setIsJoined] = useState(false);
   const [joinedSessionId, setJoinedSessionId] = useState<string | null>(null);
+  const [companionActive, setCompanionActive] = useState(false);
   const [connectedAgents, setConnectedAgents] = useState<Array<{ id: string; name: string }>>([]);
   const [agentStatuses, setAgentStatuses] = useState<Record<string, AgentActivityPhase>>({});
   const [agentStatusSupported, setAgentStatusSupported] = useState(false);
   const [agentMemory, setAgentMemory] = useState<AgentMemorySnapshot | null>(null);
+  /** Demo-only; a study session never receives `relay.devices`. */
+  const [deviceRoster, setDeviceRoster] = useState<{
+    roster: DeviceRosterPayload;
+    atMs: number;
+  } | null>(null);
 
   const wsRef = useRef<WebSocket | null>(null);
   const reconnectTimerRef = useRef<number | null>(null);
@@ -128,10 +230,34 @@ export function useAgentBridge({
     toolSchema,
     plannerCpMemoryLimit,
     guiAdaptationEnabled,
+    narrateAdaptations,
+    spokenBrevity,
+    preferenceProfile,
     onToolCall,
     onAgentMessage,
     onSessionEnd,
   });
+
+  // Held in their own refs rather than in `latestRef` so the two consumers of
+  // that object (which is rebuilt on every uiSpec change) stay untouched.
+  const onCompanionTranscriptRef = useRef(onCompanionTranscript);
+  const onCompanionPlaybackCompleteRef = useRef(onCompanionPlaybackComplete);
+  const onCompanionHelloRef = useRef(onCompanionHello);
+  const onCompanionClaimRef = useRef(onCompanionClaim);
+  const onCompanionMemoryCommandRef = useRef(onCompanionMemoryCommand);
+  useEffect(() => {
+    onCompanionTranscriptRef.current = onCompanionTranscript;
+    onCompanionPlaybackCompleteRef.current = onCompanionPlaybackComplete;
+    onCompanionHelloRef.current = onCompanionHello;
+    onCompanionClaimRef.current = onCompanionClaim;
+    onCompanionMemoryCommandRef.current = onCompanionMemoryCommand;
+  }, [
+    onCompanionTranscript,
+    onCompanionPlaybackComplete,
+    onCompanionHello,
+    onCompanionClaim,
+    onCompanionMemoryCommand,
+  ]);
 
   const normalizeCpMemoryLimit = useCallback((value: unknown): number => {
     if (typeof value === 'number' && Number.isFinite(value)) {
@@ -151,6 +277,9 @@ export function useAgentBridge({
       toolSchema,
       plannerCpMemoryLimit,
       guiAdaptationEnabled,
+      narrateAdaptations,
+      spokenBrevity,
+      preferenceProfile,
       onToolCall,
       onAgentMessage,
       onSessionEnd,
@@ -161,6 +290,9 @@ export function useAgentBridge({
     toolSchema,
     plannerCpMemoryLimit,
     guiAdaptationEnabled,
+    narrateAdaptations,
+    spokenBrevity,
+    preferenceProfile,
     onToolCall,
     onAgentMessage,
     onSessionEnd,
@@ -197,7 +329,12 @@ export function useAgentBridge({
       toolSchema: current.toolSchema,
       plannerCpMemoryLimit: normalizeCpMemoryLimit(current.plannerCpMemoryLimit),
       guiAdaptationEnabled: current.guiAdaptationEnabled !== false,
+      // Spread only when on, so a study session's snapshot is byte-identical
+      // to what it was before this field existed.
+      ...(current.narrateAdaptations ? { narrateAdaptations: true } : {}),
+      ...(current.spokenBrevity ? { spokenBrevity: true } : {}),
       stageMeta: STAGE_META,
+      preferenceProfile: current.preferenceProfile ?? null,
     };
   }, [normalizeCpMemoryLimit]);
 
@@ -241,6 +378,10 @@ export function useAgentBridge({
         if (typeof message.payload?.sessionId === 'string' && message.payload.sessionId.trim()) {
           setJoinedSessionId(message.payload.sessionId.trim());
         }
+        // `=== true` because the relay spreads the key in only when a phone is
+        // attached — an absent key is false, and that absence is what keeps the
+        // presence envelope byte-identical in the study conditions.
+        setCompanionActive(message.payload?.companionActive === true);
         return;
       }
 
@@ -304,36 +445,50 @@ export function useAgentBridge({
           return;
         }
 
-        try {
-          const result = applyTool(toolName, (params as Record<string, unknown>) ?? {}, {
-            source: 'agent',
-            reason,
-          });
-          const immediateUiSpec = isUiSpec(result) ? result : undefined;
-          sendEnvelope({
-            type: 'tool.result',
-            replyTo: message.id,
-            payload: {
-              ok: true,
-              toolName,
-              ...(immediateUiSpec ? { uiSpec: sanitizeUiSpecForRelay(immediateUiSpec) } : {}),
-            },
-          });
-        } catch (error) {
-          sendEnvelope({
-            type: 'error',
-            replyTo: message.id,
-            payload: {
-              code: 'TOOL_EXECUTION_FAILED',
-              message: error instanceof Error ? error.message : 'Tool execution failed',
-            },
-          });
-        }
+        /*
+          An async IIFE rather than an async `handleEnvelope`: only this one
+          case can wait, and the envelopes that could arrive while it does —
+          `agent.status`, a `snapshot.get` — neither depend on it nor race it.
+          The agent cannot send a second tool call in the meantime; it awaits
+          this reply before planning again.
+        */
+        void (async () => {
+          try {
+            const result = await applyTool(toolName, (params as Record<string, unknown>) ?? {}, {
+              source: 'agent',
+              reason,
+            });
+            const immediateUiSpec = isUiSpec(result) ? result : undefined;
+            sendEnvelope({
+              type: 'tool.result',
+              replyTo: message.id,
+              payload: {
+                ok: true,
+                toolName,
+                ...(immediateUiSpec ? { uiSpec: sanitizeUiSpecForRelay(immediateUiSpec) } : {}),
+              },
+            });
+          } catch (error) {
+            sendEnvelope({
+              type: 'error',
+              replyTo: message.id,
+              payload: {
+                code: 'TOOL_EXECUTION_FAILED',
+                message: error instanceof Error ? error.message : 'Tool execution failed',
+              },
+            });
+          }
+        })();
         return;
       }
 
       case 'agent.message': {
         const text = message.payload?.text;
+        // Optional, additive: an agent build that names the tool it is
+        // narrating lets the host skip the text classifier. The study build
+        // sends nothing here, and an unrecognised value falls through to the
+        // classifier rather than failing — so this must stay unvalidated.
+        const rawCategory = message.payload?.category;
         if (typeof text !== 'string' || !text.trim()) {
           sendEnvelope({
             type: 'error',
@@ -345,7 +500,51 @@ export function useAgentBridge({
           });
           return;
         }
-        postAgentMessage(text.trim());
+        postAgentMessage(text.trim(), typeof rawCategory === 'string' ? rawCategory : null);
+        return;
+      }
+
+      case 'companion.hello': {
+        onCompanionHelloRef.current?.();
+        return;
+      }
+
+      case 'companion.claim': {
+        onCompanionClaimRef.current?.(message.payload?.claimed === true);
+        return;
+      }
+
+      case 'relay.devices': {
+        const roster = parseDeviceRoster(message.payload);
+        // Stamped here, in the receive callback, so the server's durations can
+        // keep ageing between frames — and so nothing reads the clock in render.
+        if (roster) setDeviceRoster({ roster, atMs: Date.now() });
+        return;
+      }
+
+      case 'companion.memory.command': {
+        // Re-parsed rather than trusted: this crossed a network from a device
+        // paired by photographing a QR code.
+        const command = parseMemoryCommand(message.payload?.command);
+        if (command) onCompanionMemoryCommandRef.current?.(command);
+        return;
+      }
+
+      case 'companion.transcript': {
+        const text = typeof message.payload?.text === 'string' ? message.payload.text : '';
+        const durationMs =
+          typeof message.payload?.durationMs === 'number' && Number.isFinite(message.payload.durationMs)
+            ? message.payload.durationMs
+            : 0;
+        if (text.trim()) onCompanionTranscriptRef.current?.({ text, durationMs });
+        return;
+      }
+
+      case 'companion.playback.complete': {
+        onCompanionPlaybackCompleteRef.current?.({
+          id: typeof message.payload?.id === 'string' ? message.payload.id : null,
+          interrupted: message.payload?.interrupted === true,
+        });
         return;
       }
 
@@ -373,6 +572,7 @@ export function useAgentBridge({
       setAgentStatuses({});
       setAgentStatusSupported(false);
       setAgentMemory(null);
+      setDeviceRoster(null);
       return;
     }
 
@@ -456,6 +656,18 @@ export function useAgentBridge({
         toolSchema: latestRef.current.toolSchema,
         plannerCpMemoryLimit: normalizeCpMemoryLimit(latestRef.current.plannerCpMemoryLimit),
         guiAdaptationEnabled: latestRef.current.guiAdaptationEnabled !== false,
+        ...(latestRef.current.narrateAdaptations ? { narrateAdaptations: true } : {}),
+        /*
+          Sent as a plain boolean, not spread-when-true like the flags above.
+
+          Voice can be turned off mid-session, and `perception.ts` reads an
+          absent field on a state update as "unchanged" — deliberately, so a
+          partial update cannot silence a card. Spreading only the true case
+          would therefore latch this on for the rest of the session. The
+          snapshot above keeps the spread, because there "absent" is read as
+          false and a study session's snapshot stays as it was.
+        */
+        spokenBrevity: latestRef.current.spokenBrevity === true,
       },
     });
   }, [
@@ -465,6 +677,8 @@ export function useAgentBridge({
     toolSchema,
     plannerCpMemoryLimit,
     guiAdaptationEnabled,
+    narrateAdaptations,
+    spokenBrevity,
     sendEnvelope,
     normalizeCpMemoryLimit,
   ]);
@@ -498,6 +712,62 @@ export function useAgentBridge({
   const sendVoiceModeChange = useCallback(
     (enabled: boolean) => {
       sendEnvelope({ type: 'voice.mode', payload: { enabled } });
+    },
+    [sendEnvelope]
+  );
+
+  const sendConversationLanguage = useCallback(
+    (language: string) => {
+      sendEnvelope({ type: 'conversation.language', payload: { language } });
+    },
+    [sendEnvelope]
+  );
+
+  const sendPreferenceDelete = useCallback(
+    (preferenceId: string) => {
+      const trimmed = preferenceId.trim();
+      if (!trimmed) return false;
+      return sendEnvelope({
+        type: 'memory.preference.delete',
+        payload: { preferenceId: trimmed },
+      });
+    },
+    [sendEnvelope]
+  );
+
+  const sendPreferenceRestore = useCallback(
+    (preferenceId: string) => {
+      const trimmed = preferenceId.trim();
+      if (!trimmed) return false;
+      return sendEnvelope({
+        type: 'memory.preference.restore',
+        payload: { preferenceId: trimmed },
+      });
+    },
+    [sendEnvelope]
+  );
+
+  const sendPreferenceClear = useCallback(
+    () => sendEnvelope({ type: 'memory.preference.clear', payload: {} }),
+    [sendEnvelope]
+  );
+
+  const sendPreferenceProfileLoad = useCallback(
+    (profile: PreferenceProfilePayload) =>
+      sendEnvelope({ type: 'memory.profile.load', payload: { preferenceProfile: profile } }),
+    [sendEnvelope]
+  );
+
+  const sendCompanionSpeak = useCallback(
+    (item: { id: string | null; text: string; stop?: boolean }) => {
+      sendEnvelope({ type: 'companion.speak', payload: { ...item } });
+    },
+    [sendEnvelope]
+  );
+
+  const sendCompanionConfig = useCallback(
+    (config: { language: string; transcriptionPrompt: string | null; listening: boolean }) => {
+      sendEnvelope({ type: 'companion.config', payload: { ...config } });
     },
     [sendEnvelope]
   );
@@ -537,7 +807,15 @@ export function useAgentBridge({
     sendUserMessageToAgent,
     sendSessionResetToAgent,
     sendVoiceModeChange,
+    sendConversationLanguage,
+    sendPreferenceDelete,
+    sendPreferenceRestore,
+    sendPreferenceClear,
+    sendPreferenceProfileLoad,
     sendTtsPlaybackComplete,
+    sendCompanionSpeak,
+    sendCompanionConfig,
+    companionActive,
     isConnected,
     isJoined,
     joinedSessionId,
@@ -545,5 +823,6 @@ export function useAgentBridge({
     agentActivityPhase,
     agentStatusSupported,
     agentMemory,
+    deviceRoster,
   };
 }
