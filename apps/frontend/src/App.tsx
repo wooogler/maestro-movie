@@ -15,6 +15,7 @@ import { DemoCompanionPage } from './pages/DemoCompanionPage';
 import { DemoMemoryMirrorPage } from './pages/DemoMemoryMirrorPage';
 import { DemoCardPage } from './pages/DemoCardPage';
 import { DemoCardGalleryPage } from './pages/DemoCardGalleryPage';
+import { AboutPage } from './pages/AboutPage';
 import type { QuickDemoCard } from './study/quickDemoCards';
 import {
   DEFAULT_STUDY_MODE,
@@ -483,6 +484,9 @@ function App() {
                 />
                 {/* The same five links as QR codes, for the presenter's screen. */}
                 <Route path="/demo/cards" element={<DemoCardGalleryPage />} />
+                {/* What the demo is, for anyone who arrives without a presenter.
+                    Needs no session and calls no API. */}
+                <Route path="/about" element={<AboutPage />} />
                 {/* Second-screen mirror for the booth. Opened in its own window; it
                     listens to the booking window rather than joining the relay. */}
                 <Route path="/demo/memory" element={<DemoMemoryMirrorPage />} />

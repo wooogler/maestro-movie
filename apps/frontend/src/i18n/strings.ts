@@ -160,6 +160,8 @@ export interface UiStrings {
   // Demo setup, the first screen a booth visitor sees
   demoSetupTitle: string;
   demoSetupSubtitle: string;
+  /** Link from the setup screen to /about. */
+  aboutDemoLink: string;
   demoModeOn: string;
   accessCodeLabel: string;
   apiKeyLabel: string;
@@ -336,6 +338,7 @@ const EN: UiStrings = {
   demoSetupTitle: 'Demo Setup',
   demoSetupSubtitle:
     'Enter the access code from the presenter, or paste your own OpenAI API key.',
+  aboutDemoLink: 'What is this demo?',
   demoModeOn: 'Demo Mode: On',
   accessCodeLabel: 'Code',
   apiKeyLabel: 'API Key',
@@ -508,6 +511,7 @@ const KO: UiStrings = {
   demoSetupTitle: '데모 설정',
   demoSetupSubtitle:
     '발표자에게 받은 접속 코드를 입력하거나, 본인의 OpenAI API 키를 붙여넣으세요.',
+  aboutDemoLink: '이 데모는 무엇인가요?',
   demoModeOn: '데모 모드: 켜짐',
   accessCodeLabel: '코드',
   apiKeyLabel: 'API 키',

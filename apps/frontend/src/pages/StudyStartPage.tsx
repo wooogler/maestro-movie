@@ -487,6 +487,15 @@ export function StudyStartPage({
                   ? ui.demoSetupSubtitle
                   : 'Select your assigned condition and one scenario before starting.'}
               </p>
+              {demoMode ? (
+                <button
+                  type="button"
+                  onClick={() => navigate('/about')}
+                  className="mt-2 text-sm font-medium text-primary-text underline underline-offset-2 transition-colors hover:text-primary-hover"
+                >
+                  {ui.aboutDemoLink}
+                </button>
+              ) : null}
             </div>
             {/*
               A phone gets one control per row at a comfortable height. On a
