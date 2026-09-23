@@ -82,9 +82,18 @@ export function SeatStage({
                   const isSelected = selectedIds.includes(seat.id);
                   const isOccupied = seat.status !== 'available';
                   const isHighlighted = highlightedIds.has(seat.id);
-                  // Premium seats get a gold tint rather than a gold fill: solid gold
-                  // is the agent-highlight border/ring below, and it has to stay
-                  // readable when the agent highlights a premium seat.
+                  // Seats follow the booking flow's tile idiom: every tile carries an
+                  // edge in --app-border and the FILL says what the tile is.
+                  // DateStage.tsx:185-186 is the reference — available is
+                  // bg-dark-light, unavailable is bg-dark-border, both edged.
+                  // Seats had no edge at all, which is why an available standard
+                  // seat was invisible: its fill is the container's own fill.
+                  // The edge is drawn with `inset-ring-*` rather than `border-*`
+                  // because the agent's full-tuning highlight owns border-color
+                  // (`border-accent-line border-2`) and its default-profile
+                  // highlight owns --tw-ring-shadow (`ring-[4px]`). `inset-ring-*`
+                  // is a third slot, so no state can cancel the gold mark.
+                  // Premium is a lift, never a gold fill: gold is the agent's mark.
                   const isPremium = seat.type === 'premium';
 
                   const highlightClass = isHighlighted
@@ -101,17 +110,17 @@ export function SeatStage({
                       title={seat.label}
                       style={{ gridColumn: `${seat.number} / span 1` }}
                       className={`
-                        relative aspect-square min-w-0 w-full rounded-t-md text-[10px] transition-[color,background-color,border-color,opacity] sm:rounded-t-lg sm:text-xs
+                        relative aspect-square min-w-0 w-full rounded-t-md text-[10px] transition-[color,background-color,border-color,opacity] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary sm:rounded-t-lg sm:text-xs
                         ${
                           isOccupied
-                            ? 'cursor-not-allowed bg-dark-light text-fg-muted font-normal'
+                            ? 'cursor-not-allowed bg-dark-border text-fg-muted font-normal inset-ring-1 inset-ring-dark-border'
                             : isSelected
                             ? hasRestoredSelection
-                              ? 'border border-primary bg-primary/12 text-fg-strong font-semibold'
+                              ? 'inset-ring-1 inset-ring-primary bg-primary/12 text-fg-strong font-semibold'
                               : 'bg-primary text-primary-fg font-semibold'
                             : isPremium
-                            ? 'bg-dark-lighter text-fg-strong font-semibold ring-1 ring-inset ring-fg-faint/45 hover:bg-dark-border'
-                            : 'bg-dark-light text-fg-strong font-semibold hover:bg-dark-lighter'
+                            ? 'bg-dark-lighter text-fg-strong font-semibold inset-ring-1 inset-ring-fg-faint/45 hover:inset-ring-fg-faint'
+                            : 'bg-dark-light text-fg-strong font-semibold inset-ring-1 inset-ring-dark-border hover:bg-dark-lighter'
                         }
                         ${highlightClass}
                       `}
@@ -132,11 +141,11 @@ export function SeatStage({
       {/* Legend */}
       <div className="flex flex-wrap justify-center gap-x-4 gap-y-2 text-xs text-fg-muted sm:gap-x-6 sm:text-sm">
         <div className="flex items-center gap-2">
-          <div className="w-4 h-4 rounded-t bg-dark-light" />
+          <div className="w-4 h-4 rounded-t bg-dark-light inset-ring-1 inset-ring-dark-border" />
           <span>{s.legendStandard}</span>
         </div>
         <div className="flex items-center gap-2">
-          <div className="w-4 h-4 rounded-t bg-dark-lighter ring-1 ring-inset ring-fg-faint/45" />
+          <div className="w-4 h-4 rounded-t bg-dark-lighter inset-ring-1 inset-ring-fg-faint/45" />
           <span>{s.legendPremium}</span>
         </div>
         <div className="flex items-center gap-2">
@@ -144,7 +153,7 @@ export function SeatStage({
           <span>{s.legendSelected}</span>
         </div>
         <div className="flex items-center gap-2">
-          <div className="relative h-4 w-4 rounded-t bg-dark-border">
+          <div className="relative h-4 w-4 rounded-t bg-dark-border inset-ring-1 inset-ring-dark-border">
             <span className="absolute left-[18%] right-[18%] top-1/2 h-px -translate-y-1/2 bg-fg-faint/70" />
           </div>
           <span>{s.legendOccupied}</span>
