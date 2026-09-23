@@ -61,17 +61,20 @@ function endTimeOf(time: string, minutes: number): { endTime: string; displayEnd
   return { endTime, displayEndTime: formatTime12Hour(endTime) };
 }
 
-/** Street Fighter at MJR Troy on Saturday 7 November: sixteen shows on three screens. */
-const SF_TROY_NOV7: Array<[time: string, format: Showing['format'], screen: number]> = [
-  ['10:50', '3D', 7], ['10:55', 'Standard', 1], ['11:05', 'IMAX', 6],
-  ['13:25', 'Standard', 1], ['13:55', '3D', 7], ['14:05', 'IMAX', 6],
-  ['15:50', 'Standard', 1], ['17:00', '3D', 7], ['17:10', 'IMAX', 6],
-  ['18:20', 'Standard', 1], ['20:10', 'IMAX', 6], ['20:10', '3D', 7],
-  ['20:45', 'Standard', 1], ['23:15', 'Standard', 1], ['23:15', 'IMAX', 6],
-  ['23:15', '3D', 7],
+/**
+ * Street Fighter at MJR Troy on Saturday 7 November: sixteen shows on three
+ * screens, with the seats each has left out of 88.
+ */
+const SF_TROY_NOV7: Array<[time: string, format: Showing['format'], screen: number, available: number]> = [
+  ['10:50', '3D', 7, 40], ['10:55', 'Standard', 1, 40], ['11:05', 'IMAX', 6, 28],
+  ['13:25', 'Standard', 1, 32], ['13:55', '3D', 7, 14], ['14:05', 'IMAX', 6, 22],
+  ['15:50', 'Standard', 1, 24], ['17:00', '3D', 7, 12], ['17:10', 'IMAX', 6, 12],
+  ['18:20', 'Standard', 1, 12], ['20:10', 'IMAX', 6, 12], ['20:10', '3D', 7, 12],
+  ['20:45', 'Standard', 1, 12], ['23:15', 'Standard', 1, 21], ['23:15', 'IMAX', 6, 12],
+  ['23:15', '3D', 7, 15],
 ];
 
-const SF_TROY_SHOWINGS: Showing[] = SF_TROY_NOV7.map(([time, format, screen]) => ({
+const SF_TROY_SHOWINGS: Showing[] = SF_TROY_NOV7.map(([time, format, screen, available]) => ({
   id: `s_m1_t5_20261107_${time.replace(':', '')}_s${screen}`,
   movieId: 'm1',
   theaterId: 't5',
@@ -79,7 +82,7 @@ const SF_TROY_SHOWINGS: Showing[] = SF_TROY_NOV7.map(([time, format, screen]) =>
   date: '2026-11-07',
   time,
   format,
-  availableSeats: 88,
+  availableSeats: available,
   totalSeats: 88,
   ...endTimeOf(time, STREET_FIGHTER_MINUTES),
 }));
@@ -133,25 +136,29 @@ const distanceLabels = [
   { itemId: 't2', value: 'Bel Air Luxury Cinema · 9 mi · free parking' },
 ];
 
+const KLARA_WORKFLOW = { movie: { id: 'm2', title: 'Klara and the Sun' } };
+
 /**
- * Quick card 2's sentence, played out one move per turn the way the planner
- * does it: surface the two missing fields, filter twice, then sort.
+ * Quick card 2's sentence, played out one move at a time the way the planner
+ * does it: surface the two missing fields, then filter twice. No sort — both
+ * limits are hard, and the planner sorts only for a soft preference on an
+ * ordered field ("closer is better"), which this sentence does not state.
+ * Klara and the Sun plays at all five cinemas (as do Wildwood and Aang), so
+ * the list starts full and every drop is visible.
  */
 export function heroSteps(): FigureStep[] {
   const base = generateTheaterSpec(KLARA_THEATERS, 'm2') as UISpec;
   const labelled = applyAugment(base, distanceLabels);
   const near = applyFilter(labelled, { field: 'distanceMiles', operator: 'lte', value: 15 });
   const freeParking = applyFilter(near, { field: 'amenities', operator: 'contains', value: 'Free Parking' });
-  const sorted = applySort(freeParking, { field: 'distanceMiles', order: 'asc' });
   return withWorkflow(
     [
       { kind: 'stage', spec: base },
       { kind: 'augment', spec: labelled },
       { kind: 'filter', spec: near },
       { kind: 'filter', spec: freeParking },
-      { kind: 'sort', spec: sorted },
     ],
-    { movie: { id: 'm2', title: 'Klara and the Sun' } }
+    KLARA_WORKFLOW
   );
 }
 
@@ -195,27 +202,41 @@ export function filterSteps(): FigureStep[] {
   );
 }
 
-/** Sort: nearest first — legible only because the miles were added first. */
+/**
+ * Sort: "the closer, the better" — a soft preference on an ordered field.
+ * Legible only because the miles were added first.
+ */
 export function sortSteps(): FigureStep[] {
   const labelled = applyAugment(generateTheaterSpec(KLARA_THEATERS, 'm2') as UISpec, distanceLabels);
-  return [
-    { kind: 'stage', spec: labelled },
-    { kind: 'sort', spec: applySort(labelled, { field: 'distanceMiles', order: 'asc' }) },
-  ];
+  return withWorkflow(
+    [
+      { kind: 'stage', spec: labelled },
+      { kind: 'sort', spec: applySort(labelled, { field: 'distanceMiles', order: 'asc' }) },
+    ],
+    KLARA_WORKFLOW
+  );
 }
 
 /** Highlight: the one pair in the middle of row E, marked where it already was. */
 export function highlightSteps(): FigureStep[] {
   const base = generateSeatSpec(EMAGINE_SEATS) as UISpec;
-  return [
-    { kind: 'stage', spec: base },
+  return withWorkflow(
+    [
+      { kind: 'stage', spec: base },
+      {
+        kind: 'highlight',
+        spec: applyHighlight(base, {
+          itemIds: [`${EMAGINE_SHOWING_ID}-E5`, `${EMAGINE_SHOWING_ID}-E6`],
+        }),
+      },
+    ],
     {
-      kind: 'highlight',
-      spec: applyHighlight(base, {
-        itemIds: [`${EMAGINE_SHOWING_ID}-E5`, `${EMAGINE_SHOWING_ID}-E6`],
-      }),
-    },
-  ];
+      ...KLARA_WORKFLOW,
+      theater: { id: 't4', name: 'Emagine Royal Oak' },
+      date: { id: '2026-11-04', date: '2026-11-04' },
+      showing: { id: EMAGINE_SHOWING_ID, time: '19:10', displayTime: '7:10 PM' },
+    }
+  );
 }
 
 /** The breadcrumb reads the earlier choices off `state.workflow`. */
@@ -231,14 +252,22 @@ function withWorkflow(steps: FigureStep[], workflow: Record<string, unknown>): F
 // =============================================================================
 
 /*
-  One story for both memory figures, and it is a real dead end in this world:
-  Redford Theatre shows Klara and the Sun only at 2:15 and 7:35 PM on Tuesday
-  and 2:25 and 8:00 PM on Saturday, so "starts at 9 PM or later" fails at every
-  date Redford has. The nearest earlier step that still has alternatives is
-  therefore the theater, not the date.
+  One story for both memory figures, and it is a real dead end in this world
+  that the planner's own rules route the way the figures show. Redford Theatre
+  shows Clayface on one day only, Friday 6 November, at 2:10 and 7:25 PM, so
+  "starts at 9 PM or later" fails at the showtime step. The planner picks the
+  nearest earlier step whose alternative count is positive: the date step has
+  none (Redford has no other date for Clayface), so it is the theater — two
+  steps back, which is what carries a backtrackContinuation and the Backtracking
+  banner. Bel Air (9 mi) and Emagine (14.2 mi) both have a 10:30 PM Clayface
+  that Friday, so going back really does open a way through.
+
+  The conflict description says only what the agent can see from Friday's
+  showtime step, and the dead end's reason repeats it verbatim, because that is
+  what the agent does when it records one.
 */
 
-const AT = '2026-11-03T23:40:00.000Z';
+const AT = '2026-11-06T23:40:00.000Z';
 
 const LATE_EVENING = {
   id: 'prf_late_evening',
@@ -259,10 +288,22 @@ const LIKES_REDFORD = {
   relevantStages: ['theater'],
 };
 
-const KLARA = { id: 'm2', title: 'Klara and the Sun' };
+const CLAYFACE = { id: 'm5', title: 'Clayface' };
 const REDFORD = { id: 't3', name: 'Redford Theatre' };
+/** The committed date is the whole calendar item, so the graph prints its displayText. */
+const FRIDAY = {
+  id: '2026-11-06',
+  date: '2026-11-06',
+  dayOfWeek: 'Fri',
+  displayText: 'Nov 6 (Fri)',
+  available: true,
+  isToday: false,
+};
 
-/** At the showtime step, with Redford chosen: nothing starts late enough. */
+const CONFLICT_DESCRIPTION = 'Redford’s last Clayface on Friday starts at 7:25 PM — nothing at 9 PM or later.';
+const SCOPE = { stage: 'time', movie: CLAYFACE.title, theater: REDFORD.name, date: FRIDAY.id };
+
+/** At the showtime step, with Redford and Friday chosen: nothing starts late enough. */
 export const CONFLICT_SNAPSHOT: AgentMemorySnapshot = {
   updatedAt: AT,
   reason: 'pending-conflict:planner-respond-conflict',
@@ -270,22 +311,18 @@ export const CONFLICT_SNAPSHOT: AgentMemorySnapshot = {
   preferences: [LATE_EVENING, LATE_DISTANCE, LIKES_REDFORD],
   deadEnds: [],
   attemptedBranches: [],
-  committedWorkflow: {
-    movie: KLARA,
-    theater: REDFORD,
-    date: { id: '2026-11-03', date: '2026-11-03' },
-  },
+  committedWorkflow: { movie: CLAYFACE, theater: REDFORD, date: FRIDAY },
   pendingConflict: {
     preferenceIds: [LATE_EVENING.id],
-    description: 'Redford’s last Klara and the Sun on Tuesday starts at 7:35 PM, and on Saturday at 8:00 PM.',
-    scope: { stage: 'time', movie: KLARA.title, theater: REDFORD.name, date: '2026-11-03' },
+    description: CONFLICT_DESCRIPTION,
+    scope: SCOPE,
     createdAt: AT,
   },
   backtrackContinuation: null,
   stageBindings: [
     {
       stage: 'theater',
-      parentContextKey: 'movie:m2',
+      parentContextKey: 'movie:m5',
       filters: [{ field: 'distanceMiles', operator: 'lte', value: 15, preferenceIds: [LATE_DISTANCE.id] }],
       highlight: null,
       updatedAt: AT,
@@ -295,35 +332,40 @@ export const CONFLICT_SNAPSHOT: AgentMemorySnapshot = {
   revokedAdaptations: [],
 };
 
-/** The visitor said yes: the agent is on its way back to the theater step. */
+/**
+ * The visitor said yes. The first step back lands on the date step; going back
+ * clears only the showtime and seats, so Friday stays committed and the date
+ * the agent is leaving is recorded as tried.
+ */
 export const BACKTRACK_SNAPSHOT: AgentMemorySnapshot = {
   ...CONFLICT_SNAPSHOT,
   reason: 'dead-end-recorded',
   stage: 'date',
-  committedWorkflow: { movie: KLARA, theater: REDFORD },
   pendingConflict: null,
   backtrackContinuation: { targetStage: 'theater' },
   deadEnds: [
     {
       id: 'dead_7f3a90c2e1',
       preferenceIds: [LATE_EVENING.id],
-      scope: { stage: 'time', movie: KLARA.title, theater: REDFORD.name, date: '2026-11-03' },
-      reason: 'No Klara and the Sun at Redford starts at 9 PM or later.',
+      scope: SCOPE,
+      reason: CONFLICT_DESCRIPTION,
       createdAt: AT,
       lastSeenAt: AT,
       count: 1,
     },
   ],
   attemptedBranches: [
-    { stage: 'date', parentContextKey: 'movie:m2|theater:t3', itemId: '2026-11-03', createdAt: AT },
+    { stage: 'date', parentContextKey: 'movie:m5|theater:t3', itemId: FRIDAY.id, createdAt: AT },
   ],
 };
 
 /**
  * What Forget does to the snapshot, minus the agent: the preference moves to
  * the Forgotten list, leaves the conflict it was named in (clearing it if it
- * was the only one), and takes every filter it justified with it. The real
- * agent also replans afterwards; this page has no agent to do that.
+ * was the only one), deletes the dead ends it caused, and takes every filter
+ * and highlight it justified with it — dropping a stage's record once nothing
+ * is left on it, as the agent does. The real agent also replans afterwards;
+ * this page has no agent to do that.
  */
 export function forgetPreference(snapshot: AgentMemorySnapshot, id: string): AgentMemorySnapshot {
   const removed = snapshot.preferences.find((item) => item.id === id);
@@ -338,10 +380,13 @@ export function forgetPreference(snapshot: AgentMemorySnapshot, id: string): Age
         ? { ...snapshot.pendingConflict, preferenceIds: conflictIds }
         : null,
     deadEnds: snapshot.deadEnds.filter((deadEnd) => !deadEnd.preferenceIds.includes(id)),
-    stageBindings: snapshot.stageBindings.map((binding) => ({
-      ...binding,
-      filters: binding.filters.filter((filter) => !filter.preferenceIds.includes(id)),
-    })),
+    stageBindings: snapshot.stageBindings
+      .map((binding) => ({
+        ...binding,
+        filters: binding.filters.filter((filter) => !filter.preferenceIds.includes(id)),
+        highlight: binding.highlight?.preferenceIds.includes(id) ? null : binding.highlight,
+      }))
+      .filter((binding) => binding.filters.length > 0 || binding.highlight !== null),
   };
 }
 

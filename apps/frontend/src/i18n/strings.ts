@@ -540,7 +540,7 @@ const KO: UiStrings = {
   quickCardMicNote: '휴대폰이 마이크 권한을 물어봅니다. 주변이 시끄러우면 타이핑으로 하셔도 됩니다.',
   quickCardNoRecording: '이 데모에서는 아무것도 기록되지 않습니다.',
   quickCardUnknownLink: '이 링크에는 데모 카드가 지정되어 있지 않습니다.',
-  quickCardCodePrompt: '발표자에게 받은 액세스 코드를 입력하세요.',
+  quickCardCodePrompt: '발표자에게 받은 접속 코드를 입력하세요.',
   quickCardFailed: '데모를 시작하지 못했습니다',
   quickCardFullDemoLink: '전체 데모로 시작하기',
   quickCardGalleryTitle: '퀵 데모 카드',

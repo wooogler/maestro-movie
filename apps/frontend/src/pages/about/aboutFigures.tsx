@@ -15,7 +15,7 @@
 
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { StageRenderer } from '../../renderer';
-import type { UISpec } from '../../spec';
+import { clearModification, selectItem, toggleItem, type UISpec } from '../../spec';
 import { SelectionBreadcrumb } from '../../components/chat/SelectionBreadcrumb';
 import { UserMessage } from '../../components/chat/UserMessage';
 import { AgentMessage } from '../../components/chat/AgentMessage';
@@ -151,11 +151,15 @@ function GuiCard({
   label,
   context,
   speaking = false,
+  onSelect = noop,
+  onToggle = noop,
 }: {
   spec: UISpec;
   label: string;
   context: string;
   speaking?: boolean;
+  onSelect?: (id: string) => void;
+  onToggle?: (id: string) => void;
 }) {
   const frameClass = speaking
     ? 'border-accent-line/70 shadow-[0_0_0_3px_var(--app-accent-glow)]'
@@ -178,8 +182,8 @@ function GuiCard({
         <div className="rounded-2xl border border-dark-border bg-dark-light p-4">
           <StageRenderer
             spec={spec}
-            onSelect={noop}
-            onToggle={noop}
+            onSelect={onSelect}
+            onToggle={onToggle}
             onNext={noop}
             onBack={noop}
             onConfirm={noop}
@@ -275,17 +279,44 @@ export function AdaptationFigure({
 }) {
   const { ref, index, replay, canReplay } = useStepPlayback(steps.length, 1700);
   const step = steps[index];
+  /*
+    A visitor's tap, kept only for the step it was made on, so the next step of
+    the script (or a replay) starts from the script again. It does what
+    ChatPage's handleSelect does: a tap on an option a filter is hiding clears
+    that stage's filters first, then selects it.
+  */
+  const [tapped, setTapped] = useState<{ index: number; spec: UISpec } | null>(null);
+  const tappedHere = tapped !== null && tapped.index === index;
+  const spec = tappedHere ? tapped.spec : step.spec;
+  const select = (id: string) => {
+    const hidden = !spec.visibleItems.some((item) => item.id === id);
+    const base = hidden ? clearModification(spec, 'filter') : spec;
+    setTapped({ index, spec: selectItem(base, id) });
+  };
+  const toggle = (id: string) => setTapped({ index, spec: toggleItem(spec, id) });
 
   return (
     <div ref={ref} className="flex flex-col items-center gap-3">
+      {/* A tap is the visitor's move, so, as on the booking page, the card
+          it makes is headed with the stage itself, not the agent's line. */}
       <GuiCard
-        spec={step.spec}
-        label={stepLabel(step)}
-        context={index === 0 ? step.spec.description ?? '' : sentences[index - 1] ?? ''}
+        spec={spec}
+        label={tappedHere ? spec.title : stepLabel(step)}
+        context={
+          tappedHere || index === 0 ? spec.description ?? '' : sentences[index - 1] ?? ''
+        }
+        onSelect={select}
+        onToggle={toggle}
       />
       {canReplay ? (
         <div className="flex w-full justify-end" style={{ maxWidth: `${GUI_CARD_WIDTH_PX}px` }}>
-          <ReplayButton label={replayLabel} onClick={replay} />
+          <ReplayButton
+            label={replayLabel}
+            onClick={() => {
+              setTapped(null);
+              replay();
+            }}
+          />
         </div>
       ) : null}
     </div>
