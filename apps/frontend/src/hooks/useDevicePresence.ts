@@ -1,6 +1,7 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import {
   describeDevicePresence,
+  sameDevicePresenceVerdict,
   type DeviceRoster,
   type DevicePresenceStatus,
 } from '../study/devicePresence';
@@ -24,6 +25,13 @@ const TICK_MS = 1_000;
  * The tick is not decoration: "dropped" is a claim about elapsed time, so
  * without something re-rendering, a phone that goes quiet stays green until an
  * unrelated render wanders past.
+ *
+ * But the tick must not be a render. This hook sits in the booking page, which
+ * is the largest component in the app, and an unconditional `setNowMs` once a
+ * second re-rendered all of it — one forced layout and three style recalcs per
+ * second on a screen where nothing had changed, measured on the lab tablet.
+ * So the clock advances inside the interval, where it is cheap, and the page
+ * is only told about it when the verdict it would be shown actually differs.
  */
 export function useDevicePresence(args: {
   /** False when this session can have no phone; the caller renders nothing. */
@@ -39,10 +47,30 @@ export function useDevicePresence(args: {
   // reads the wall clock returns something different each time it happens to
   // run, which is exactly what an elapsed-time verdict must not do.
   const [nowMs, setNowMs] = useState(() => Date.now());
-  useEffect(() => {
-    const timer = window.setInterval(() => setNowMs(Date.now()), TICK_MS);
-    return () => window.clearInterval(timer);
-  }, []);
+  const status = describeDevicePresence({ ...args, nowMs });
 
-  return describeDevicePresence({ ...args, nowMs });
+  // What the caller was last shown, and from which inputs. The interval reads
+  // these rather than closing over render values so that it never has to be
+  // re-created — and so never resets its phase — when a roster arrives.
+  const shownRef = useRef({ args, status });
+  useEffect(() => {
+    shownRef.current = { args, status };
+  });
+
+  const { pairable } = args;
+  useEffect(() => {
+    // Nothing can ever be dropped where nothing can be paired, so a study
+    // session without a phone does not need a clock at all.
+    if (!pairable) return;
+    const timer = window.setInterval(() => {
+      const now = Date.now();
+      const shown = shownRef.current;
+      const next = describeDevicePresence({ ...shown.args, nowMs: now });
+      if (sameDevicePresenceVerdict(shown.status, next)) return;
+      setNowMs(now);
+    }, TICK_MS);
+    return () => window.clearInterval(timer);
+  }, [pairable]);
+
+  return status;
 }

@@ -12,6 +12,7 @@ import {
   DEVICE_HEARTBEAT_STALE_MS,
   DEVICE_PRESENCE_GRACE_MS,
   describeDevicePresence,
+  sameDevicePresenceVerdict,
   type DevicePresenceInput,
   type DeviceRoster,
 } from './devicePresence';
@@ -152,6 +153,49 @@ section('5. A SWAPPED PHONE — visible under an otherwise flat "attached"');
 {
   const swapped = describeDevicePresence(base({ roster: withCompanion(0, 2) }));
   check('the attach count rides along', swapped.kind === 'attached' && swapped.attachCount === 2);
+}
+
+section('6. A STABLE VERDICT IS NOT A RENDER — the once-a-second clock stays quiet');
+{
+  // The hook that drives this runs in the booking page. Re-rendering that page
+  // every second for a phone that is simply still there was a measurable cost
+  // on the tablet, so the clock only wakes the page when the answer changes.
+  const attachedNow = describeDevicePresence(base());
+  const attachedLater = describeDevicePresence(base({ nowMs: NOW + 1_000 }));
+  check('an attached phone a second later is the same verdict', sameDevicePresenceVerdict(attachedNow, attachedLater));
+
+  const waitingNow = describeDevicePresence(base({ roster: withoutCompanion(null, 0) }));
+  const waitingLater = describeDevicePresence(base({ roster: withoutCompanion(null, 0), nowMs: NOW + 60_000 }));
+  check('a phone that never attached stays the same verdict for a minute', sameDevicePresenceVerdict(waitingNow, waitingLater));
+
+  // A silent phone crosses the stale threshold between one tick and the next:
+  // that is precisely the moment the page must hear about.
+  const beating = describeDevicePresence(base({ roster: withCompanion(DEVICE_HEARTBEAT_STALE_MS - 500) }));
+  const stale = describeDevicePresence(
+    base({ roster: withCompanion(DEVICE_HEARTBEAT_STALE_MS - 500), nowMs: NOW + 1_000 })
+  );
+  check('crossing from attached to dropped is a different verdict', !sameDevicePresenceVerdict(beating, stale));
+
+  const grace = describeDevicePresence(base({ roster: withoutCompanion(2_500) }));
+  const left = describeDevicePresence(base({ roster: withoutCompanion(2_500), nowMs: NOW + 1_000 }));
+  check('leaving the grace window is a different verdict', !sameDevicePresenceVerdict(grace, left));
+  check(
+    'a different reason for the same kind is a different verdict',
+    !sameDevicePresenceVerdict({ kind: 'checking', reason: 'grace' }, { kind: 'checking', reason: 'link-down' })
+  );
+
+  // The card prints the outage to the second and the presenter expects it to
+  // count, so a drop that has aged a whole second is new; one that has aged
+  // less is not.
+  const gone = describeDevicePresence(base({ roster: withoutCompanion(30_000) }));
+  const goneSoon = describeDevicePresence(base({ roster: withoutCompanion(30_000), nowMs: NOW + 400 }));
+  const goneLater = describeDevicePresence(base({ roster: withoutCompanion(30_000), nowMs: NOW + 1_000 }));
+  check('a drop that aged within the same second is the same verdict', sameDevicePresenceVerdict(gone, goneSoon));
+  check('a drop that aged a full second is a different verdict', !sameDevicePresenceVerdict(gone, goneLater));
+  check(
+    'a swapped phone under a flat attached is a different verdict',
+    !sameDevicePresenceVerdict(attachedNow, describeDevicePresence(base({ roster: withCompanion(0, 2) })))
+  );
 }
 
 if (failures > 0) {

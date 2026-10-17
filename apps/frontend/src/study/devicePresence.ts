@@ -133,3 +133,32 @@ export function describeDevicePresence(
     forMs: missingForMs,
   };
 }
+
+/**
+ * Whether two verdicts would show a presenter the same thing.
+ *
+ * The clock-driven hook asks this once a second, and only re-renders its
+ * caller on a "no". A verdict is the same when its kind and whatever the card
+ * prints alongside it agree: the reason for a `checking` or a `dropped`, the
+ * message of an `ended`, the attach count, and — for a drop — the duration to
+ * the second, because that is the resolution the card formats it at and the
+ * counter is expected to keep moving while the phone is away. A drop that
+ * merely aged within the same second is still the same verdict.
+ */
+export function sameDevicePresenceVerdict(
+  a: DevicePresenceStatus,
+  b: DevicePresenceStatus
+): boolean {
+  if (a.kind !== b.kind) return false;
+  if (a.kind === 'ended' && b.kind === 'ended') return a.message === b.message;
+  if (a.kind === 'checking' && b.kind === 'checking') return a.reason === b.reason;
+  if (a.kind === 'attached' && b.kind === 'attached') return a.attachCount === b.attachCount;
+  if (a.kind === 'dropped' && b.kind === 'dropped') {
+    return (
+      a.reason === b.reason &&
+      a.attachCount === b.attachCount &&
+      Math.floor(a.forMs / 1000) === Math.floor(b.forMs / 1000)
+    );
+  }
+  return true;
+}
