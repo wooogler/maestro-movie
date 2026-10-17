@@ -62,9 +62,35 @@ const start = async () => {
     // Serve static frontend files in production
     if (process.env.NODE_ENV === 'production') {
       const frontendPath = path.join(__dirname, '../../frontend/dist');
+      /*
+        Two cache policies, chosen by path.
+
+        Vite writes every bundle under /assets/ with a content hash in its
+        name, so a given URL can only ever hold one set of bytes: those may be
+        cached for a year and marked immutable, which is what stops a tablet
+        from re-downloading 200 KB of JavaScript on every launch. Everything
+        else — index.html, sw.js, manifest.webmanifest, the icons — keeps its
+        name across builds and is the thing that *names* the current hashes,
+        so it must be revalidated on every load for a redeploy to take effect
+        on the next launch. That is also why public/sw.js caches nothing: a
+        service worker holding a stale index.html would keep running the old
+        build with no visible symptom.
+
+        `cacheControl: false` stops @fastify/send from writing its own single
+        policy for the whole tree; the one header we want is set here instead.
+      */
       await fastify.register(fastifyStatic, {
         root: frontendPath,
         prefix: '/',
+        cacheControl: false,
+        setHeaders: (res, filePath) => {
+          const relative = path.relative(frontendPath, filePath);
+          const hashedAsset = relative.startsWith(`assets${path.sep}`);
+          res.setHeader(
+            'Cache-Control',
+            hashedAsset ? 'public, max-age=31536000, immutable' : 'public, max-age=0'
+          );
+        },
       });
 
       // SPA fallback - serve index.html for non-API routes
