@@ -200,26 +200,54 @@ body {
 }
 
 /* The stage the agent is working on right now keeps a slow halo, so the eye
-   finds the live end of the trunk without reading any of it. */
-@keyframes memory-node-pulse {
+   finds the live end of the trunk without reading any of it.
+
+   The halo is a ring on a pseudo-element that animates only opacity and
+   transform, the same idiom as `.gui-highlight-wave::after` in App.css. It
+   used to be a spreading box-shadow on the node itself, which the compositor
+   cannot run: every frame of that pulse, forever, was a paint on the main
+   thread — on the memory tab of a tablet that was already short of it.
+
+   The node is already `position: absolute` (it hangs off the trunk), so it is
+   a containing block for the ring as it stands; the ring's negative inset
+   reaches the same 7px the old shadow spread to. */
+@keyframes memory-node-ring {
   0% {
-    box-shadow: 0 0 0 0 var(--app-primary-glow-strong);
+    opacity: 1;
+    transform: scale(0.5);
   }
   70% {
-    box-shadow: 0 0 0 7px transparent;
+    opacity: 0;
+    transform: scale(1);
   }
   100% {
-    box-shadow: 0 0 0 0 transparent;
+    opacity: 0;
+    transform: scale(1);
   }
 }
 
-.memory-node-active {
-  animation: memory-node-pulse 1900ms ease-out infinite;
+.memory-node-active::after {
+  content: '';
+  position: absolute;
+  inset: -7px;
+  border-radius: inherit;
+  border: 3px solid var(--app-primary-glow-strong);
+  pointer-events: none;
+  opacity: 0;
+  will-change: opacity, transform;
+  animation: memory-node-ring 1900ms ease-out infinite;
 }
 
 @media (prefers-reduced-motion: reduce) {
   .memory-branch-enter,
   .memory-node-active {
     animation: none !important;
+  }
+
+  /* The ring rests at opacity 0, so cancelling its animation leaves nothing
+     drawn; the node's own border still marks the active stage. */
+  .memory-node-active::after {
+    animation: none !important;
+    opacity: 0 !important;
   }
 }
