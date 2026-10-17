@@ -172,6 +172,16 @@ export interface UiStrings {
   demoModeOn: string;
   accessCodeLabel: string;
   apiKeyLabel: string;
+  /** The credential chip on the setup screen and the dialog behind it. */
+  credentialMissing: string;
+  credentialReadyCode: string;
+  credentialReadyKey: string;
+  credentialChange: string;
+  credentialDialogTitle: string;
+  credentialSavedCode: string;
+  credentialSavedKey: string;
+  credentialUse: string;
+  credentialRemove: string;
   micCheck: string;
   watchTutorial: string;
   startDemo: string;
@@ -358,6 +368,15 @@ const EN: UiStrings = {
   demoModeOn: 'Demo Mode: On',
   accessCodeLabel: 'Code',
   apiKeyLabel: 'API Key',
+  credentialMissing: 'Enter code or key',
+  credentialReadyCode: 'Code ready',
+  credentialReadyKey: 'API key ready',
+  credentialChange: 'Change',
+  credentialDialogTitle: 'Authorize this demo',
+  credentialSavedCode: 'A code is already saved. Enter a new one to replace it.',
+  credentialSavedKey: 'A key is already saved. Enter a new one to replace it.',
+  credentialUse: 'Use',
+  credentialRemove: 'Remove',
   micCheck: 'Mic Check',
   watchTutorial: 'Watch Tutorial Video',
   startDemo: 'Start Demo',
@@ -539,6 +558,15 @@ const KO: UiStrings = {
   demoModeOn: '데모 모드: 켜짐',
   accessCodeLabel: '코드',
   apiKeyLabel: 'API 키',
+  credentialMissing: '코드 또는 키 입력',
+  credentialReadyCode: '코드 사용 가능',
+  credentialReadyKey: 'API 키 사용 가능',
+  credentialChange: '변경',
+  credentialDialogTitle: '데모 인증',
+  credentialSavedCode: '코드가 이미 저장되어 있습니다. 새 코드를 입력하면 교체됩니다.',
+  credentialSavedKey: '키가 이미 저장되어 있습니다. 새 키를 입력하면 교체됩니다.',
+  credentialUse: '사용',
+  credentialRemove: '삭제',
   micCheck: '마이크 점검',
   watchTutorial: '튜토리얼 영상 보기',
   startDemo: '데모 시작',

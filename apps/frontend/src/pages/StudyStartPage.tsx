@@ -124,6 +124,20 @@ export function StudyStartPage({
   const [voiceCheckOpen, setVoiceCheckOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [tutorialVideoOpen, setTutorialVideoOpen] = useState(false);
+  /*
+    The credential dialog. The code and key used to be typed straight into the
+    header row, which left the booth's access code sitting in plain text on the
+    screen every visitor walks up to. Now the row only says whether a
+    credential is ready, and the value itself is typed in a dialog and never
+    shown again: changing it means typing a new one, not editing the old.
+
+    The draft is local until "Use" so that switching the Code/Key segment and
+    then cancelling leaves the stored mode and value untouched.
+  */
+  const [credentialOpen, setCredentialOpen] = useState(false);
+  const [credentialDraft, setCredentialDraft] = useState('');
+  const [credentialDraftMode, setCredentialDraftMode] = useState<'code' | 'key'>('code');
+  const credentialInputRef = useRef<HTMLInputElement | null>(null);
   const [voiceCheckError, setVoiceCheckError] = useState<string | null>(null);
   const [micCheckStatus, setMicCheckStatus] = useState<'idle' | 'checking' | 'granted' | 'denied'>('idle');
   const [speakerCheckStatus, setSpeakerCheckStatus] = useState<'idle' | 'playing' | 'played' | 'confirmed' | 'error'>('idle');
@@ -147,6 +161,66 @@ export function StudyStartPage({
   // own key, or the booth access code, which the backend verifies (read-only,
   // not a redemption) before speaking its fixed sample on the operator key.
   const speakerPreviewCredential = demoMode && usingAccessCode ? { accessCode } : { apiKey };
+  // Outside demo mode the key is optional: the lab backend has its own.
+  const credentialPresent = demoMode ? !apiKeyMissing : Boolean(apiKey.trim());
+  const credentialStatusLabel = demoMode
+    ? apiKeyMissing
+      ? ui.credentialMissing
+      : usingAccessCode
+      ? ui.credentialReadyCode
+      : ui.credentialReadyKey
+    : apiKey.trim()
+    ? 'API key ready'
+    : 'API Key (optional)';
+  const credentialDraftPresent =
+    credentialDraftMode === 'code' ? Boolean(accessCode.trim()) : Boolean(apiKey.trim());
+
+  const openCredentialDialog = () => {
+    queueSetupGuiAction('openCredentialDialog');
+    // Always an empty field, on purpose: prefilling would put the saved code
+    // back on screen, which is the thing the dialog exists to avoid.
+    setCredentialDraft('');
+    setCredentialDraftMode(demoMode ? demoCredentialMode : 'key');
+    setCredentialOpen(true);
+  };
+  const closeCredentialDialog = () => {
+    setCredentialOpen(false);
+    setCredentialDraft('');
+  };
+  const saveCredential = () => {
+    const value = credentialDraft.trim();
+    if (!value) return;
+    if (credentialDraftMode === 'code') {
+      // Uppercase so the stored value matches the printed card. The backend
+      // normalizes again anyway.
+      onAccessCodeChange(value.toUpperCase());
+    } else {
+      onApiKeyChange(value);
+    }
+    if (demoMode) onDemoCredentialModeChange(credentialDraftMode);
+    closeCredentialDialog();
+  };
+  const removeCredential = () => {
+    if (credentialDraftMode === 'code') {
+      onAccessCodeChange('');
+    } else {
+      onApiKeyChange('');
+    }
+    if (demoMode) onDemoCredentialModeChange(credentialDraftMode);
+    closeCredentialDialog();
+  };
+
+  // Escape closes the dialog and focus starts in its field, so a visitor can
+  // type the code the moment it opens.
+  useEffect(() => {
+    if (!credentialOpen) return;
+    credentialInputRef.current?.focus();
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') setCredentialOpen(false);
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [credentialOpen]);
   const tutorialSelected = selectedScenarioId === TUTORIAL_SCENARIO_ID;
   const perTrialSurveyEnabled = isHardTaskScenario({ scenarioId: selectedScenarioId });
   const conditionCode = CONDITION_SELECTION_OPTIONS.find((o) => o.id === selectedConditionMode)?.code ?? selectedConditionMode;
@@ -565,11 +639,19 @@ export function StudyStartPage({
                   />
                 </label>
               )}
-              <div
-                className={`flex h-14 items-center gap-2 rounded-xl border pl-3 pr-1 transition-colors sm:h-11 sm:rounded-lg ${
+              {/*
+                Only the state of the credential, never its value. The code
+                used to be typed here in the open; see the dialog below.
+              */}
+              <button
+                type="button"
+                onClick={openCredentialDialog}
+                aria-haspopup="dialog"
+                aria-expanded={credentialOpen}
+                className={`inline-flex h-14 items-center justify-center gap-2 rounded-xl border px-4 text-base font-semibold transition-colors sm:h-11 sm:justify-start sm:rounded-lg sm:text-sm ${
                   demoMode && apiKeyMissing
-                    ? 'border-danger bg-danger/10'
-                    : 'border-dark-border bg-dark'
+                    ? 'border-danger bg-danger/10 text-danger-text hover:bg-danger/15'
+                    : 'border-dark-border bg-dark text-fg hover:border-primary hover:text-fg-strong'
                 }`}
               >
                 <span
@@ -581,86 +663,16 @@ export function StudyStartPage({
                 >
                   {demoMode ? '1' : '2'}
                 </span>
-                {demoMode && usingAccessCode ? (
-                  <>
-                    <label className="text-sm font-medium text-fg-strong" htmlFor="demo-access-code">
-                      {ui.accessCodeLabel}
-                    </label>
-                    <input
-                      type="text"
-                      autoComplete="off"
-                      spellCheck={false}
-                      autoCapitalize="characters"
-                      maxLength={12}
-                      value={accessCode}
-                      // Uppercase as the visitor types so what they see matches
-                      // the printed card. The backend normalizes again anyway.
-                      onChange={(event) => onAccessCodeChange(event.target.value.toUpperCase())}
-                      id="demo-access-code"
-                      placeholder="ABC123"
-                      className={`h-11 w-full min-w-0 flex-1 rounded-md border px-2.5 font-mono text-base tracking-[0.2em] text-fg-strong outline-none transition-colors placeholder:tracking-normal placeholder:text-fg-faint sm:h-8 sm:w-32 sm:flex-none sm:text-sm ${
-                        apiKeyMissing
-                          ? 'border-danger bg-dark focus:border-danger'
-                          : 'border-dark-border bg-dark-light focus:border-primary'
-                      }`}
-                    />
-                  </>
-                ) : (
-                  <>
-                    <label className="text-sm font-medium text-fg-strong" htmlFor="demo-api-key">
-                      {demoMode ? ui.apiKeyLabel : 'API Key'}
-                    </label>
-                    <input
-                      type="password"
-                      autoComplete="off"
-                      spellCheck={false}
-                      value={apiKey}
-                      onChange={(event) => onApiKeyChange(event.target.value)}
-                      id="demo-api-key"
-                      placeholder="sk-..."
-                      className={`h-11 w-full min-w-0 flex-1 rounded-md border px-2.5 text-base text-fg-strong outline-none transition-colors placeholder:text-fg-faint sm:h-8 sm:w-40 sm:flex-none sm:text-sm ${
-                        demoMode && apiKeyMissing
-                          ? 'border-danger bg-dark focus:border-danger'
-                          : 'border-dark-border bg-dark-light focus:border-primary'
-                      }`}
-                    />
-                  </>
-                )}
-                {demoMode && (
-                  <div
-                    className="ml-1 flex h-9 items-center rounded-md bg-dark-light p-0.5"
-                    role="radiogroup"
-                    aria-label="How to authorize this demo"
-                  >
-                    {(
-                      [
-                        ['code', 'Code'],
-                        ['key', 'Key'],
-                      ] as const
-                    ).map(([mode, label]) => (
-                      <button
-                        key={mode}
-                        type="button"
-                        role="radio"
-                        aria-checked={demoCredentialMode === mode}
-                        onClick={() => onDemoCredentialModeChange(mode)}
-                        title={
-                          mode === 'code'
-                            ? 'Use the access code from the presenter'
-                            : 'Use your own OpenAI API key'
-                        }
-                        className={`h-full rounded px-2.5 text-xs font-semibold transition-colors ${
-                          demoCredentialMode === mode
-                            ? 'bg-dark text-fg-strong shadow-sm'
-                            : 'text-fg-muted hover:text-fg-strong'
-                        }`}
-                      >
-                        {label}
-                      </button>
-                    ))}
-                  </div>
-                )}
-              </div>
+                {credentialPresent ? (
+                  <span aria-hidden="true" className="text-primary-text">
+                    ✓
+                  </span>
+                ) : null}
+                <span>{credentialStatusLabel}</span>
+                {credentialPresent ? (
+                  <span className="text-xs font-medium text-fg-muted">{ui.credentialChange}</span>
+                ) : null}
+              </button>
               <button
                 type="button"
                 onClick={() => {
@@ -1035,6 +1047,138 @@ export function StudyStartPage({
               </button>
             </div>
           </div>
+        </div>
+      ) : null}
+
+      {credentialOpen ? (
+        <div
+          className="fixed inset-0 z-[60] flex items-end justify-center bg-black/60 p-0 sm:items-center sm:p-6"
+          role="dialog"
+          aria-modal="true"
+          aria-label={demoMode ? ui.credentialDialogTitle : 'API Key'}
+          onClick={closeCredentialDialog}
+        >
+          <form
+            className="w-full max-w-md rounded-t-2xl border border-dark-border bg-dark-light p-5 shadow-2xl sm:rounded-2xl sm:p-6"
+            onClick={(event) => event.stopPropagation()}
+            onSubmit={(event) => {
+              event.preventDefault();
+              saveCredential();
+            }}
+          >
+            <div className="mb-4 flex items-center justify-between gap-4">
+              <h2 className="text-base font-semibold text-fg-strong">
+                {demoMode ? ui.credentialDialogTitle : 'API Key'}
+              </h2>
+              <button
+                type="button"
+                onClick={closeCredentialDialog}
+                className="rounded-lg border border-dark-border px-3 py-1.5 text-xs font-medium text-fg hover:border-primary hover:text-fg-strong"
+              >
+                {ui.close}
+              </button>
+            </div>
+            {demoMode ? (
+              <>
+                <p className="mb-3 text-sm text-fg-muted">{ui.demoSetupSubtitle}</p>
+                <div
+                  className="mb-4 flex rounded-lg bg-dark p-0.5"
+                  role="radiogroup"
+                  aria-label="How to authorize this demo"
+                >
+                  {(
+                    [
+                      ['code', ui.accessCodeLabel],
+                      ['key', ui.apiKeyLabel],
+                    ] as const
+                  ).map(([mode, label]) => (
+                    <button
+                      key={mode}
+                      type="button"
+                      role="radio"
+                      aria-checked={credentialDraftMode === mode}
+                      onClick={() => {
+                        setCredentialDraftMode(mode);
+                        setCredentialDraft('');
+                        credentialInputRef.current?.focus();
+                      }}
+                      className={`h-10 flex-1 rounded-md text-sm font-semibold transition-colors ${
+                        credentialDraftMode === mode
+                          ? 'bg-dark-light text-fg-strong shadow-sm'
+                          : 'text-fg-muted hover:text-fg-strong'
+                      }`}
+                    >
+                      {label}
+                    </button>
+                  ))}
+                </div>
+              </>
+            ) : (
+              <p className="mb-3 text-sm text-fg-muted">
+                Optional. Leave it empty to use the key configured on the server.
+              </p>
+            )}
+            <label
+              className="mb-1.5 block text-sm font-medium text-fg-strong"
+              htmlFor={credentialDraftMode === 'code' ? 'demo-access-code' : 'demo-api-key'}
+            >
+              {credentialDraftMode === 'code'
+                ? ui.accessCodeLabel
+                : demoMode
+                ? ui.apiKeyLabel
+                : 'API Key'}
+            </label>
+            {credentialDraftMode === 'code' ? (
+              <input
+                ref={credentialInputRef}
+                id="demo-access-code"
+                type="text"
+                autoComplete="off"
+                spellCheck={false}
+                autoCapitalize="characters"
+                maxLength={12}
+                value={credentialDraft}
+                onChange={(event) => setCredentialDraft(event.target.value.toUpperCase())}
+                placeholder="ABC123"
+                className="h-12 w-full rounded-lg border border-dark-border bg-dark px-3 font-mono text-lg tracking-[0.25em] text-fg-strong outline-none transition-colors placeholder:tracking-normal placeholder:text-fg-faint focus:border-primary"
+              />
+            ) : (
+              <input
+                ref={credentialInputRef}
+                id="demo-api-key"
+                type="password"
+                autoComplete="off"
+                spellCheck={false}
+                value={credentialDraft}
+                onChange={(event) => setCredentialDraft(event.target.value)}
+                placeholder="sk-..."
+                className="h-12 w-full rounded-lg border border-dark-border bg-dark px-3 text-base text-fg-strong outline-none transition-colors placeholder:text-fg-faint focus:border-primary"
+              />
+            )}
+            {credentialDraftPresent ? (
+              <p className="mt-2 text-xs text-fg-muted">
+                {credentialDraftMode === 'code' ? ui.credentialSavedCode : ui.credentialSavedKey}
+              </p>
+            ) : null}
+            <div className="mt-5 flex items-center justify-end gap-2">
+              {credentialDraftPresent ? (
+                <button
+                  type="button"
+                  onClick={removeCredential}
+                  className="rounded-lg border border-dark-border px-4 py-2 text-sm font-medium text-fg transition-colors hover:border-danger hover:text-danger-text"
+                >
+                  {ui.credentialRemove}
+                </button>
+              ) : null}
+              <button
+                type="submit"
+                disabled={!credentialDraft.trim()}
+                className="rounded-lg bg-primary px-5 py-2 text-sm font-semibold text-primary-fg transition-colors hover:bg-primary-hover disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                {ui.credentialUse}
+              </button>
+            </div>
+          </form>
         </div>
       ) : null}
 
