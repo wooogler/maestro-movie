@@ -98,6 +98,7 @@ export interface UiStrings {
   plannerModelLabel: string;
   plannerModelDefault: string;
   plannerModelHint: string;
+  plannerModelDefaultHint: string;
   plannerModelStatsTitle: string;
   plannerModelStatsAvg: (seconds: number, turns: number) => string;
   plannerModelStatsLast: (seconds: number) => string;
@@ -285,6 +286,7 @@ const EN: UiStrings = {
   plannerModelDefault: 'Server default',
   plannerModelHint:
     'The model that decides what the agent does and says. Takes effect from the next turn; the voice itself is unaffected.',
+  plannerModelDefaultHint: 'Whatever this deployment is configured with. Pick a model to compare it.',
   plannerModelStatsTitle: 'This session',
   plannerModelStatsAvg: (seconds, turns) =>
     `${seconds.toFixed(1)}s avg · ${turns} ${turns === 1 ? 'turn' : 'turns'}`,
@@ -466,6 +468,7 @@ const KO: UiStrings = {
   plannerModelDefault: '서버 기본값',
   plannerModelHint:
     '에이전트가 무엇을 하고 말할지 결정하는 모델입니다. 다음 턴부터 적용되며, 음성 자체에는 영향이 없습니다.',
+  plannerModelDefaultHint: '이 배포에 설정된 모델을 그대로 씁니다. 비교해 보려면 모델을 고르세요.',
   plannerModelStatsTitle: '이번 세션',
   plannerModelStatsAvg: (seconds, turns) => `평균 ${seconds.toFixed(1)}초 · ${turns}턴`,
   plannerModelStatsLast: (seconds) => `마지막 ${seconds.toFixed(1)}초`,

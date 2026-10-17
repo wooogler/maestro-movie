@@ -143,43 +143,34 @@ export function SettingsModal({
               </h3>
               <p className="mt-1 text-xs text-fg-muted">{s.plannerModelHint}</p>
             </div>
-            <div role="radiogroup" aria-label={s.plannerModelLabel} className="flex flex-col gap-2">
-              {[
-                {
-                  id: null as string | null,
-                  label: s.plannerModelDefault,
-                  description: DEFAULT_PLANNER_MODEL,
-                },
-                ...PLANNER_MODEL_OPTIONS.map((option) => ({
-                  id: option.id as string | null,
-                  label: option.label,
-                  description: option.description,
-                })),
-              ].map((option) => {
-                const selected = option.id === plannerModel;
-                return (
-                  <button
-                    key={option.id ?? 'default'}
-                    type="button"
-                    role="radio"
-                    aria-checked={selected}
-                    onClick={() => onPlannerModelChange?.(option.id)}
-                    className={`flex flex-col items-start rounded-xl border px-4 py-3 text-left transition-colors ${
-                      selected
-                        ? 'border-primary bg-primary text-primary-fg'
-                        : 'border-dark-border bg-dark text-fg hover:border-primary hover:text-fg-strong'
-                    }`}
-                  >
-                    <span className="text-sm font-medium">{option.label}</span>
-                    <span
-                      className={`mt-0.5 text-xs ${selected ? 'text-primary-fg/80' : 'text-fg-muted'}`}
-                    >
-                      {option.description}
-                    </span>
-                  </button>
-                );
-              })}
-            </div>
+            {/*
+              A native select rather than a radio list: eight stacked cards
+              pushed the voice settings below the fold on a phone, and the
+              choice is made once per session, not compared at a glance. The
+              chosen model's one-line description sits under it so the
+              trade-off is still readable without opening the list.
+            */}
+            <select
+              aria-label={s.plannerModelLabel}
+              value={plannerModel ?? ''}
+              onChange={(event) => onPlannerModelChange?.(event.target.value || null)}
+              className="h-11 w-full rounded-xl border border-dark-border bg-dark px-3 text-sm font-medium text-fg-strong focus:border-primary focus:outline-none sm:h-10"
+            >
+              <option value="">
+                {s.plannerModelDefault} ({DEFAULT_PLANNER_MODEL})
+              </option>
+              {PLANNER_MODEL_OPTIONS.map((option) => (
+                <option key={option.id} value={option.id}>
+                  {option.label} ({option.id})
+                </option>
+              ))}
+            </select>
+            <p className="mt-2 text-xs text-fg-muted">
+              {plannerModel
+                ? PLANNER_MODEL_OPTIONS.find((option) => option.id === plannerModel)?.description ??
+                  ''
+                : s.plannerModelDefaultHint}
+            </p>
             {plannerTurnStats.length > 0 ? (
               <div className="mt-3 rounded-xl border border-dark-border bg-dark px-4 py-3">
                 <div className="text-xs font-semibold uppercase tracking-wide text-fg-muted">
