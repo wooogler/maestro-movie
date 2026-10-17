@@ -594,23 +594,36 @@ export function FullTuningSplitView({
     };
   }, [activeSyncRowId]);
 
+  /*
+    The inset only depends on two sizes — the container's and the first row's —
+    and both are watched by the ResizeObserver below. This effect used to be
+    keyed on `timelineRows`, which is a new array on every streamed token, so
+    each token tore the observer down, read layout synchronously, set state,
+    built a new observer, and then took the observer's initial callback: a
+    second read and a second set. All of that for an inset that had not moved.
+    It is keyed on the first row's identity now, which is the only thing the
+    observer cannot see change on its own.
+  */
+  const firstTimelineRowId = timelineRows[0]?.id ?? null;
+  const firstTimelineRowType = timelineRows[0]?.type ?? 'agent';
+
   useLayoutEffect(() => {
     const container = timelineContainerRef.current;
     if (!container) return;
 
-    const getFirstRowNode = () => {
-      const firstRowId = timelineRows[0]?.id;
-      return firstRowId ? rowRefs.current.get(firstRowId) ?? null : null;
-    };
+    const getFirstRowNode = () =>
+      firstTimelineRowId ? rowRefs.current.get(firstTimelineRowId) ?? null : null;
 
     const updateTopInset = () => {
-      const firstRow = timelineRows[0];
       const firstRowNode = getFirstRowNode();
       const syncAnchorOffset = getSyncAnchorOffsetFromTop(container.clientHeight);
       const firstRowAnchorOffset = firstRowNode
-        ? getTimelineRowAnchorOffset(firstRowNode.offsetHeight, firstRow?.type ?? 'agent')
+        ? getTimelineRowAnchorOffset(firstRowNode.offsetHeight, firstTimelineRowType)
         : 24;
-      setTimelineTopInsetPx(Math.max(0, syncAnchorOffset - firstRowAnchorOffset));
+      const nextInset = Math.max(0, syncAnchorOffset - firstRowAnchorOffset);
+      // Same value, same state object: React then skips the render outright
+      // instead of committing an identical paddingTop.
+      setTimelineTopInsetPx((current) => (current === nextInset ? current : nextInset));
     };
 
     updateTopInset();
@@ -632,13 +645,14 @@ export function FullTuningSplitView({
     return () => {
       observer.disconnect();
     };
-  }, [timelineRows]);
+  }, [firstTimelineRowId, firstTimelineRowType]);
 
   const syncActiveSnapshotToScroll = useCallback(() => {
     const container = timelineContainerRef.current;
     if (!container || timelineRows.length === 0) return;
     const lastRow = timelineRows[timelineRows.length - 1];
 
+    // Before any layout read: the lock means the answer is already known.
     if (Date.now() < autoFollowScrollSyncLockUntilRef.current && latestSnapshotIndex >= 0 && lastRow) {
       pinToLatestTimelinePosition();
       return;
@@ -775,8 +789,8 @@ export function FullTuningSplitView({
     one thing guaranteed to be happening while the stage slides, because the
     transcript auto-scrolls to the agent's new turn at the same moment. So it is
     collapsed to at most one pass per frame, and skipped entirely while a
-    transition is in flight: the snapshot it would pick is the one already being
-    animated to.
+    transition is in flight or the auto-follow lock is held: the snapshot it
+    would pick is the one already being animated to.
   */
   const scrollSyncFrameRef = useRef<number | null>(null);
 
@@ -791,13 +805,25 @@ export function FullTuningSplitView({
 
   const handleTimelineScroll = useCallback(() => {
     if (guiTransitionActiveRef.current) return;
+    /*
+      While the transcript is being auto-scrolled to its newest row, every
+      scroll event the smooth scroll emits — several per frame for hundreds of
+      milliseconds — is one the booking UI already knows the answer to: the
+      latest snapshot. Decide that here, before a frame is even scheduled, so
+      the lock costs no layout read at all; `syncActiveSnapshotToScroll` checks
+      it again for a frame that was queued before the lock was taken.
+    */
+    if (Date.now() < autoFollowScrollSyncLockUntilRef.current) {
+      pinToLatestTimelinePosition();
+      return;
+    }
     if (scrollSyncFrameRef.current !== null) return;
     scrollSyncFrameRef.current = window.requestAnimationFrame(() => {
       scrollSyncFrameRef.current = null;
       if (guiTransitionActiveRef.current) return;
       syncActiveSnapshotToScroll();
     });
-  }, [syncActiveSnapshotToScroll]);
+  }, [pinToLatestTimelinePosition, syncActiveSnapshotToScroll]);
 
   const scrollToSnapshot = useCallback(
     (snapshotIndex: number) => {
