@@ -104,12 +104,18 @@ function App() {
     return getStoredDemoModePreference() ?? true;
   });
   const [apiKey, setApiKey] = useState<string>(() => getStoredApiKey());
-  // Held for the life of the tab, like the key. Access codes are reusable by
-  // design -- one code runs a whole event -- so the code a visitor typed is
-  // still good after they finish, and the presenter should not have to hand the
-  // card over again for the next visitor or after a reload.
+  // Both credentials persist across a relaunch (see sessionStorage.ts for the
+  // PWA reason). Access codes are reusable by design -- one code runs a whole
+  // event -- so the code a visitor typed is still good after they finish, and
+  // the presenter should not have to hand the card over again for the next
+  // visitor, after a reload, or after the installed app is closed and reopened.
   const [accessCode, setAccessCode] = useState<string>(() => getStoredAccessCode());
-  const [demoCredentialMode, setDemoCredentialMode] = useState<'code' | 'key'>('code');
+  // Open on whichever credential is actually stored. A visitor who pasted their
+  // own key and relaunched would otherwise land on the code tab with the key
+  // field hidden, which reads exactly like the key having been lost.
+  const [demoCredentialMode, setDemoCredentialMode] = useState<'code' | 'key'>(() =>
+    !getStoredAccessCode() && getStoredApiKey() ? 'key' : 'code'
+  );
   /*
     Whether the current demo visitor agreed to be recorded.
 
@@ -271,8 +277,8 @@ function App() {
     }
   }, [demoMode, loggingParticipantId]);
 
-  // sessionStorage only, and never localStorage: the credentials must die with
-  // the tab.
+  // Persisted so an installed PWA that is closed and reopened comes back with
+  // the credential still filled in; emptying the field removes it.
   useEffect(() => {
     setStoredApiKey(apiKey);
   }, [apiKey]);

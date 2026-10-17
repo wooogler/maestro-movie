@@ -513,6 +513,49 @@ section('5d. defects found by replaying the corpus a second time');
 }
 
 // -----------------------------------------------------------------------------
+section('5e. defects found in the 2026-10-17 demo traces');
+// -----------------------------------------------------------------------------
+{
+  const on = settings('full', { smartSkip: true });
+
+  // R2 — `distinguishingTokens` skipped only the first word of the whole
+  // utterance, so the capital that opens a SECOND sentence counted as a proper
+  // noun. "Which" made this pair differ on names while scoring 0.894 on
+  // trigrams, and the restatement was spoken in full straight after the
+  // original.
+  const restated = decide('Both are Standard. Which time would you like?', on, {
+    recentSpoken: ['Both showtimes are Standard; which time would you like?'],
+  });
+  check(
+    'a sentence-initial capital after a full stop is not a proper noun',
+    restated.rule === 'near-duplicate',
+    `${restated.mode}/${restated.rule}`
+  );
+  check('...and the restatement keeps only its question', restated.spokenText === 'Which time would you like?', restated.spokenText);
+  const afterSemicolon = decide('Both are Standard; Which time would you like?', on, {
+    recentSpoken: ['Both showtimes are Standard; which time would you like?'],
+  });
+  check('the same holds after a semicolon', afterSemicolon.rule === 'near-duplicate', String(afterSemicolon.rule));
+
+  // The guard still has to do its job: real names and dates keep two
+  // utterances about different options apart however templated the wording.
+  const otherDate = decide('Choosing Mar 15 (Sun) for your show date.', on, {
+    recentSpoken: ['Choosing Mar 14 (Sat) for your show date.'],
+  });
+  check('a different date still differs', otherDate.mode === 'speak', `${otherDate.mode}/${otherDate.rule}`);
+  const otherTheater = decide('Emagine Royal Oak has the fewest screens.', on, {
+    recentSpoken: ['Redford Theatre has the fewest screens.'],
+  });
+  check('a different theater still differs', otherTheater.mode === 'speak', `${otherTheater.mode}/${otherTheater.rule}`);
+  // A full stop inside an abbreviation is not a sentence end, so the name
+  // after "p.m." must still count.
+  const afterAbbreviation = decide('Showing the 6 p.m. Emagine show.', on, {
+    recentSpoken: ['Showing the 6 p.m. Redford show.'],
+  });
+  check('a name after "p.m." still distinguishes', afterAbbreviation.mode === 'speak', `${afterAbbreviation.mode}/${afterAbbreviation.rule}`);
+}
+
+// -----------------------------------------------------------------------------
 section('6. system messages are outside the mechanism');
 // -----------------------------------------------------------------------------
 {

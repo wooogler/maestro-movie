@@ -240,7 +240,30 @@ async function main(): Promise<void> {
     check('blocked by global scope', fresh.blocked === true && fresh.scope === 'global');
   }
 
-  section('12. STATS — the presenter can see what is live');
+  section('12. CHECK — the speaker test asks without redeeming');
+  {
+    const [code] = codes.generateAccessCodes({ count: 1, maxRedemptions: 1, batch: 'peek' });
+    const before = codes.getAccessCodeStats('peek').redemptions;
+    check('a fresh capped code checks ok', codes.checkAccessCode(code).ok === true);
+    check('checking again still ok (nothing consumed)', codes.checkAccessCode(code).ok === true);
+    check('accepts the card spelling', codes.checkAccessCode(`${code.slice(0, 3)}-${code.slice(3).toLowerCase()}`).ok === true);
+    check('check recorded no redemption', codes.getAccessCodeStats('peek').redemptions === before);
+    check('redeeming after the check still works', codes.redeemAccessCode(code, 'st_peek').ok === true);
+    const exhausted = codes.checkAccessCode(code);
+    check('check reports exhausted once the cap is hit', exhausted.ok === false && exhausted.reason === 'exhausted');
+    check('unknown code', codes.checkAccessCode('ZZZZZZ').ok === false);
+    check('empty code', codes.checkAccessCode('').ok === false);
+
+    const [revoked] = codes.generateAccessCodes({ count: 1, batch: 'peek' });
+    codes.revokeAccessCodes({ code: revoked });
+    const r = codes.checkAccessCode(revoked);
+    check('revoked code reports revoked', r.ok === false && r.reason === 'revoked');
+    const [stale] = codes.generateAccessCodes({ count: 1, validUntil: new Date(Date.now() - 1000).toISOString(), batch: 'peek' });
+    const e = codes.checkAccessCode(stale);
+    check('expired code reports expired', e.ok === false && e.reason === 'expired');
+  }
+
+  section('13. STATS — the presenter can see what is live');
   {
     const stats = codes.getAccessCodeStats('check');
     check('counts the generated batch', stats.total === 20, JSON.stringify(stats));

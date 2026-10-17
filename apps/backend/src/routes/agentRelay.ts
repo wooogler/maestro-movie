@@ -126,6 +126,9 @@ const HOST_TO_AGENT_TYPES = new Set([
   // The language the visitor is conversing in. Host-owned: the agent is told,
   // it does not choose.
   'conversation.language',
+  // The planner model the visitor chose in the settings sheet. Host-owned on
+  // the same terms; the agent checks it against its own allow-list.
+  'planner.model',
   'tts.playback.complete',
   /*
     The visitor reaching into preference memory by hand.

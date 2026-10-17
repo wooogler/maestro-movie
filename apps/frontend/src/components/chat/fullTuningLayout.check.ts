@@ -14,6 +14,7 @@
  * Exit code 0 means every case passed.
  */
 import { guiStageFitScale, splitViewLayout } from './fullTuningLayout';
+import { guiStepContextText } from './voiceTranscript';
 
 let failures = 0;
 
@@ -213,6 +214,63 @@ section('7. the scale is quantised, so a one-pixel wobble does not restyle the s
   check(
     'and a stage that already fits is still left at exactly 1',
     guiStageFitScale(900, 400) === 1 && guiStageFitScale(620, 620) === 1
+  );
+}
+
+section('8. with voice on, a step nobody narrated shows no planner reason');
+{
+  const reason =
+    'The user asks which theater has the fewest screens. Screen counts are visible, and Redford Theatre is the single smallest option, so a one-item highlight directly identifies it without selecting it.';
+  const base = {
+    annotationReason: reason,
+    actionReason: undefined,
+    stageDescription: 'Choose a theater near you',
+    title: 'Select Theater',
+  };
+  // The sentence the voice said over the step is quoted either way.
+  check(
+    'a spoken sentence is quoted in voice mode',
+    guiStepContextText({ ...base, voiceMode: true, linkedAssistantText: 'Redford has the fewest screens.' }) ===
+      'Redford has the fewest screens.'
+  );
+  check(
+    'a spoken sentence is quoted in text mode',
+    guiStepContextText({ ...base, voiceMode: false, linkedAssistantText: 'Redford has the fewest screens.' }) ===
+      'Redford has the fewest screens.'
+  );
+  // The regression: an empty or silenced sentence used to surface the reason.
+  check(
+    'no sentence + voice on = no body text, not the reason',
+    guiStepContextText({ ...base, voiceMode: true, linkedAssistantText: undefined }) === ''
+  );
+  check(
+    'a whitespace-only sentence counts as none',
+    guiStepContextText({ ...base, voiceMode: true, linkedAssistantText: '  ' }) === ''
+  );
+  check(
+    'a stage change with only an action reason is quiet too',
+    guiStepContextText({
+      ...base,
+      annotationReason: undefined,
+      actionReason: 'The user explicitly agreed to the previously suggested theater.',
+      voiceMode: true,
+    }) === ''
+  );
+  // Text mode is the interface the paper describes: the fallbacks stay.
+  check(
+    'text mode still falls back to the tool reason',
+    guiStepContextText({ ...base, voiceMode: false, linkedAssistantText: undefined }) === reason
+  );
+  check(
+    'text mode falls through reason → action reason → description → title',
+    guiStepContextText({ ...base, annotationReason: undefined, voiceMode: false }) ===
+      'Choose a theater near you' &&
+      guiStepContextText({
+        ...base,
+        annotationReason: undefined,
+        stageDescription: undefined,
+        voiceMode: false,
+      }) === 'Select Theater'
   );
 }
 

@@ -10,8 +10,9 @@
  * it, so a code baked into this page at build time would be a credential
  * published to every visitor who opened the route; typing it makes the presenter
  * the one who decides which code is live, exactly as they do when handing over a
- * printed card. It is held in sessionStorage on the same terms as everywhere
- * else in the app: dies with the tab, never localStorage.
+ * printed card. It is held on the same terms as everywhere else in the app
+ * (see study/sessionStorage.ts): persisted, so it survives the installed PWA
+ * being closed and reopened.
  */
 
 import { useEffect, useState } from 'react';

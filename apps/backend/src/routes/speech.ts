@@ -5,6 +5,12 @@ import {
   getSessionContextByToken,
 } from '../study/sessionService';
 import { isDemoStudyMode } from '../study/modes';
+import { checkAccessCode, DEMO_ACCESS_CODES_ENABLED } from '../study/demoAccessCodes';
+import {
+  checkRedemptionAllowed,
+  recordRedemptionFailure,
+  recordRedemptionSuccess,
+} from '../study/redemptionLimiter';
 
 const OPENAI_SPEECH_URL = 'https://api.openai.com/v1/audio/speech';
 const OPENAI_REALTIME_CLIENT_SECRETS_URL = 'https://api.openai.com/v1/realtime/client_secrets';
@@ -122,6 +128,45 @@ const PREVIEW_MAX_TEXT_LENGTH = 600;
 // route is unauthenticated, so enabling it makes the operator key spendable by
 // anyone who can reach the server.
 const PREVIEW_ALLOWS_ENV_KEY = process.env.SPEECH_PREVIEW_ALLOW_ENV_KEY?.trim() === 'true';
+/**
+ * The second way into the speaker check: the booth's access code, sent as a
+ * header. A visitor with a code has no key of their own at this point -- the
+ * operator key is attached to their session only when it is created -- so
+ * without this the speaker test was simply unavailable to them.
+ *
+ * It is NOT the same as turning SPEECH_PREVIEW_ALLOW_ENV_KEY on. The operator
+ * key is only used when the code checks out (read-only: the check is not a
+ * redemption and never counts against a cap), the attempt goes through the same
+ * brute-force limiter as a real redemption, the spoken text is the server's own
+ * sample rather than the caller's, and successful previews are capped per
+ * window so a leaked code cannot turn this route into a TTS faucet. The
+ * exposure is bounded to PREVIEW_CODE_MAX_PER_WINDOW short clips a minute.
+ */
+const DEMO_ACCESS_CODE_HEADER = 'x-demo-access-code';
+const PREVIEW_SAMPLE_TEXT = 'This is a speaker test.';
+const PREVIEW_CODE_WINDOW_MS = 60_000;
+const PREVIEW_CODE_MAX_PER_WINDOW = readEnvNumber(
+  'SPEECH_PREVIEW_CODE_MAX_PER_MINUTE',
+  60,
+  1,
+  10_000
+);
+// One bucket for everyone, on purpose: behind the deployment's nginx every
+// visitor arrives with the same request.ip (see redemptionLimiter.ts), so a
+// per-IP bucket would be this exact thing with a misleading name.
+const previewCodeSuccesses: number[] = [];
+
+function takePreviewCodeSlot(now = Date.now()): { ok: true } | { ok: false; retryAfterMs: number } {
+  const cutoff = now - PREVIEW_CODE_WINDOW_MS;
+  while (previewCodeSuccesses.length > 0 && previewCodeSuccesses[0] < cutoff) {
+    previewCodeSuccesses.shift();
+  }
+  if (previewCodeSuccesses.length >= PREVIEW_CODE_MAX_PER_WINDOW) {
+    return { ok: false, retryAfterMs: Math.max(0, previewCodeSuccesses[0] + PREVIEW_CODE_WINDOW_MS - now) };
+  }
+  previewCodeSuccesses.push(now);
+  return { ok: true };
+}
 
 function getEnvOpenAiApiKey(): string | null {
   const apiKey = process.env.OPENAI_API_KEY?.trim();
@@ -324,31 +369,107 @@ export async function speechRoutes(fastify: FastifyInstance): Promise<void> {
     return minted.body;
   });
 
-  // Unauthenticated public path: it runs on a caller-supplied key only. Falling
-  // back to process.env.OPENAI_API_KEY here would let any anonymous visitor
-  // drain the operator's key, so that fallback exists only behind the explicit
+  // Unauthenticated public path: it runs on a credential the caller supplies --
+  // their own key, or a valid booth access code (see DEMO_ACCESS_CODE_HEADER
+  // for what that does and does not open up). An unconditional fallback to
+  // process.env.OPENAI_API_KEY would let any anonymous visitor drain the
+  // operator's key, so that exists only behind the explicit
   // SPEECH_PREVIEW_ALLOW_ENV_KEY opt-in for private lab deployments.
   fastify.post(
     '/speech/synthesize-preview',
     { bodyLimit: PREVIEW_BODY_LIMIT_BYTES },
     async (request, reply) => {
-      const apiKey =
+      let apiKey =
         resolveUserApiKey(request) ?? (PREVIEW_ALLOWS_ENV_KEY ? getEnvOpenAiApiKey() : null);
+      // Set when the operator key was unlocked by an access code. The spoken
+      // text is then fixed server-side, so the route cannot be used to speak
+      // arbitrary text on the operator's account.
+      let unlockedByAccessCode = false;
+
+      const accessCode = apiKey ? null : readHeader(request, DEMO_ACCESS_CODE_HEADER);
+      if (accessCode) {
+        if (!DEMO_ACCESS_CODES_ENABLED) {
+          return reply.code(403).send({
+            error: 'ACCESS_CODES_DISABLED',
+            message: 'Access codes are not enabled on this deployment.',
+          });
+        }
+        const operatorKey = getEnvOpenAiApiKey();
+        if (!operatorKey) {
+          return reply.code(503).send({
+            error: 'OPERATOR_KEY_UNAVAILABLE',
+            message: 'This deployment has no operator key configured.',
+          });
+        }
+
+        const ip = request.ip;
+        const gate = checkRedemptionAllowed(ip);
+        if (gate.blocked) {
+          const retryAfterSeconds = Math.ceil(gate.retryAfterMs / 1000);
+          reply.header('retry-after', String(retryAfterSeconds));
+          return reply.code(429).send({
+            error: 'ACCESS_CODE_RATE_LIMITED',
+            message:
+              gate.scope === 'global'
+                ? 'Too many failed code attempts right now. Please ask the presenter for help.'
+                : 'Too many incorrect codes from this device. Please wait a few minutes.',
+            retryAfterSeconds,
+          });
+        }
+
+        const verdict = checkAccessCode(accessCode);
+        if (!verdict.ok) {
+          recordRedemptionFailure(ip);
+          const messages: Record<string, string> = {
+            unknown: 'That code is not valid.',
+            not_yet_valid: 'That code is not active yet. Check the dates on the card.',
+            exhausted: 'That code has reached its usage limit.',
+            expired: 'That code has expired.',
+            revoked: 'That code is no longer active.',
+          };
+          return reply.code(400).send({
+            error: 'ACCESS_CODE_INVALID',
+            reason: verdict.reason,
+            message: messages[verdict.reason] ?? 'That code is not valid.',
+          });
+        }
+        recordRedemptionSuccess(ip);
+
+        const slot = takePreviewCodeSlot();
+        if (!slot.ok) {
+          const retryAfterSeconds = Math.ceil(slot.retryAfterMs / 1000);
+          reply.header('retry-after', String(retryAfterSeconds));
+          return reply.code(429).send({
+            error: 'PREVIEW_RATE_LIMITED',
+            message: 'The speaker test is busy right now. Please try again in a minute.',
+            retryAfterSeconds,
+          });
+        }
+        apiKey = operatorKey;
+        unlockedByAccessCode = true;
+      }
+
       if (!apiKey) {
         return reply.code(503).send({ error: 'OPENAI_API_KEY_MISSING' });
       }
 
-      const body = (request.body ?? {}) as {
-        text?: unknown;
-      };
-      const text = trimToNull(body.text);
-      if (!text) {
-        return reply.code(400).send({ error: 'text is required' });
-      }
-      if (text.length > PREVIEW_MAX_TEXT_LENGTH) {
-        return reply
-          .code(400)
-          .send({ error: `text must be ${PREVIEW_MAX_TEXT_LENGTH} characters or fewer` });
+      let text: string;
+      if (unlockedByAccessCode) {
+        text = PREVIEW_SAMPLE_TEXT;
+      } else {
+        const body = (request.body ?? {}) as {
+          text?: unknown;
+        };
+        const parsed = trimToNull(body.text);
+        if (!parsed) {
+          return reply.code(400).send({ error: 'text is required' });
+        }
+        if (parsed.length > PREVIEW_MAX_TEXT_LENGTH) {
+          return reply
+            .code(400)
+            .send({ error: `text must be ${PREVIEW_MAX_TEXT_LENGTH} characters or fewer` });
+        }
+        text = parsed;
       }
 
       const response = await synthesizeSpeechWithOpenAi(text, apiKey);

@@ -36,6 +36,25 @@ interface UseAgentBridgeOptions {
    */
   preferenceProfile?: PreferenceProfilePayload | null;
   /**
+   * The language the visitor is conversing in, and whether voice mode is on.
+   *
+   * Both are pushed to the agent the moment the host joins the relay, and again
+   * right before `session.started` is answered. The agent starts in English
+   * with voice off and only learns otherwise from these envelopes, so a value
+   * sent from a mount-time effect — before the socket is open — is silently
+   * dropped by `sendEnvelope`, and the planner's first request then goes out
+   * without the language section. The join-time push is what makes a Korean
+   * session Korean from its first sentence; `sendConversationLanguage` and
+   * `sendVoiceModeChange` remain the path for a change mid-session.
+   */
+  conversationLanguage?: string;
+  voiceModeEnabled?: boolean;
+  /**
+   * The planner model the visitor chose, or null for the server's own. Pushed
+   * on join with the two above, and on change via `sendPlannerModel`.
+   */
+  plannerModel?: string | null;
+  /**
    * May return a promise, and the reply is held until it settles.
    *
    * The host uses that to land a GUI change with the sentence that describes
@@ -50,7 +69,11 @@ interface UseAgentBridgeOptions {
     params: Record<string, unknown>,
     context?: ToolApplyContext
   ) => UISpec | null | void | Promise<UISpec | null | void>;
-  onAgentMessage: (text: string, category?: string | null) => void;
+  onAgentMessage: (
+    text: string,
+    category?: string | null,
+    timing?: { model: string; plannerMs: number } | null
+  ) => void;
   onSessionEnd: () => void;
   enabled?: boolean;
   /**
@@ -82,6 +105,7 @@ interface UseAgentBridgeResult {
   sendSessionResetToAgent: (reason?: string) => void;
   sendVoiceModeChange: (enabled: boolean) => void;
   sendConversationLanguage: (language: string) => void;
+  sendPlannerModel: (model: string | null) => void;
   /**
    * Remove one preference from the agent's memory, or put one back.
    *
@@ -193,6 +217,9 @@ export function useAgentBridge({
   narrateAdaptations = false,
   spokenBrevity = false,
   preferenceProfile = null,
+  conversationLanguage = 'en',
+  voiceModeEnabled = false,
+  plannerModel = null,
   onToolCall,
   onAgentMessage,
   onSessionEnd,
@@ -240,6 +267,7 @@ export function useAgentBridge({
 
   // Held in their own refs rather than in `latestRef` so the two consumers of
   // that object (which is rebuilt on every uiSpec change) stay untouched.
+  const sessionSettingsRef = useRef({ conversationLanguage, voiceModeEnabled, plannerModel });
   const onCompanionTranscriptRef = useRef(onCompanionTranscript);
   const onCompanionPlaybackCompleteRef = useRef(onCompanionPlaybackComplete);
   const onCompanionHelloRef = useRef(onCompanionHello);
@@ -320,6 +348,31 @@ export function useAgentBridge({
     return true;
   }, []);
 
+  useEffect(() => {
+    sessionSettingsRef.current = { conversationLanguage, voiceModeEnabled, plannerModel };
+  }, [conversationLanguage, voiceModeEnabled, plannerModel]);
+
+  /**
+   * Tell the agent what the host already knows about this session. Called from
+   * inside `handleEnvelope`, synchronously, because the agent asks for
+   * `session.start` within milliseconds of seeing the host's presence — a React
+   * effect keyed on `isJoined` would lose that race and the first planner
+   * request would still be English.
+   */
+  const sendSessionSettings = useCallback(() => {
+    const {
+      conversationLanguage: language,
+      voiceModeEnabled: enabled,
+      plannerModel: model,
+    } = sessionSettingsRef.current;
+    sendEnvelope({ type: 'voice.mode', payload: { enabled } });
+    sendEnvelope({ type: 'conversation.language', payload: { language } });
+    // Always sent, even when null: a fresh agent process starts on the server
+    // model anyway, but a reconnect to one that was switched mid-session must
+    // reflect what this host now wants.
+    sendEnvelope({ type: 'planner.model', payload: { model: model ?? '' } });
+  }, [sendEnvelope]);
+
   const getSnapshotPayload = useCallback((): SnapshotPayload => {
     const current = latestRef.current;
     return {
@@ -344,6 +397,7 @@ export function useAgentBridge({
     switch (message.type) {
       case 'relay.joined':
         setIsJoined(true);
+        sendSessionSettings();
         setJoinedSessionId(
           typeof message.payload?.sessionId === 'string' && message.payload.sessionId.trim()
             ? message.payload.sessionId.trim()
@@ -408,6 +462,10 @@ export function useAgentBridge({
       }
 
       case 'session.start':
+        // Before the reply: the agent requests its snapshot and plans its
+        // opening line as soon as `session.started` lands, and the language
+        // has to be in place for that first request.
+        sendSessionSettings();
         sendEnvelope({
           type: 'session.started',
           replyTo: message.id,
@@ -500,7 +558,17 @@ export function useAgentBridge({
           });
           return;
         }
-        postAgentMessage(text.trim(), typeof rawCategory === 'string' ? rawCategory : null);
+        // Also additive: planner latency and model for the sentence. Shape is
+        // checked field by field so a malformed value is dropped, not rendered.
+        const rawTiming = message.payload?.timing as { model?: unknown; plannerMs?: unknown } | undefined;
+        const timing =
+          rawTiming &&
+          typeof rawTiming.model === 'string' &&
+          typeof rawTiming.plannerMs === 'number' &&
+          Number.isFinite(rawTiming.plannerMs)
+            ? { model: rawTiming.model, plannerMs: rawTiming.plannerMs }
+            : null;
+        postAgentMessage(text.trim(), typeof rawCategory === 'string' ? rawCategory : null, timing);
         return;
       }
 
@@ -555,7 +623,7 @@ export function useAgentBridge({
       default:
         return;
     }
-  }, [getSnapshotPayload, sendEnvelope]);
+  }, [getSnapshotPayload, sendEnvelope, sendSessionSettings]);
 
   useEffect(() => {
     if (!enabled) {
@@ -723,6 +791,13 @@ export function useAgentBridge({
     [sendEnvelope]
   );
 
+  const sendPlannerModel = useCallback(
+    (model: string | null) => {
+      sendEnvelope({ type: 'planner.model', payload: { model: model ?? '' } });
+    },
+    [sendEnvelope]
+  );
+
   const sendPreferenceDelete = useCallback(
     (preferenceId: string) => {
       const trimmed = preferenceId.trim();
@@ -808,6 +883,7 @@ export function useAgentBridge({
     sendSessionResetToAgent,
     sendVoiceModeChange,
     sendConversationLanguage,
+    sendPlannerModel,
     sendPreferenceDelete,
     sendPreferenceRestore,
     sendPreferenceClear,

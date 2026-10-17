@@ -38,10 +38,22 @@ export interface UserMessage extends BaseMessage {
   inputSource?: 'text' | 'voice';
 }
 
+/**
+ * How long the planner took to produce this sentence, and on which model.
+ * Demo only: the agent sends it for every LLM-decided message, but the host
+ * stores it only where a visitor is allowed to switch models and so has a
+ * reason to compare them.
+ */
+export interface AgentMessageTiming {
+  model: string;
+  plannerMs: number;
+}
+
 export interface AgentMessage extends BaseMessage {
   type: 'agent';
   text: string;
   actionTag?: AgentMessageActionTag;
+  timing?: AgentMessageTiming;
   /**
    * What the voice verbosity gate decided for this message. Absent in text
    * mode, where nothing is spoken and nothing is gated.
@@ -81,7 +93,8 @@ interface ChatActions {
     stage: Stage,
     text: string,
     specSnapshot?: UISpec | null,
-    voice?: AgentMessageVoiceMeta
+    voice?: AgentMessageVoiceMeta,
+    timing?: AgentMessageTiming | null
   ) => string;
 
   /** Attach tool-action tag to the latest agent message in the stage */
@@ -197,7 +210,7 @@ export const useChatStore = create<ChatState & ChatActions>((set) => ({
     }));
   },
 
-  addAgentMessage: (stage, text, specSnapshot, voice) => {
+  addAgentMessage: (stage, text, specSnapshot, voice, timing) => {
     const message: AgentMessage = {
       id: `agt-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`,
       type: 'agent',
@@ -205,6 +218,7 @@ export const useChatStore = create<ChatState & ChatActions>((set) => ({
       stage,
       text,
       ...(voice ? { voice } : {}),
+      ...(timing ? { timing } : {}),
     };
     const clonedSnapshot = cloneSpecSnapshot(specSnapshot);
 

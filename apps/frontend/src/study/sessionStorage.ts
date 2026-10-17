@@ -65,16 +65,76 @@ export interface StudySessionState {
 }
 
 const STUDY_SESSION_STORAGE_KEY = 'tuning-movie-study-session';
-// Visitor-supplied OpenAI key. sessionStorage ONLY: it must never outlive the
-// browser session, and must never reach localStorage or any request log.
+// The visitor's credentials -- their own OpenAI key, or the booth's access code
+// -- live in localStorage, not sessionStorage.
+//
+// They used to be sessionStorage so that they died with the tab. That was fine
+// in a browser tab, but the booth runs as an installed PWA, and closing an
+// installed app ends its browsing session: every reopen came back with an empty
+// code field and the presenter had to hand the card over again. Codes are
+// reusable by design (see `demoAccessCodes.ts`) and one code runs a whole event,
+// so the code is simply the kind of thing that should survive a relaunch.
+//
+// The key gets the same treatment because the same relaunch wiped it, and
+// because a visitor who typed their own key did so on their own device. The
+// trade-off is real, so it is stated: a key pasted into a shared tablet now
+// outlives the session until the field is cleared or the storage is wiped. It
+// still never reaches a request log, and clearing the field removes it.
 const OPENAI_API_KEY_STORAGE_KEY = 'tuning-movie-openai-key';
-// The booth's access code. Held on the same terms as the key above --
-// sessionStorage, so it dies with the tab -- but for a different reason. Codes
-// are reusable by design (see `demoAccessCodes.ts`), and one code runs a whole
-// event, so a visitor finishing a demo must not leave the next one staring at an
-// empty field with the card already back in the presenter's hand.
 const DEMO_ACCESS_CODE_STORAGE_KEY = 'tuning-movie-demo-access-code';
 const DEMO_MODE_STORAGE_KEY = 'tuning-movie-demo-mode';
+
+/**
+ * Reads a credential, preferring localStorage and falling back to the
+ * sessionStorage slot it used to live in. The fallback is for a tab that was
+ * open across the deploy that moved these: without it that visitor's typed
+ * credential would vanish on the first reload after the change. Whatever it
+ * finds in the old slot is promoted and the old slot is emptied.
+ */
+function readPersistentCredential(storageKey: string): string {
+  if (typeof window === 'undefined') return '';
+  try {
+    const value = window.localStorage.getItem(storageKey);
+    if (typeof value === 'string' && value) return value;
+  } catch {
+    // Fall through to the legacy slot.
+  }
+  try {
+    const legacy = window.sessionStorage.getItem(storageKey);
+    if (typeof legacy === 'string' && legacy) {
+      try {
+        window.localStorage.setItem(storageKey, legacy);
+        window.sessionStorage.removeItem(storageKey);
+      } catch {
+        // Promotion is best-effort; the value is still returned.
+      }
+      return legacy;
+    }
+  } catch {
+    // Ignore storage failures.
+  }
+  return '';
+}
+
+function writePersistentCredential(storageKey: string, value: string): void {
+  if (typeof window === 'undefined') return;
+  const trimmed = value.trim();
+  try {
+    if (!trimmed) {
+      window.localStorage.removeItem(storageKey);
+    } else {
+      window.localStorage.setItem(storageKey, trimmed);
+    }
+  } catch {
+    // Ignore storage failures.
+  }
+  try {
+    // Never leave a stale copy in the old slot: it would shadow a later clear.
+    window.sessionStorage.removeItem(storageKey);
+  } catch {
+    // Ignore storage failures.
+  }
+}
 
 export function getStoredStudySession(): StudySessionState | null {
   if (typeof window === 'undefined') return null;
@@ -154,69 +214,27 @@ export function clearStoredStudySession(options?: ClearStoredStudySessionOptions
 }
 
 export function getStoredApiKey(): string {
-  if (typeof window === 'undefined') return '';
-  try {
-    const value = window.sessionStorage.getItem(OPENAI_API_KEY_STORAGE_KEY);
-    return typeof value === 'string' ? value : '';
-  } catch {
-    return '';
-  }
+  return readPersistentCredential(OPENAI_API_KEY_STORAGE_KEY);
 }
 
 export function setStoredApiKey(value: string): void {
-  if (typeof window === 'undefined') return;
-  try {
-    const trimmed = value.trim();
-    if (!trimmed) {
-      window.sessionStorage.removeItem(OPENAI_API_KEY_STORAGE_KEY);
-      return;
-    }
-    window.sessionStorage.setItem(OPENAI_API_KEY_STORAGE_KEY, trimmed);
-  } catch {
-    // Ignore storage failures.
-  }
+  writePersistentCredential(OPENAI_API_KEY_STORAGE_KEY, value);
 }
 
 export function clearStoredApiKey(): void {
-  if (typeof window === 'undefined') return;
-  try {
-    window.sessionStorage.removeItem(OPENAI_API_KEY_STORAGE_KEY);
-  } catch {
-    // Ignore storage failures.
-  }
+  writePersistentCredential(OPENAI_API_KEY_STORAGE_KEY, '');
 }
 
 export function getStoredAccessCode(): string {
-  if (typeof window === 'undefined') return '';
-  try {
-    const value = window.sessionStorage.getItem(DEMO_ACCESS_CODE_STORAGE_KEY);
-    return typeof value === 'string' ? value : '';
-  } catch {
-    return '';
-  }
+  return readPersistentCredential(DEMO_ACCESS_CODE_STORAGE_KEY);
 }
 
 export function setStoredAccessCode(value: string): void {
-  if (typeof window === 'undefined') return;
-  try {
-    const trimmed = value.trim();
-    if (!trimmed) {
-      window.sessionStorage.removeItem(DEMO_ACCESS_CODE_STORAGE_KEY);
-      return;
-    }
-    window.sessionStorage.setItem(DEMO_ACCESS_CODE_STORAGE_KEY, trimmed);
-  } catch {
-    // Ignore storage failures.
-  }
+  writePersistentCredential(DEMO_ACCESS_CODE_STORAGE_KEY, value);
 }
 
 export function clearStoredAccessCode(): void {
-  if (typeof window === 'undefined') return;
-  try {
-    window.sessionStorage.removeItem(DEMO_ACCESS_CODE_STORAGE_KEY);
-  } catch {
-    // Ignore storage failures.
-  }
+  writePersistentCredential(DEMO_ACCESS_CODE_STORAGE_KEY, '');
 }
 
 /**

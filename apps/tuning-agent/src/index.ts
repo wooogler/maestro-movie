@@ -1,4 +1,5 @@
 import { createSpeechBarrier } from './core/speechBarrier';
+import { resolveOpenAIModel, setSessionPlannerModel } from './llm/modelSelection';
 import { executePlannedAction } from './core/executor';
 import { AgentMemory } from './core/memory';
 import { applyStateUpdated, applyUserMessage, fromSnapshot } from './core/perception';
@@ -142,6 +143,12 @@ const relay = new RelayClient({
   requestTimeoutMs: 12000,
 });
 const studyLlmTraceLog = createStudyLlmTraceLogWriterFromEnv();
+// Whether the live monitor gets a copy of each LLM request/response. Only the
+// monitor: the study trace file is the research record and is decided by the
+// visitor's consent (AGENT_LLM_TRACE_FILE), never by this flag. The two used to
+// share one gate inside the emitters, so a backend started from a .env with
+// this false produced consented sessions with no trace file at all.
+const monitorLlmTraceEnabled = parseBooleanEnv(process.env.AGENT_MONITOR_LLM_TRACE) ?? true;
 const studyAgentRuntimeLog = createStudyAgentRuntimeLogWriterFromEnv();
 const monitor = new AgentMonitorServer({
   enabled: monitorEnabled,
@@ -188,11 +195,13 @@ const llmTraceHandler = (event: { component?: string; type: string; payload: unk
   const component =
     typeof event.component === 'string' && event.component.trim() ? event.component.trim() : 'unknown';
   const monitorEventType = `llm.${component}.${event.type}`;
-  const systemPrompt = extractSystemPromptFromTracePayload(event.payload);
-  if (event.type === 'request' && systemPrompt && (component === 'planner' || component === 'extractor')) {
-    monitor.updateLlmSystemPrompt(component, systemPrompt);
+  if (monitorLlmTraceEnabled) {
+    const systemPrompt = extractSystemPromptFromTracePayload(event.payload);
+    if (event.type === 'request' && systemPrompt && (component === 'planner' || component === 'extractor')) {
+      monitor.updateLlmSystemPrompt(component, systemPrompt);
+    }
+    monitor.pushEvent(monitorEventType, event.payload);
   }
-  monitor.pushEvent(monitorEventType, event.payload);
   studyLlmTraceLog.append({
     type: monitorEventType,
     payload: event.payload,
@@ -215,6 +224,14 @@ let voiceModeEnabled = false;
 // The language the visitor is conversing in, as the host reports it. English
 // until told otherwise, which is what every study session was.
 let conversationLanguage = 'en';
+/**
+ * How long the last LLM-sourced planning call took, and on which model. Set
+ * after each `planNextAction` that went to the model, attached to the next
+ * `agent.message` the host receives, then cleared -- so the number the visitor
+ * sees beside a sentence is the time it took to decide that sentence, not a
+ * stale one from an earlier turn. Rule-sourced decisions leave it null.
+ */
+let lastPlannerTiming: { model: string; plannerMs: number } | null = null;
 let ensureSessionReadyInFlight: Promise<void> | null = null;
 let sessionReady = false;
 let hostConnectionAvailable = false;
@@ -1176,12 +1193,17 @@ function buildAgentMessageAction(
   text: string,
   category: string
 ): import('./types').PlannedAction {
+  // Additive and optional, like `category`: a host that does not know the
+  // field ignores it. Consumed here so the next message cannot reuse it.
+  const timing = lastPlannerTiming;
+  lastPlannerTiming = null;
   return {
     type: 'agent.message',
     reason: 'Provide a concise assistant response to the user.',
     payload: {
       text,
       category,
+      ...(timing ? { timing } : {}),
     },
   };
 }
@@ -1400,6 +1422,7 @@ async function maybePlanAndExecute(trigger: string): Promise<void> {
         stage: planningContext.stage,
       });
     }
+    const plannerStartedAt = Date.now();
     const decision: PlanDecision = await planNextAction(
       planningContext,
       memory,
@@ -1408,6 +1431,10 @@ async function maybePlanAndExecute(trigger: string): Promise<void> {
       suppressNavigationTools,
       conversationLanguage
     );
+    lastPlannerTiming =
+      decision.source === 'llm'
+        ? { model: resolveOpenAIModel(), plannerMs: Date.now() - plannerStartedAt }
+        : null;
     const action = decision.action;
     const decisionExplainText = decision.explainText ?? '';
     const plannedToolName =
@@ -2296,6 +2323,24 @@ async function handleInbound(envelope: RelayEnvelope): Promise<void> {
       // silently keep speaking English anyway. Better that it be explicit.
       conversationLanguage = next === 'ko' ? 'ko' : 'en';
       monitor.pushEvent('conversation.language', { language: conversationLanguage });
+      return;
+    }
+    case 'planner.model': {
+      // Host-owned, like the language: the visitor picked a planner model in
+      // the settings sheet. An empty model clears the override and returns to
+      // the environment's choice; an id off the allow-list is refused and the
+      // current model stays, which the monitor event makes visible.
+      const payload = asRecord(envelope.payload);
+      const requested = typeof payload?.model === 'string' ? payload.model.trim() : '';
+      const result = setSessionPlannerModel(requested || null);
+      monitor.pushEvent('planner.model', {
+        requested: requested || null,
+        model: result.model,
+        accepted: result.accepted,
+      });
+      if (!result.accepted) {
+        console.warn(`[tuning-agent] planner.model refused: "${requested}" is not an allowed model.`);
+      }
       return;
     }
     case 'tts.playback.complete': {

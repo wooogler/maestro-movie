@@ -486,7 +486,7 @@ Either mode:
 
 | Variable | Value | Why |
 |----------|-------|-----|
-| `SPEECH_PREVIEW_ALLOW_ENV_KEY` | unset or `false` | It would let the unauthenticated `/speech/synthesize-preview` route spend the operator key. |
+| `SPEECH_PREVIEW_ALLOW_ENV_KEY` | unset or `false` | It would let the unauthenticated `/speech/synthesize-preview` route spend the operator key for anyone. Not needed for access-code visitors: a valid code already unlocks the speaker test (fixed sample, rate-limited by `SPEECH_PREVIEW_CODE_MAX_PER_MINUTE`). |
 | `ALLOW_OPERATOR_KEY_FALLBACK` | unset or `false` | `POST /study/sessions` is unauthenticated and only *demo* sessions require a key, so with the fallback on anyone could create a non-demo session and spend the operator key. |
 | `AGENT_RELAY_LOG_ENABLED` | unset or `false` | Keeps relay session logs off. |
 | `DEMO_MAX_CONCURRENT_SESSIONS` | `10` (default, overridable) | Caps simultaneous demo sessions. Demo sessions never evict each other; creation beyond the cap is rejected with a clear error. |

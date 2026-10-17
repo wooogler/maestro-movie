@@ -8,6 +8,11 @@ import type {
   Preference,
   ToolSchemaItem,
 } from "../types";
+import {
+  resolveOpenAIModel,
+  resolveReasoningEffortFor,
+  resolveTemperatureFor,
+} from "./modelSelection";
 
 export interface PlannerWorkflowMemory {
   preferences: Preference[];
@@ -85,23 +90,14 @@ type LlmTraceListener = (event: LlmTraceEvent) => void;
 
 const DEBUG_LLM = process.env.AGENT_LLM_DEBUG === "true";
 
-function parseBooleanEnv(value: string | undefined): boolean | null {
-  if (typeof value !== "string") return null;
-  const normalized = value.trim().toLowerCase();
-  if (normalized === "true") return true;
-  if (normalized === "false") return false;
-  return null;
-}
-
-const monitorLlmTraceOverride = parseBooleanEnv(
-  process.env.AGENT_MONITOR_LLM_TRACE,
-);
-const MONITOR_LLM_TRACE_ENABLED = monitorLlmTraceOverride ?? true;
+// Always emitted. The listeners decide what to do with an event: the agent
+// monitor honours AGENT_MONITOR_LLM_TRACE, the study trace writer honours the
+// visitor's consent. Gating here once silenced both, and a demo session
+// started from a backend with the flag off wrote no *.llm-trace.jsonl at all.
 const llmTraceListeners = new Set<LlmTraceListener>();
 let llmTraceRequestSequence = 0;
 
 function emitLlmTrace(type: LlmTraceEvent["type"], payload: unknown): void {
-  if (!MONITOR_LLM_TRACE_ENABLED) return;
   const event: LlmTraceEvent = { component: "planner", type, payload };
   for (const listener of llmTraceListeners) {
     listener(event);
@@ -551,6 +547,8 @@ const SPOKEN_BREVITY_RULES =
   "- The empty string is for a step on the way to something else: you are about to act again, the user is not being asked for anything, and they just watched the change happen. In that case assistantMessage MUST be empty rather than narrating what they saw.\n" +
   "- But when your turn ENDS and the next move is the user\u2019s, say something. Silence is never how you hand the turn back: ask the question the rules above call for, with nothing in front of it.\n" +
   "- Do not attach a question to a GUI action merely to give the sentence something to do. Where the rules above call for a confirmation, tie-break or narrowing question, still ask it — and let the question be the entire message, with nothing in front of it.\n" +
+  "- A GUI step that you will follow with another step in the same user turn says nothing: leave its assistantMessage empty. That includes the single-choice highlight whose confirmation question the rules above put in the follow-up respond turn, and the augment, sort or filter that prepares for it. If the user asked a question the step answers, the answer goes on the respond turn, in front of the question, not on the GUI step.\n" +
+  "- Before writing a respond turn, read this user turn’s earlier steps in history. A sentence that is already there — as agent text or as linkedAgentText on a step — has been heard. Never write it again in any wording: not as an answer, not as a reason, not as a lead-in. If the answer is already there, the whole message is the question. \"Redford Theatre has the fewest screens.\" on an earlier step and then \"Redford Theatre has the fewest screens. Would you like to choose it?\" is the failure; the correct message is \"Would you like to choose it?\" and nothing else.\n" +
   "- Never read back what is now on screen, never name the items one by one, and never explain a change whose result the user is looking at.\n" +
   "- Never drop a question you do need answered in order to be brief, and always speak an error or a failure in full.\n" +
   "- Never say again, in any wording, something you already said that still stands. A rephrasing of it is a repetition.\n" +
@@ -1059,20 +1057,8 @@ function redactApiKeys(text: string): string {
   return text.replace(/sk-[A-Za-z0-9_*\-]{6,}/g, "sk-[redacted]");
 }
 
-function getOpenAIModel(): string {
-  return process.env.AGENT_OPENAI_MODEL || "gpt-5.6-terra";
-}
-
 function getOpenAIApiMode(): OpenAiApiMode {
   return process.env.AGENT_OPENAI_API_MODE === "chat" ? "chat" : "responses";
-}
-
-function resolveOpenAITemperature(): number | undefined {
-  return DEFAULT_OPENAI_TEMPERATURE;
-}
-
-function resolveOpenAIReasoningEffort(): string | undefined {
-  return DEFAULT_OPENAI_REASONING_EFFORT;
 }
 
 function isUnsupportedTemperatureError(
@@ -1166,8 +1152,12 @@ export async function planActionWithOpenAI(
   if (process.env.AGENT_ENABLE_OPENAI === "false") return null;
   const apiKey = resolveOpenAiApiKey();
   if (!apiKey) return null;
-  const temperature = resolveOpenAITemperature();
-  const reasoningEffort = resolveOpenAIReasoningEffort();
+  // Resolved once per call: the model may have been switched by the host
+  // between turns, and the effort/temperature pair has to match the model
+  // actually named in the body (see modelSelection.ts).
+  const model = resolveOpenAIModel();
+  const reasoningEffort = resolveReasoningEffortFor(model, DEFAULT_OPENAI_REASONING_EFFORT);
+  const temperature = resolveTemperatureFor(reasoningEffort, DEFAULT_OPENAI_TEMPERATURE);
   const apiMode = getOpenAIApiMode();
   const cpMemoryEnabled = hasCpMemoryContext(input.workflow);
   const openAiTools = toOpenAiTools(
@@ -1194,7 +1184,7 @@ export async function planActionWithOpenAI(
   const baseBody =
     apiMode === "chat"
       ? {
-          model: getOpenAIModel(),
+          model,
           messages: [
             {
               role: "system",
@@ -1214,7 +1204,7 @@ export async function planActionWithOpenAI(
             : {}),
         }
       : {
-          model: getOpenAIModel(),
+          model,
           input: [
             {
               role: "system",

@@ -15,6 +15,7 @@
 import { useEffect, useRef } from 'react';
 import { LANGUAGES, LANGUAGE_LABELS, useLanguage } from '../../i18n';
 import { VoiceVerbosityPanel } from '../voice/VoiceVerbosityPanel';
+import { DEFAULT_PLANNER_MODEL, PLANNER_MODEL_OPTIONS } from '../../agent/plannerModels';
 import type {
   VoiceCategory,
   VoiceMode,
@@ -30,6 +31,17 @@ interface SettingsModalProps {
   onCategoryChange: (category: VoiceCategory, mode: VoiceMode) => void;
   onSmartSkipChange: (enabled: boolean) => void;
   voiceGateStats?: { silenced: number; shortened: number } | null;
+  /**
+   * Demo only. In a study condition the planner model is part of the condition
+   * and is set by the researcher through the environment, not by the person in
+   * the chair.
+   */
+  plannerModelAvailable?: boolean;
+  /** null = the server's configured model. */
+  plannerModel?: string | null;
+  onPlannerModelChange?: (model: string | null) => void;
+  /** This session's measured planner latency per model, newest model last. */
+  plannerTurnStats?: Array<{ model: string; turns: number; avgMs: number; lastMs: number }>;
 }
 
 export function SettingsModal({
@@ -40,6 +52,10 @@ export function SettingsModal({
   onCategoryChange,
   onSmartSkipChange,
   voiceGateStats,
+  plannerModelAvailable = false,
+  plannerModel = null,
+  onPlannerModelChange,
+  plannerTurnStats = [],
 }: SettingsModalProps) {
   const { language, setLanguage, s } = useLanguage();
   const closeRef = useRef<HTMLButtonElement | null>(null);
@@ -118,6 +134,72 @@ export function SettingsModal({
             })}
           </div>
         </section>
+
+        {plannerModelAvailable ? (
+          <section className="mb-6">
+            <div className="mb-2">
+              <h3 className="text-xs font-semibold uppercase tracking-wide text-fg-muted">
+                {s.plannerModelLabel}
+              </h3>
+              <p className="mt-1 text-xs text-fg-muted">{s.plannerModelHint}</p>
+            </div>
+            <div role="radiogroup" aria-label={s.plannerModelLabel} className="flex flex-col gap-2">
+              {[
+                {
+                  id: null as string | null,
+                  label: s.plannerModelDefault,
+                  description: DEFAULT_PLANNER_MODEL,
+                },
+                ...PLANNER_MODEL_OPTIONS.map((option) => ({
+                  id: option.id as string | null,
+                  label: option.label,
+                  description: option.description,
+                })),
+              ].map((option) => {
+                const selected = option.id === plannerModel;
+                return (
+                  <button
+                    key={option.id ?? 'default'}
+                    type="button"
+                    role="radio"
+                    aria-checked={selected}
+                    onClick={() => onPlannerModelChange?.(option.id)}
+                    className={`flex flex-col items-start rounded-xl border px-4 py-3 text-left transition-colors ${
+                      selected
+                        ? 'border-primary bg-primary text-primary-fg'
+                        : 'border-dark-border bg-dark text-fg hover:border-primary hover:text-fg-strong'
+                    }`}
+                  >
+                    <span className="text-sm font-medium">{option.label}</span>
+                    <span
+                      className={`mt-0.5 text-xs ${selected ? 'text-primary-fg/80' : 'text-fg-muted'}`}
+                    >
+                      {option.description}
+                    </span>
+                  </button>
+                );
+              })}
+            </div>
+            {plannerTurnStats.length > 0 ? (
+              <div className="mt-3 rounded-xl border border-dark-border bg-dark px-4 py-3">
+                <div className="text-xs font-semibold uppercase tracking-wide text-fg-muted">
+                  {s.plannerModelStatsTitle}
+                </div>
+                <dl className="mt-2 grid grid-cols-[1fr_auto_auto] gap-x-4 gap-y-1 text-xs tabular-nums">
+                  {plannerTurnStats.map((entry) => (
+                    <div key={entry.model} className="contents">
+                      <dt className="truncate text-fg">{entry.model}</dt>
+                      <dd className="text-fg-muted">
+                        {s.plannerModelStatsAvg(entry.avgMs / 1000, entry.turns)}
+                      </dd>
+                      <dd className="text-fg-muted">{s.plannerModelStatsLast(entry.lastMs / 1000)}</dd>
+                    </div>
+                  ))}
+                </dl>
+              </div>
+            ) : null}
+          </section>
+        ) : null}
 
         {voiceSettingsAvailable ? (
           <VoiceVerbosityPanel

@@ -74,6 +74,7 @@ import {
   useStudyInteractionLogger,
   useRealtimeVoice,
   useVoiceVerbositySettings,
+  usePlannerModelSetting,
 } from '../hooks';
 import type { VoiceSpeakItem } from '../hooks/useRealtimeVoice';
 import { useVoiceCompanionHost, type VoiceOutputTarget } from '../hooks/useVoiceCompanionHost';
@@ -869,6 +870,29 @@ export function ChatPage({
   });
   /** Latest settings, for effects that must not re-run when they change. */
   const voiceVerbosityRef = useRef(voiceVerbosity);
+  // Demo only: in a study condition the planner model is part of the condition.
+  const plannerModelAvailable = normalizeStudyMode(studyModePreset) === DEMO_STUDY_MODE;
+  /** Per-model planner latency over this session's messages, for the settings sheet. */
+  const plannerTurnStats = useMemo(() => {
+    const byModel = new Map<string, { turns: number; totalMs: number; lastMs: number }>();
+    for (const message of messages) {
+      if (message.type !== 'agent' || !message.timing) continue;
+      const entry = byModel.get(message.timing.model) ?? { turns: 0, totalMs: 0, lastMs: 0 };
+      entry.turns += 1;
+      entry.totalMs += message.timing.plannerMs;
+      entry.lastMs = message.timing.plannerMs;
+      byModel.set(message.timing.model, entry);
+    }
+    return [...byModel.entries()].map(([model, entry]) => ({
+      model,
+      turns: entry.turns,
+      avgMs: entry.totalMs / entry.turns,
+      lastMs: entry.lastMs,
+    }));
+  }, [messages]);
+  const plannerModelSetting = usePlannerModelSetting({
+    onChange: (_model, detail) => logStudyEvent('chat.planner_model.changed', detail),
+  });
 
   const logDerivedEvents = useCallback(
     (events: DerivedLogEvent[]) => {
@@ -1956,18 +1980,24 @@ export function ChatPage({
     (
       text: string,
       agentCategory: string | null,
-      options: { clearAwaiting: boolean; barrierArmed: boolean }
+      options: {
+        clearAwaiting: boolean;
+        barrierArmed: boolean;
+        /** Planner latency for this sentence; stored only in the demo. */
+        timing?: { model: string; plannerMs: number } | null;
+      }
     ) => {
       const normalizedText = text.trim();
       if (!normalizedText) return;
       if (options.clearAwaiting) setAwaitingAgentResponse(false);
       const stage = activeSpec?.stage ?? currentStage;
+      const timing = options.timing ?? null;
 
       // Text mode: the agent never armed a barrier for this utterance
       // (`noteAgentSpeechSent` no-ops with voice off), so there is nothing to
       // gate and nothing to release. Behave exactly as before the feature.
       if (!voiceModeEnabled || !isAgentInteractionEnabled) {
-        const id = addAgentMessage(stage, normalizedText, activeSpec);
+        const id = addAgentMessage(stage, normalizedText, activeSpec, undefined, timing);
         speakAgentMessage({ id, text: expandTtsAbbreviations(normalizedText) });
         return;
       }
@@ -1985,13 +2015,19 @@ export function ChatPage({
         consecutiveCount: consecutiveAgentUtterancesRef.current,
       });
 
-      const messageId = addAgentMessage(stage, normalizedText, activeSpec, {
-        spoken: decision.mode !== 'silent',
-        category: decision.category,
-        mode: decision.mode,
-        rule: decision.rule,
-        ...(decision.mode !== 'silent' ? { spokenText: decision.spokenText } : {}),
-      });
+      const messageId = addAgentMessage(
+        stage,
+        normalizedText,
+        activeSpec,
+        {
+          spoken: decision.mode !== 'silent',
+          category: decision.category,
+          mode: decision.mode,
+          rule: decision.rule,
+          ...(decision.mode !== 'silent' ? { spokenText: decision.spokenText } : {}),
+        },
+        timing
+      );
 
       const consecutiveBefore = consecutiveAgentUtterancesRef.current;
       if (decision.mode === 'silent') {
@@ -2059,8 +2095,14 @@ export function ChatPage({
   );
 
   const handleAgentMessage = useCallback(
-    (text: string, category?: string | null) => {
-      deliverAgentMessage(text, category ?? null, { clearAwaiting: true, barrierArmed: true });
+    (text: string, category?: string | null, timing?: { model: string; plannerMs: number } | null) => {
+      deliverAgentMessage(text, category ?? null, {
+        clearAwaiting: true,
+        barrierArmed: true,
+        // Only where the visitor can switch models; a study participant is not
+        // shown timings and the condition should not record them differently.
+        timing: plannerModelAvailable ? timing ?? null : null,
+      });
     },
     [deliverAgentMessage]
   );
@@ -2082,6 +2124,7 @@ export function ChatPage({
     sendSessionResetToAgent,
     sendVoiceModeChange,
     sendConversationLanguage,
+    sendPlannerModel,
     sendPreferenceDelete,
     sendPreferenceRestore,
     sendPreferenceClear,
@@ -2103,6 +2146,11 @@ export function ChatPage({
     toolSchema: agentToolSchema,
     guiAdaptationEnabled,
     plannerCpMemoryLimit,
+    // Pushed by the bridge on join, before `session.started`, so the planner's
+    // first request already carries them. The effects below handle changes.
+    conversationLanguage: language,
+    voiceModeEnabled,
+    plannerModel: plannerModelAvailable ? plannerModelSetting.model : null,
     /*
       A quick card asks the planner to describe what it does to the screen.
 
@@ -2327,16 +2375,20 @@ export function ChatPage({
     });
   }, [agentMemory, transformSpecs]);
 
+  // On change only. The mount-time run of each of these fires before the relay
+  // socket is open and is dropped by `sendEnvelope`; the bridge re-sends both
+  // values itself when it joins, which is what the agent actually starts from.
   useEffect(() => {
     sendVoiceModeChange(voiceModeEnabled);
   }, [voiceModeEnabled, sendVoiceModeChange]);
 
-  // Pushed on join as well as on change: the agent starts in English, so a
-  // visitor who picked Korean before the agent connected would otherwise be
-  // answered in English until they toggled something.
   useEffect(() => {
     sendConversationLanguage(language);
   }, [language, sendConversationLanguage]);
+
+  useEffect(() => {
+    sendPlannerModel(plannerModelAvailable ? plannerModelSetting.model : null);
+  }, [plannerModelAvailable, plannerModelSetting.model, sendPlannerModel]);
 
   // The setting persists across sessions, so without this the log shows gating
   // decisions with no record of what was configured when voice was switched on.
@@ -3307,6 +3359,7 @@ export function ChatPage({
               messages={messages}
               activeSpec={activeSpec}
               isAgentTyping={isAgentTyping}
+              showAgentElapsed={plannerModelAvailable}
               interactionLocked={interactionLocked}
               speakingMessageId={speakingMessageId}
               inputDisabled={inputDisabled}
@@ -3338,6 +3391,7 @@ export function ChatPage({
             activeSpec={activeSpec}
             messageSnapshots={messageSnapshots}
             isAgentTyping={isAgentTyping}
+            showAgentElapsed={plannerModelAvailable}
             speakingMessageId={speakingMessageId}
             onSelect={handleSelect}
             onToggle={handleToggle}
@@ -3503,6 +3557,10 @@ export function ChatPage({
           onCategoryChange={handleVerbosityCategoryChange}
           onSmartSkipChange={handleVerbositySmartSkipChange}
           voiceGateStats={voiceGateStats}
+          plannerModelAvailable={plannerModelAvailable}
+          plannerModel={plannerModelSetting.model}
+          onPlannerModelChange={plannerModelSetting.handleChange}
+          plannerTurnStats={plannerTurnStats}
         />
       ) : null}
     </div>

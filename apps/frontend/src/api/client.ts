@@ -28,6 +28,7 @@ const API_BASE_URL = import.meta.env.VITE_API_URL || '';
 export const OPENAI_API_KEY_MISSING = 'OPENAI_API_KEY_MISSING';
 export const OPENAI_AUTH_FAILED = 'OPENAI_AUTH_FAILED';
 export const INVALID_OPENAI_API_KEY = 'INVALID_OPENAI_API_KEY';
+export const PREVIEW_RATE_LIMITED = 'PREVIEW_RATE_LIMITED';
 export const DEMO_SESSION_CAPACITY_REACHED = 'DEMO_SESSION_CAPACITY_REACHED';
 export const STUDY_SESSION_UNAUTHORIZED = 'STUDY_SESSION_UNAUTHORIZED';
 export const ACCESS_CODE_INVALID = 'ACCESS_CODE_INVALID';
@@ -72,6 +73,8 @@ export function describeApiErrorCode(code: string | null): string | null {
       return 'That access code is not valid. Ask the presenter for a new one.';
     case ACCESS_CODE_RATE_LIMITED:
       return 'Too many incorrect codes. Please wait a few minutes, or ask the presenter.';
+    case PREVIEW_RATE_LIMITED:
+      return 'The speaker test is busy right now. Please try again in a minute.';
     case ACCESS_CODES_DISABLED:
       return 'Access codes are not enabled right now. Use your own OpenAI API key instead.';
     case OPERATOR_KEY_UNAVAILABLE:
@@ -442,16 +445,29 @@ export const api = {
       body: JSON.stringify(language ? { language } : {}),
     }),
   /**
-   * Unauthenticated key check / speaker sample. This is the only call that carries
-   * the inline key header: it runs before any study session exists, so there is no
-   * session token the backend could resolve a key from.
+   * Unauthenticated key check / speaker sample. It runs before any study session
+   * exists, so there is no session token the backend could resolve a key from;
+   * the caller names the credential instead. This is the only call that carries
+   * either header. With an access code the backend speaks its own fixed sample
+   * on the operator key and ignores `text`.
    */
-  synthesizeSpeechPreview: async (text: string, signal?: AbortSignal) => {
-    const inlineApiKey = getStoredApiKey().trim();
+  synthesizeSpeechPreview: async (
+    text: string,
+    credential: { apiKey?: string; accessCode?: string } = {},
+    signal?: AbortSignal
+  ) => {
+    const inlineApiKey = (credential.apiKey ?? getStoredApiKey()).trim();
+    const accessCode = credential.accessCode?.trim() ?? '';
+    const headers: Record<string, string> = {};
+    if (accessCode) {
+      headers['x-demo-access-code'] = accessCode;
+    } else if (inlineApiKey) {
+      headers['x-openai-api-key'] = inlineApiKey;
+    }
     const response = await fetchApiResponse('/speech/synthesize-preview', {
       method: 'POST',
       includeStudyToken: false,
-      headers: inlineApiKey ? { 'x-openai-api-key': inlineApiKey } : {},
+      headers,
       body: JSON.stringify({ text }),
       signal,
     });

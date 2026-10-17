@@ -8,6 +8,11 @@ import { resolveOpenAiApiKey } from "./openaiKey";
 import { fetchOpenAiWithRetry } from "./resilientFetch";
 import { CONFLICT_STAGES } from "../types";
 import type { ConflictStage, Preference } from "../types";
+import {
+  resolveOpenAIModel,
+  resolveReasoningEffortFor,
+  resolveTemperatureFor,
+} from "./modelSelection";
 
 interface PreferenceExtractionInput {
   userMessage: string;
@@ -53,23 +58,14 @@ type ExtractionKind = "preferences";
 
 const DEBUG_LLM = process.env.AGENT_LLM_DEBUG === "true";
 
-function parseBooleanEnv(value: string | undefined): boolean | null {
-  if (typeof value !== "string") return null;
-  const normalized = value.trim().toLowerCase();
-  if (normalized === "true") return true;
-  if (normalized === "false") return false;
-  return null;
-}
-
-const monitorLlmTraceOverride = parseBooleanEnv(
-  process.env.AGENT_MONITOR_LLM_TRACE,
-);
-const MONITOR_LLM_TRACE_ENABLED = monitorLlmTraceOverride ?? true;
+// Always emitted. The listeners decide what to do with an event: the agent
+// monitor honours AGENT_MONITOR_LLM_TRACE, the study trace writer honours the
+// visitor's consent. Gating here once silenced both, and a demo session
+// started from a backend with the flag off wrote no *.llm-trace.jsonl at all.
 const llmTraceListeners = new Set<LlmTraceListener>();
 let llmTraceRequestSequence = 0;
 
 function emitLlmTrace(type: LlmTraceEvent["type"], payload: unknown): void {
-  if (!MONITOR_LLM_TRACE_ENABLED) return;
   const event: LlmTraceEvent = { component: "extractor", type, payload };
   for (const listener of llmTraceListeners) {
     listener(event);
@@ -334,13 +330,10 @@ function getOpenAIApiMode(): OpenAiApiMode {
 
 function resolveOpenAIReasoning(
   kind: ExtractionKind,
+  model: string,
 ): { effort: "none" | "low" | "medium"; summary?: "auto" } | undefined {
   void kind;
-  return { effort: DEFAULT_OPENAI_REASONING_EFFORT };
-}
-
-function resolveOpenAITemperature(): number | undefined {
-  return DEFAULT_OPENAI_TEMPERATURE;
+  return { effort: resolveReasoningEffortFor(model, DEFAULT_OPENAI_REASONING_EFFORT) };
 }
 
 function isUnsupportedTemperatureError(
@@ -356,10 +349,6 @@ function isUnsupportedTemperatureError(
       lowered.includes("only support") ||
       lowered.includes("invalid"))
   );
-}
-
-function getOpenAIModel(): string {
-  return process.env.AGENT_OPENAI_MODEL || "gpt-5.6-terra";
 }
 
 // OpenAI auth errors echo a partially masked key back in the error body; strip
@@ -454,9 +443,9 @@ async function callOpenAIJson(
   const apiKey = resolveOpenAiApiKey();
   if (!apiKey) return null;
 
-  const model = getOpenAIModel();
-  const temperature = resolveOpenAITemperature();
-  const reasoning = resolveOpenAIReasoning(kind);
+  const model = resolveOpenAIModel();
+  const reasoning = resolveOpenAIReasoning(kind, model);
+  const temperature = resolveTemperatureFor(reasoning?.effort, DEFAULT_OPENAI_TEMPERATURE);
   const apiMode = getOpenAIApiMode();
   const baseBody =
     apiMode === "chat"

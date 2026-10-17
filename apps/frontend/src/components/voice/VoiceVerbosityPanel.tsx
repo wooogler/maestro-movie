@@ -89,7 +89,7 @@ export function VoiceVerbosityPanel({
         <div>
           <h2 className="text-base font-semibold text-fg-strong">How much the agent speaks</h2>
           <p className="mt-0.5 text-xs text-fg">
-            Anything not spoken still appears in the chat, so nothing is lost.
+            The chat follows the voice: it shows what was said, and a shortened line keeps its full text one tap away.
           </p>
         </div>
         <button

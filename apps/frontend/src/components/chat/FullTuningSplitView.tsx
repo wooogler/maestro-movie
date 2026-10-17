@@ -16,6 +16,12 @@ import { ChatInput } from './ChatInput';
 import { SelectionBreadcrumb } from './SelectionBreadcrumb';
 import { UserMessage } from './UserMessage';
 import { renderMessageText } from './renderMessageText';
+import {
+  guiStepContextText,
+  isSilencedInVoice,
+  linkedTranscriptText,
+  transcriptText,
+} from './voiceTranscript';
 import { guiStageFitScale, splitViewLayout } from './fullTuningLayout';
 import { isCompactViewport } from '../../utils/viewport';
 import { useLanguage } from '../../i18n';
@@ -24,6 +30,8 @@ interface FullTuningSplitViewProps {
   messages: ChatMessage[];
   activeSpec: UISpec | null;
   isAgentTyping?: boolean;
+  /** Demo only: tick a running clock beside the working indicator. */
+  showAgentElapsed?: boolean;
   interactionLocked?: boolean;
   speakingMessageId?: string | null;
   inputDisabled?: boolean;
@@ -221,20 +229,15 @@ function getSnapshotContextLabel(snapshot: GuiSnapshot): string {
   return snapshot.spec.title;
 }
 
-function getSnapshotContextText(snapshot: GuiSnapshot): string {
-  const linkedAssistantText = snapshot.linkedAssistantText?.trim();
-  if (linkedAssistantText) return linkedAssistantText;
-
-  const annotationReason = snapshot.annotation?.reason?.trim();
-  if (annotationReason) return annotationReason;
-
-  const actionReason = snapshot.linkedActionTag?.reason?.trim();
-  if (actionReason) return actionReason;
-
-  const stageDescription = snapshot.spec.description?.trim();
-  if (stageDescription) return stageDescription;
-
-  return snapshot.spec.title;
+function getSnapshotContextText(snapshot: GuiSnapshot, voiceMode: boolean): string {
+  return guiStepContextText({
+    voiceMode,
+    linkedAssistantText: snapshot.linkedAssistantText,
+    annotationReason: snapshot.annotation?.reason,
+    actionReason: snapshot.linkedActionTag?.reason,
+    stageDescription: snapshot.spec.description,
+    title: snapshot.spec.title,
+  });
 }
 
 function buildMarkerLabel(snapshot: GuiSnapshot): string {
@@ -352,6 +355,7 @@ export function FullTuningSplitView({
   messages,
   activeSpec,
   isAgentTyping = false,
+  showAgentElapsed = false,
   interactionLocked = false,
   speakingMessageId = null,
   inputDisabled = true,
@@ -450,7 +454,10 @@ export function FullTuningSplitView({
           stage: message.stage,
           spec: message.spec,
           annotation: message.annotation,
-          linkedAssistantText: linkedAgentMessage?.text,
+          // The GUI card quotes what the voice said over it, not what the
+          // planner wrote; a silenced sentence quotes nothing and the card falls
+          // back to the tool's reason (`voiceTranscript.ts`).
+          linkedAssistantText: linkedAgentMessage ? linkedTranscriptText(linkedAgentMessage) : undefined,
           linkedAssistantMessageId: linkedAgentMessage?.id,
           linkedActionTag: linkedAgentMessage?.actionTag,
           isLatest: false,
@@ -485,6 +492,12 @@ export function FullTuningSplitView({
         continue;
       }
 
+      // Voice mode: a sentence the gate silenced was never heard. It gets no
+      // row and no card of its own — the transcript follows the ear.
+      if (isSilencedInVoice(message)) {
+        continue;
+      }
+
       // Otherwise it gets a card of its own, over the spec it was said about.
       // Without a spec to sit on there is nothing to show, so the row stands
       // alone in the transcript exactly as it used to.
@@ -497,7 +510,7 @@ export function FullTuningSplitView({
           id: `message-${message.id}`,
           stage: base.stage,
           spec: base.spec,
-          linkedAssistantText: message.text,
+          linkedAssistantText: transcriptText(message),
           linkedAssistantMessageId: message.id,
           isLatest: false,
         });
@@ -1074,6 +1087,7 @@ export function FullTuningSplitView({
                     >
                     <GuiSnapshotCard
                       snapshot={transitionState.outgoing}
+                      voiceModeEnabled={voiceModeEnabled}
                       interactive={false}
                       agentActive={false}
                       speaking={false}
@@ -1094,6 +1108,7 @@ export function FullTuningSplitView({
                   >
                     <GuiSnapshotCard
                       snapshot={activeSnapshot}
+                      voiceModeEnabled={voiceModeEnabled}
                       interactive={activeSnapshot.isLatest && !interactionLocked}
                       agentActive={Boolean(isAgentTyping && activeSnapshot.isLatest)}
                       speaking={activeSnapshot.linkedAssistantMessageId === speakingMessageId}
@@ -1269,7 +1284,7 @@ export function FullTuningSplitView({
                 {isAgentTyping ? (
                   <div className="pointer-events-none absolute inset-x-0 bottom-3 z-10 px-4">
                     <div className="mx-auto flex w-full max-w-5xl justify-center">
-                      <AgentActivityOverlay />
+                      <AgentActivityOverlay showElapsed={showAgentElapsed} />
                     </div>
                   </div>
                 ) : null}
@@ -1309,6 +1324,8 @@ export function FullTuningSplitView({
 interface GuiSnapshotCardProps {
   snapshot: GuiSnapshot;
   interactive: boolean;
+  /** With voice on, a step nobody narrated shows no reason text (`guiStepContextText`). */
+  voiceModeEnabled?: boolean;
   agentActive?: boolean;
   speaking?: boolean;
   onSelect?: (id: string) => void;
@@ -1334,6 +1351,7 @@ interface GuiSnapshotCardProps {
 const GuiSnapshotCard = memo(function GuiSnapshotCard({
   snapshot,
   interactive,
+  voiceModeEnabled = false,
   agentActive = false,
   speaking = false,
   onSelect,
@@ -1352,6 +1370,7 @@ const GuiSnapshotCard = memo(function GuiSnapshotCard({
     ? 'border-accent-line shadow-[0_0_0_6px_var(--app-accent-glow-strong)]'
     : 'border-dark-border';
   const contextClass = 'mt-2 text-base font-medium leading-7 text-info-text';
+  const contextText = getSnapshotContextText(snapshot, voiceModeEnabled);
   const handleNextAction =
     interactive && isBookingCompleteMeta(snapshot.spec.meta) && onFinishTask
       ? onFinishTask
@@ -1391,9 +1410,9 @@ const GuiSnapshotCard = memo(function GuiSnapshotCard({
             <span className="min-w-0 text-sm font-semibold text-info-label">
               {getSnapshotContextLabel(snapshot)}
             </span>
-            <div className={contextClass}>
-              {renderMessageText(getSnapshotContextText(snapshot))}
-            </div>
+            {contextText ? (
+              <div className={contextClass}>{renderMessageText(contextText)}</div>
+            ) : null}
           </div>
         </div>
 

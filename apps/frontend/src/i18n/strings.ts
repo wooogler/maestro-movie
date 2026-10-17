@@ -95,6 +95,12 @@ export interface UiStrings {
 
   // Header controls and the settings modal
   languageLabel: string;
+  plannerModelLabel: string;
+  plannerModelDefault: string;
+  plannerModelHint: string;
+  plannerModelStatsTitle: string;
+  plannerModelStatsAvg: (seconds: number, turns: number) => string;
+  plannerModelStatsLast: (seconds: number) => string;
   settings: string;
   settingsTitle: string;
   close: string;
@@ -275,6 +281,14 @@ const EN: UiStrings = {
   bookingFailed: 'Booking failed',
 
   languageLabel: 'Language',
+  plannerModelLabel: 'Planner model',
+  plannerModelDefault: 'Server default',
+  plannerModelHint:
+    'The model that decides what the agent does and says. Takes effect from the next turn; the voice itself is unaffected.',
+  plannerModelStatsTitle: 'This session',
+  plannerModelStatsAvg: (seconds, turns) =>
+    `${seconds.toFixed(1)}s avg · ${turns} ${turns === 1 ? 'turn' : 'turns'}`,
+  plannerModelStatsLast: (seconds) => `last ${seconds.toFixed(1)}s`,
   settings: 'Settings',
   settingsTitle: 'Settings',
   close: 'Close',
@@ -448,6 +462,13 @@ const KO: UiStrings = {
   bookingFailed: '예매에 실패했습니다',
 
   languageLabel: '언어',
+  plannerModelLabel: '플래너 모델',
+  plannerModelDefault: '서버 기본값',
+  plannerModelHint:
+    '에이전트가 무엇을 하고 말할지 결정하는 모델입니다. 다음 턴부터 적용되며, 음성 자체에는 영향이 없습니다.',
+  plannerModelStatsTitle: '이번 세션',
+  plannerModelStatsAvg: (seconds, turns) => `평균 ${seconds.toFixed(1)}초 · ${turns}턴`,
+  plannerModelStatsLast: (seconds) => `마지막 ${seconds.toFixed(1)}초`,
   settings: '설정',
   settingsTitle: '설정',
   close: '닫기',

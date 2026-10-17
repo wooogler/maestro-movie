@@ -17,7 +17,7 @@ import {
   type StudyModeId,
 } from './studyOptions';
 import { useLanguage } from '../i18n';
-import { useVoiceVerbositySettings } from '../hooks';
+import { usePlannerModelSetting, useVoiceVerbositySettings } from '../hooks';
 import { defaultVerbosityFor } from '../voice';
 import { SettingsModal } from '../components/settings/SettingsModal';
 import { PreferencePresetPicker } from '../components/memory';
@@ -143,12 +143,10 @@ export function StudyStartPage({
   const usingAccessCode = demoCredentialMode === 'code';
   const apiKeyMissing = usingAccessCode ? !accessCode.trim() : !apiKey.trim();
   // /speech/synthesize-preview runs before any session exists, so it is
-  // unauthenticated and can only use a key the caller supplies. An access-code
-  // visitor has no key at this point — their credential is redeemed server-side
-  // when the session starts — so the speaker preview is genuinely unavailable
-  // to them. Enabling the operator-key fallback for it instead would reopen the
-  // unauthenticated drain path that flag exists to keep closed.
-  const speakerPreviewUnavailable = demoMode && usingAccessCode;
+  // unauthenticated and the credential travels with the request: the visitor's
+  // own key, or the booth access code, which the backend verifies (read-only,
+  // not a redemption) before speaking its fixed sample on the operator key.
+  const speakerPreviewCredential = demoMode && usingAccessCode ? { accessCode } : { apiKey };
   const tutorialSelected = selectedScenarioId === TUTORIAL_SCENARIO_ID;
   const perTrialSurveyEnabled = isHardTaskScenario({ scenarioId: selectedScenarioId });
   const conditionCode = CONDITION_SELECTION_OPTIONS.find((o) => o.id === selectedConditionMode)?.code ?? selectedConditionMode;
@@ -344,6 +342,10 @@ export function StudyStartPage({
   const voiceSettingsAvailable = demoMode
     ? true
     : getStudyModeConfig(selectedConditionMode).voiceModeAvailable;
+  // Demo only: in a study condition the model is the researcher's to set.
+  const plannerModelSetting = usePlannerModelSetting({
+    onChange: (_model, detail) => queueSetupGuiAction('changePlannerModel', detail),
+  });
 
   const handleConditionChange = (mode: StudyModeId) => {
     onModeChange(mode);
@@ -419,17 +421,14 @@ export function StudyStartPage({
   const handlePlaySpeakerSample = async () => {
     if (voiceCheckLoading !== 'none') return;
     // In the lab flow the key lives on the server, so let the request go out and
-    // let the backend answer; only a demo visitor must supply a key here.
-    if (speakerPreviewUnavailable) {
-      setSpeakerCheckStatus('error');
-      setVoiceCheckError(
-        'The speaker test needs your own OpenAI key. With an access code, voice starts working once the demo begins.'
-      );
-      return;
-    }
+    // let the backend answer; only a demo visitor must supply a credential here.
     if (demoMode && apiKeyMissing) {
       setSpeakerCheckStatus('error');
-      setVoiceCheckError(describeApiErrorCode(OPENAI_API_KEY_MISSING));
+      setVoiceCheckError(
+        usingAccessCode
+          ? 'Enter the access code from the presenter to test the speaker.'
+          : describeApiErrorCode(OPENAI_API_KEY_MISSING)
+      );
       return;
     }
 
@@ -439,7 +438,10 @@ export function StudyStartPage({
     resetVoiceSample();
 
     try {
-      const sample = await api.synthesizeSpeechPreview('This is a speaker test.');
+      const sample = await api.synthesizeSpeechPreview(
+        'This is a speaker test.',
+        speakerPreviewCredential
+      );
       const objectUrl = URL.createObjectURL(sample);
       previewAudioUrlRef.current = objectUrl;
 
@@ -943,6 +945,9 @@ export function StudyStartPage({
           onPresetChange={voiceVerbosity.handlePresetChange}
           onCategoryChange={voiceVerbosity.handleCategoryChange}
           onSmartSkipChange={voiceVerbosity.handleSmartSkipChange}
+          plannerModelAvailable={demoMode}
+          plannerModel={plannerModelSetting.model}
+          onPlannerModelChange={plannerModelSetting.handleChange}
         />
       ) : null}
 
@@ -985,19 +990,15 @@ export function StudyStartPage({
                   <div>
                     <div className="text-sm font-medium text-fg-strong">2. Speaker playback</div>
                     <div className="mt-1 text-xs text-fg-muted">
-                      {speakerPreviewUnavailable
-                        ? 'Needs your own OpenAI key. With an access code the agent starts speaking once the demo begins — the microphone check above is the part that matters here.'
+                      {demoMode && usingAccessCode
+                        ? 'Play a short sample to confirm speaker output and that your access code works.'
                         : 'Play a short sample to confirm speaker output and that your OpenAI API key works.'}
                     </div>
                   </div>
                   <button
                     type="button"
                     onClick={() => void handlePlaySpeakerSample()}
-                    disabled={
-                      voiceCheckLoading !== 'none' ||
-                      (demoMode && apiKeyMissing) ||
-                      speakerPreviewUnavailable
-                    }
+                    disabled={voiceCheckLoading !== 'none' || (demoMode && apiKeyMissing)}
                     className="rounded-lg border border-dark-border px-3 py-2 text-sm font-medium text-fg transition-colors hover:border-primary hover:text-fg-strong disabled:cursor-not-allowed disabled:opacity-50"
                   >
                     {voiceCheckLoading === 'speaker'

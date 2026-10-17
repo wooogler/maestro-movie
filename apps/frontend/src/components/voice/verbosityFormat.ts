@@ -43,8 +43,8 @@ export const VOICE_MODE_LABELS: Record<VoiceMode, string> = {
 
 export const VOICE_MODE_HINTS: Record<VoiceMode, string> = {
   speak: 'Read the whole sentence aloud.',
-  brief: 'Read a shortened version. A question is always kept.',
-  silent: 'Do not read it aloud. The text still appears in the chat.',
+  brief: 'Read a shortened version, and show that version in the chat. A question is always kept.',
+  silent: 'Do not read it aloud, and leave it out of the chat.',
 };
 
 export const SMART_SKIP_LABEL = 'Skip smartly';

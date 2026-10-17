@@ -105,6 +105,8 @@ services:
       # anyone ever adds `env_file: .env` to this service.
       - SPEECH_PREVIEW_ALLOW_ENV_KEY=false
       - ALLOW_OPERATOR_KEY_FALLBACK=false
+      # Cap on code-backed speaker-test clips per minute, all visitors together.
+      - SPEECH_PREVIEW_CODE_MAX_PER_MINUTE=${SPEECH_PREVIEW_CODE_MAX_PER_MINUTE:-60}
     volumes:
       - ./apps/backend/data:/app/apps/backend/data:z
       # Access codes live here; without this a rebuild would invalidate every

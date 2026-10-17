@@ -6,3 +6,7 @@ export {
   useVoiceVerbositySettings,
   type VoiceVerbosityController,
 } from './useVoiceVerbositySettings';
+export {
+  usePlannerModelSetting,
+  type PlannerModelController,
+} from './usePlannerModelSetting';

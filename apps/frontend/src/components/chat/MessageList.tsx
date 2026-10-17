@@ -5,12 +5,15 @@ import { SystemMessage } from './SystemMessage';
 import { UserMessage } from './UserMessage';
 import { AgentMessage } from './AgentMessage';
 import { AgentActivityOverlay } from './AgentActivityOverlay';
+import { isSilencedInVoice, linkedTranscriptText } from './voiceTranscript';
 
 interface MessageListProps {
   messages: ChatMessage[];
   activeSpec: UISpec | null;
   messageSnapshots?: Record<string, UISpec>;
   isAgentTyping?: boolean;
+  /** Demo only: tick a running clock beside the working indicator. */
+  showAgentElapsed?: boolean;
   speakingMessageId?: string | null;
   onSelect?: (id: string) => void;
   onToggle?: (id: string) => void;
@@ -31,6 +34,7 @@ export function MessageList({
   activeSpec,
   messageSnapshots = {},
   isAgentTyping = false,
+  showAgentElapsed = false,
   speakingMessageId = null,
   onSelect,
   onToggle,
@@ -49,9 +53,12 @@ export function MessageList({
   const isNavigationAgentMessage = (message: ChatMessage): boolean =>
     message.type === 'agent' &&
     (message.actionTag?.toolName === 'next' || message.actionTag?.toolName === 'prev');
+  // A silenced sentence has no row, so it cannot carry the live GUI either —
+  // otherwise the system message it superseded would hide as well.
   const isAgentSnapshotMessage = (message: ChatMessage, index: number): boolean =>
     showTurnSnapshots &&
     message.type === 'agent' &&
+    !isSilencedInVoice(message) &&
     !isToolLinkedAgentMessage(index) &&
     !isNavigationAgentMessage(message) &&
     Boolean(messageSnapshots[message.id]);
@@ -147,7 +154,7 @@ export function MessageList({
               const previous = index > 0 ? messages[index - 1] : null;
               const linkedAssistantText =
                 previous && previous.type === 'agent' && isToolLinkedAgentMessage(index - 1)
-                  ? previous.text
+                  ? linkedTranscriptText(previous)
                   : undefined;
               const linkedAssistantSpeaking =
                 previous && previous.type === 'agent' && isToolLinkedAgentMessage(index - 1)
@@ -178,6 +185,13 @@ export function MessageList({
             }
 
             if (isToolLinkedAgentMessage(index)) {
+              return null;
+            }
+
+            // Voice mode: a sentence the gate silenced was never heard, so the
+            // transcript leaves it out (`voiceTranscript.ts`). Only agent
+            // messages with voice metadata qualify; text mode never sets it.
+            if (isSilencedInVoice(message)) {
               return null;
             }
 
@@ -217,7 +231,7 @@ export function MessageList({
       {isAgentTyping ? (
         <div className="pointer-events-none absolute inset-x-0 bottom-3 z-10 px-4">
           <div className="mx-auto flex justify-center" style={{ width: `min(100%, ${chatWidthPx}px)` }}>
-            <AgentActivityOverlay />
+            <AgentActivityOverlay showElapsed={showAgentElapsed} />
           </div>
         </div>
       ) : null}

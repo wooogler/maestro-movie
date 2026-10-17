@@ -113,13 +113,14 @@ export function trigramSimilarity(a: string, b: string): number {
  * are emphatically not duplicates. Requiring these tokens to match as well is
  * what stops the dedupe rule from swallowing a changed choice.
  *
- * The first word is skipped because sentence-initial capitalisation says
- * nothing about proper-noun-hood.
+ * The first word of every sentence is skipped because sentence-initial
+ * capitalisation says nothing about proper-noun-hood — see
+ * `distinguishingTokens`.
  */
 /**
  * Words that name a specific option no matter where they appear. Capitalisation
- * cannot be trusted at position 0, so "Saturday works best…" and "Sunday works
- * best…" would otherwise look like the same sentence.
+ * cannot be trusted at a sentence start, so "Saturday works best…" and "Sunday
+ * works best…" would otherwise look like the same sentence.
  */
 const VALUE_WORDS = new Set([
   'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday',
@@ -136,19 +137,39 @@ const VALUE_WORDS = new Set([
   '일반', '프리미엄',
 ]);
 
+/**
+ * A capitalised word that merely opens a sentence is not a name. This used to
+ * skip position 0 of the whole utterance only, so the "Which" in "Both are
+ * Standard. Which time would you like?" counted as a proper noun and the
+ * sentence never matched "Both showtimes are Standard; which time would you
+ * like?" (0.894 on trigrams) — it was spoken in full right after it. Sentences
+ * are cut the way `shortenForBrief` cuts them, and a `;` ends a clause the same
+ * way, so the word after either is skipped too.
+ */
+function sentenceStart(tokens: string[], index: number): boolean {
+  if (index === 0) return true;
+  // `.`, `!` and `?` are already sentence boundaries by the time this runs:
+  // `splitSentences` breaks on them whenever a capital follows, and the only
+  // full stops it leaves in front of a capital are masked abbreviations
+  // ("6 p.m. Redford…"), which must NOT hide the name after them.
+  return /;["'\u201d\u2019)\]]*$/.test(tokens[index - 1]);
+}
+
 function distinguishingTokens(text: string): Set<string> {
-  const tokens = text.trim().split(/\s+/);
   const out = new Set<string>();
-  tokens.forEach((raw, index) => {
-    const token = raw.replace(/^[^\w\uac00-\ud7a3]+|[^\w\uac00-\ud7a3]+$/g, '');
-    if (!token) return;
-    const lower = token.toLowerCase();
-    if (/\d/.test(token) || VALUE_WORDS.has(lower)) out.add(lower);
-    // Capitalisation marks a name in English. Korean has no case, but the
-    // catalogue's names stay in Latin script inside a Korean sentence, so the
-    // same test still finds them there.
-    else if (index > 0 && /^[A-Z][a-z]/.test(token)) out.add(lower);
-  });
+  for (const sentence of splitSentences(text)) {
+    const tokens = sentence.split(/\s+/);
+    tokens.forEach((raw, index) => {
+      const token = raw.replace(/^[^\w\uac00-\ud7a3]+|[^\w\uac00-\ud7a3]+$/g, '');
+      if (!token) return;
+      const lower = token.toLowerCase();
+      if (/\d/.test(token) || VALUE_WORDS.has(lower)) out.add(lower);
+      // Capitalisation marks a name in English. Korean has no case, but the
+      // catalogue's names stay in Latin script inside a Korean sentence, so the
+      // same test still finds them there.
+      else if (!sentenceStart(tokens, index) && /^[A-Z][a-z]/.test(token)) out.add(lower);
+    });
+  }
   return out;
 }
 

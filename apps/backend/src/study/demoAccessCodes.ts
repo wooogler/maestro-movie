@@ -325,6 +325,46 @@ export function redeemAccessCode(rawCode: string, sessionId: string): RedeemResu
 }
 
 /**
+ * Answers "would this code redeem right now?" without redeeming it.
+ *
+ * The pre-session speaker check uses this: a visitor who has typed a code but
+ * not yet started should be able to hear the speaker, and that must not count
+ * as a use against a `max_redemptions` cap or move `last_redeemed_at`. Same
+ * preconditions as `redeemAccessCode`, evaluated read-only. Callers are still
+ * expected to run the redemption rate limiter around it -- a read-only check
+ * is exactly as useful to a brute-force script as a real one.
+ */
+export function checkAccessCode(rawCode: string): RedeemResult {
+  const code = normalizeAccessCode(rawCode);
+  if (!code) return { ok: false, reason: 'unknown' };
+
+  const now = new Date().toISOString();
+  const row = getDb()
+    .prepare(
+      `SELECT valid_from, expires_at, revoked_at, max_redemptions, redemption_count
+         FROM access_codes WHERE code = ?`
+    )
+    .get(code) as
+    | {
+        valid_from: string | null;
+        expires_at: string | null;
+        revoked_at: string | null;
+        max_redemptions: number | null;
+        redemption_count: number;
+      }
+    | undefined;
+
+  if (!row) return { ok: false, reason: 'unknown' };
+  if (row.revoked_at) return { ok: false, reason: 'revoked' };
+  if (row.valid_from && row.valid_from > now) return { ok: false, reason: 'not_yet_valid' };
+  if (row.expires_at && row.expires_at <= now) return { ok: false, reason: 'expired' };
+  if (row.max_redemptions !== null && row.redemption_count >= row.max_redemptions) {
+    return { ok: false, reason: 'exhausted' };
+  }
+  return { ok: true, code };
+}
+
+/**
  * Gives back the use a session consumed, for a demo that died before starting.
  * Only meaningful for a code with a `max_redemptions` cap; harmless otherwise.
  */
