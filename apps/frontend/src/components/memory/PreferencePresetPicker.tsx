@@ -1,31 +1,7 @@
-import type { AgentMemorySnapshot } from '../../agent/protocol';
-import { AgentMemoryPanel } from './AgentMemoryPanel';
+import type React from 'react';
+import { PreferenceChip } from './PreferenceChip';
 import { PREFERENCE_PRESETS, localizePreset, type PreferencePreset } from '../../study/preferenceProfile';
 import { useLanguage } from '../../i18n';
-
-/**
- * The preset dressed as a memory snapshot, so the preview below the picker IS
- * the memory panel -- same tabs, same hard/soft split, same stage dots -- and
- * not a lookalike. Everything the agent would add during a session (dead ends,
- * commitments, forgotten items) is empty, which is also true of the real
- * snapshot the agent publishes right after loading a profile.
- */
-function presetAsSnapshot(preset: PreferencePreset): AgentMemorySnapshot {
-  return {
-    updatedAt: '',
-    reason: 'preset-preview',
-    stage: null,
-    preferences: preset.preferences,
-    deadEnds: [],
-    attemptedBranches: [],
-    committedWorkflow: null,
-    pendingConflict: null,
-    backtrackContinuation: null,
-    stageBindings: [],
-    forgottenPreferences: [],
-    revokedAdaptations: [],
-  };
-}
 
 interface PreferencePresetPickerProps {
   /** Id of the loaded preset, or null for a session that starts empty. */
@@ -42,9 +18,12 @@ interface PreferencePresetPickerProps {
  * its first snapshot, so the visitor meets an agent that already knows
  * something about them and can watch what that changes.
  *
- * The preview underneath is not a summary. It renders the chips with the very
- * component the memory rail uses, so what the visitor agrees to here is
- * literally what they will see on the rail thirty seconds later.
+ * The preview is not a summary and it is not a separate box: the chosen card
+ * opens to show its preferences with the very chip the memory rail uses --
+ * hard ones first, then soft, stage dots and all -- so what the visitor agrees
+ * to here is literally what they will see on the rail thirty seconds later.
+ * Only the preferences: the rail's workflow graph has nothing to say before a
+ * session exists.
  */
 export function PreferencePresetPicker({
   selectedPresetId,
@@ -56,41 +35,50 @@ export function PreferencePresetPicker({
   const selected = presets.find((preset) => preset.id === selectedPresetId) ?? null;
 
   return (
-    <div className="space-y-3">
-      <div role="radiogroup" aria-label={s.preferenceMemoryTitle} className="grid gap-2">
+    <div role="radiogroup" aria-label={s.preferenceMemoryTitle} className="grid gap-2">
+      <PresetOption
+        label={s.presetStartEmpty}
+        blurb={s.presetStartEmptyBlurb}
+        isSelected={selectedPresetId === null}
+        disabled={disabled}
+        onSelect={() => onSelect(null)}
+      />
+      {presets.map((preset) => (
         <PresetOption
-          label={s.presetStartEmpty}
-          blurb={s.presetStartEmptyBlurb}
-          isSelected={selectedPresetId === null}
+          key={preset.id}
+          label={preset.label}
+          blurb={preset.blurb}
+          count={preset.preferences.length}
+          isSelected={selectedPresetId === preset.id}
           disabled={disabled}
-          onSelect={() => onSelect(null)}
-        />
-        {presets.map((preset) => (
-          <PresetOption
-            key={preset.id}
-            label={preset.label}
-            blurb={preset.blurb}
-            count={preset.preferences.length}
-            isSelected={selectedPresetId === preset.id}
-            disabled={disabled}
-            onSelect={() => onSelect(preset.id)}
-          />
-        ))}
-      </div>
+          onSelect={() => onSelect(preset.id)}
+        >
+          {selected?.id === preset.id ? <PresetPreview preset={selected} note={s.presetPreviewNote} /> : null}
+        </PresetOption>
+      ))}
+    </div>
+  );
+}
 
-      {selected && (
-        <div className="rounded-xl border border-dark-border bg-dark px-3 py-3">
-          <h3 className="text-[10px] font-semibold uppercase tracking-wide text-fg-muted">
-            {s.presetPreviewTitle}
-          </h3>
-          <div className="mt-2">
-            <AgentMemoryPanel snapshot={presetAsSnapshot(selected)} showHeading={false} />
-          </div>
-          <p className="mt-2.5 text-xs leading-relaxed text-fg-faint">
-            {s.presetPreviewNote}
-          </p>
-        </div>
-      )}
+/** The rail's preferences tab, minus the tab: hard first, then soft. */
+function PresetPreview({ preset, note }: { preset: PreferencePreset; note: string }) {
+  const hard = preset.preferences.filter((entry) => entry.strength === 'hard');
+  const soft = preset.preferences.filter((entry) => entry.strength === 'soft');
+  return (
+    <div className="mt-3 border-t border-dark-border pt-3">
+      <ul className="space-y-1.5">
+        {hard.map((preference) => (
+          <PreferenceChip key={preference.id} preference={preference} isNew={false} isBlocked={false} />
+        ))}
+      </ul>
+      {soft.length > 0 ? (
+        <ul className="mt-1.5 space-y-1.5">
+          {soft.map((preference) => (
+            <PreferenceChip key={preference.id} preference={preference} isNew={false} isBlocked={false} />
+          ))}
+        </ul>
+      ) : null}
+      <p className="mt-2.5 text-xs leading-relaxed text-fg-faint">{note}</p>
     </div>
   );
 }
@@ -102,6 +90,7 @@ function PresetOption({
   isSelected,
   disabled,
   onSelect,
+  children,
 }: {
   label: string;
   blurb: string;
@@ -109,37 +98,48 @@ function PresetOption({
   isSelected: boolean;
   disabled: boolean;
   onSelect: () => void;
+  /** Rendered inside the card, under the row, when the option is chosen. */
+  children?: React.ReactNode;
 }) {
   return (
-    <button
-      type="button"
-      role="radio"
-      aria-checked={isSelected}
-      disabled={disabled}
-      onClick={onSelect}
-      className={`flex items-start gap-3 rounded-xl border px-4 py-3 text-left transition-colors disabled:cursor-not-allowed disabled:opacity-50 ${
+    /*
+      The card is a div and only the row is the radio: the preview holds list
+      items with their own titles and labels, which a <button> may not contain.
+    */
+    <div
+      className={`rounded-xl border px-4 py-3 transition-colors ${
         isSelected
           ? 'border-primary/70 bg-primary/10'
           : 'border-dark-border bg-dark hover:border-dark-lighter'
-      }`}
+      } ${disabled ? 'opacity-50' : ''}`}
     >
-      <span
-        aria-hidden
-        className={`mt-1 h-4 w-4 shrink-0 rounded-full border-2 transition-colors ${
-          isSelected ? 'border-primary bg-primary' : 'border-fg-faint'
-        }`}
-      />
-      <span className="min-w-0">
-        <span className="flex items-center gap-2">
-          <span className="text-sm font-semibold text-fg-strong">{label}</span>
-          {typeof count === 'number' && (
-            <span className="rounded bg-dark-lighter px-1.5 py-0.5 text-[10px] font-bold text-fg-muted">
-              {count}
-            </span>
-          )}
+      <button
+        type="button"
+        role="radio"
+        aria-checked={isSelected}
+        disabled={disabled}
+        onClick={onSelect}
+        className="flex w-full items-start gap-3 text-left disabled:cursor-not-allowed"
+      >
+        <span
+          aria-hidden
+          className={`mt-1 h-4 w-4 shrink-0 rounded-full border-2 transition-colors ${
+            isSelected ? 'border-primary bg-primary' : 'border-fg-faint'
+          }`}
+        />
+        <span className="min-w-0">
+          <span className="flex items-center gap-2">
+            <span className="text-sm font-semibold text-fg-strong">{label}</span>
+            {typeof count === 'number' && (
+              <span className="rounded bg-dark-lighter px-1.5 py-0.5 text-[10px] font-bold text-fg-muted">
+                {count}
+              </span>
+            )}
+          </span>
+          <span className="mt-1 block text-sm leading-relaxed text-fg-muted">{blurb}</span>
         </span>
-        <span className="mt-1 block text-sm leading-relaxed text-fg-muted">{blurb}</span>
-      </span>
-    </button>
+      </button>
+      {children}
+    </div>
   );
 }
