@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
-import { LanguageProvider } from './i18n';
+import { LanguageProvider, useLanguage } from './i18n';
 import { ChatPage } from './pages/ChatPage';
 import {
   createProfileFromPreset,
@@ -28,10 +28,12 @@ import { api, describeApiErrorCode, STUDY_SESSION_INVALID_EVENT } from './api/cl
 import type { VoiceOutputTarget } from './hooks/useVoiceCompanionHost';
 import {
   clearStoredStudySession,
+  clearExpiredStoredStudySession,
   getStoredAccessCode,
   getStoredApiKey,
   getStoredDemoModePreference,
   getStoredStudySession,
+  hasExpiredStoredStudySession,
   setStoredAccessCode,
   setStoredApiKey,
   setStoredDemoMode,
@@ -94,6 +96,21 @@ function DemoModeEntry({ onEnter }: { onEnter: () => void }) {
   return <Navigate to="/" replace />;
 }
 
+/*
+  What /booking shows while a session restored from storage is being confirmed
+  with the backend. Deliberately not ChatPage: mounting that joins the relay,
+  mints a pairing token and starts logging on the strength of a record that may
+  describe a session the backend has already finished or reaped.
+*/
+function RestoringSessionScreen() {
+  const { s } = useLanguage();
+  return (
+    <main className="flex h-full items-center justify-center bg-dark px-6">
+      <p className="text-sm text-fg-muted">{s.loading}</p>
+    </main>
+  );
+}
+
 function App() {
   const [theme, setTheme] = useState<Theme>(getInitialTheme);
   // The booth is the common case, so the app opens in demo mode unless a session
@@ -123,6 +140,18 @@ function App() {
     in the same tab, and a stored `true` would answer the question on behalf of
     the next person to walk up. It starts false for every visitor and is cleared
     again the moment a session ends.
+
+    The session record IS persisted (see sessionStorage.ts), so after the
+    installed app is closed and reopened mid-session this flag is false again
+    while the session carries on. That is correct, because the flag is only
+    ever consulted when a session is CREATED: ScenarioReviewPage sends it with
+    POST /study/sessions, and the backend decides there, once, whether the
+    session gets an interaction log and an LLM trace. From then on logging is
+    governed by the record -- `interactionLogFile` in the stored session state
+    is what useStudyInteractionLogger keys on, and the backend keeps appending
+    to the file it opened. So a consented session goes on logging after a
+    relaunch, and one whose visitor never ticked the box has no log file,
+    cannot acquire one, and nothing on the restored path asks again.
   */
   const [demoResearchConsent, setDemoResearchConsent] = useState(false);
   /*
@@ -192,7 +221,13 @@ function App() {
     const preset = findPreferencePreset(preferencePresetId);
     return preset ? createProfileFromPreset(preset, preferenceProfileRevision) : null;
   }, [preferencePresetId, preferenceProfileRevision]);
-  const [sessionNotice, setSessionNotice] = useState<string | null>(null);
+  // Opens with the "session ended" notice when the record in storage is past
+  // its own `expiresAt`: every initialiser below already treats that record as
+  // absent, and the effect further down removes it. Nothing is sent for it --
+  // see isStudySessionExpired.
+  const [sessionNotice, setSessionNotice] = useState<string | null>(() =>
+    hasExpiredStoredStudySession() ? SESSION_ENDED_MESSAGE : null
+  );
   // `studyMode` only ever holds a real study condition. Demo is tracked separately
   // through `demoMode` so entering/leaving the demo never rewrites the persisted
   // study condition selection.
@@ -218,6 +253,36 @@ function App() {
   const [studySession, setStudySession] = useState<StudySessionState | null>(() =>
     getStoredStudySession()
   );
+  /*
+    The session that came back from storage at mount, and whether the backend
+    has confirmed it since.
+
+    A stored record outlives the app now (installed PWA, closed and reopened),
+    so it may describe a session the backend finished, expired or reaped in the
+    meantime. Until GET /study/sessions/me answers, /booking shows a holding
+    screen rather than ChatPage, and `/` -- the PWA's start URL, which is where
+    a relaunch lands -- sends the visitor back into their booking instead of to
+    the start page. Keyed on the session id so that a session created later in
+    this page's life never inherits the restored status, and dropped on every
+    path that ends a session.
+  */
+  const [restoredSession, setRestoredSession] = useState<{
+    sessionId: string;
+    verified: boolean;
+  } | null>(() => {
+    const stored = getStoredStudySession();
+    return stored ? { sessionId: stored.sessionId, verified: false } : null;
+  });
+  const restoringSession = Boolean(
+    studySession && restoredSession && restoredSession.sessionId === studySession.sessionId
+  );
+  const restoringSessionPending = restoringSession && !restoredSession?.verified;
+
+  useEffect(() => {
+    // Once, at mount: the storage write that the notice initialiser above
+    // could not do. Idempotent, so StrictMode's second pass is harmless.
+    clearExpiredStoredStudySession();
+  }, []);
 
   /*
     Read back only for the session it was minted against, rather than cleared
@@ -324,19 +389,22 @@ function App() {
     clearStoredStudySession({ keepCredentials: true });
     setSelectedScenarioTitle(null);
     setStudySession(null);
+    setRestoredSession(null);
     setSessionNotice(null);
     // The next visitor answers for themselves.
     setDemoResearchConsent(false);
     setQuickDemoCard(null);
   };
 
-  // A stale study token (typically a backend restart: demo sessions live in memory
-  // by design) should drop the user back on the start page with an explanation --
-  // but keep the credential they already typed.
+  // A stale study token (a backend restart, since demo sessions live in memory
+  // by design; or a session that was finished, expired or reaped while the
+  // installed app was closed) should drop the user back on the start page with
+  // an explanation -- but keep the credential they already typed.
   const handleStaleStudySession = useCallback(() => {
     clearStoredStudySession({ keepCredentials: true });
     setSelectedScenarioTitle(null);
     setStudySession(null);
+    setRestoredSession(null);
     setSessionNotice(SESSION_ENDED_MESSAGE);
     setDemoResearchConsent(false);
     setQuickDemoCard(null);
@@ -365,6 +433,7 @@ function App() {
   const handleStudySessionCreated = (session: StudySessionState) => {
     setStoredStudySession(session);
     setStudySession(session);
+    setRestoredSession(null);
     setSessionNotice(null);
     if (isDemoStudyMode(session.studyMode)) {
       setDemoMode(true);
@@ -390,10 +459,25 @@ function App() {
     handleStudySessionCreated(session);
   };
 
+  /*
+    Confirms the session with the backend and refreshes the scenario text.
+
+    For a session restored from storage this is also the gate on the booking
+    page: `restoredSession` stays unverified, and /booking stays on its holding
+    screen, until the backend has answered for this exact session id. Any
+    failure -- a 401 for a finished, expired or reaped session, or a backend
+    that cannot be reached -- ends the session on this side, so a dead record
+    never resurrects for the next visitor to pick up the tablet.
+  */
   useEffect(() => {
     if (!studySession) return;
     api.getCurrentStudySession()
       .then((sessionInfo) => {
+        setRestoredSession((prev) =>
+          prev && !prev.verified && prev.sessionId === sessionInfo.sessionId
+            ? { ...prev, verified: true }
+            : prev
+        );
         setStudySession((prev) => {
           if (!prev || prev.sessionId !== sessionInfo.sessionId) return prev;
           const prevBackground = prev.scenario.background ?? '';
@@ -451,7 +535,12 @@ function App() {
               <Routes>
                 <Route
                   path="/"
-                  element={
+                  element={restoringSession ? (
+                    // The PWA's start URL. A relaunch mid-session lands here,
+                    // and the visitor's booking is the only sensible place to
+                    // be; /booking decides whether it is still live.
+                    <Navigate to="/booking" replace />
+                  ) : (
                     <StudyStartPage
                       theme={theme}
                       onThemeToggle={handleThemeToggle}
@@ -476,7 +565,7 @@ function App() {
                       sessionNotice={sessionNotice}
                       onDismissSessionNotice={() => setSessionNotice(null)}
                     />
-                  }
+                  )}
                 />
                 <Route path="/demo" element={<DemoModeEntry onEnter={handleEnterDemoMode} />} />
                 {/* What a printed quick-demo card's QR opens: one stage, one
@@ -524,7 +613,9 @@ function App() {
                 />
                 <Route
                   path="/booking"
-                  element={studySession ? (
+                  element={restoringSessionPending ? (
+                    <RestoringSessionScreen />
+                  ) : studySession ? (
                     <ChatPage
                       studyModePreset={effectiveStudyMode}
                       studySession={studySession}

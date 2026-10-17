@@ -64,9 +64,8 @@ export interface StudySessionState {
   scenario: StudyScenarioSummary;
 }
 
-const STUDY_SESSION_STORAGE_KEY = 'tuning-movie-study-session';
-// The visitor's credentials -- their own OpenAI key, or the booth's access code
-// -- live in localStorage, not sessionStorage.
+// The running session and the visitor's credentials -- their own OpenAI key,
+// or the booth's access code -- live in localStorage, not sessionStorage.
 //
 // They used to be sessionStorage so that they died with the tab. That was fine
 // in a browser tab, but the booth runs as an installed PWA, and closing an
@@ -80,18 +79,31 @@ const STUDY_SESSION_STORAGE_KEY = 'tuning-movie-study-session';
 // trade-off is real, so it is stated: a key pasted into a shared tablet now
 // outlives the session until the field is cleared or the storage is wiped. It
 // still never reaches a request log, and clearing the field removes it.
+//
+// The session record is the third thing the relaunch wiped, and the most
+// visible: a visitor who closed the app mid-booking came back to the start page
+// while their backend session and its agent process lived on, unreachable,
+// until the idle reaper took them. Persisting the record is only half of the
+// fix, though. A stored record is a CLAIM that a session is running, not
+// proof, and the booth runs one stranger after another: a finished, expired or
+// reaped session must never resurrect for the next visitor. So the record is
+// dropped here the moment its own `expiresAt` has passed, and App.tsx confirms
+// every restored record against GET /study/sessions/me before it shows the
+// booking page, clearing it on anything but a live answer.
+const STUDY_SESSION_STORAGE_KEY = 'tuning-movie-study-session';
 const OPENAI_API_KEY_STORAGE_KEY = 'tuning-movie-openai-key';
 const DEMO_ACCESS_CODE_STORAGE_KEY = 'tuning-movie-demo-access-code';
 const DEMO_MODE_STORAGE_KEY = 'tuning-movie-demo-mode';
 
 /**
- * Reads a credential, preferring localStorage and falling back to the
+ * Reads a persisted value, preferring localStorage and falling back to the
  * sessionStorage slot it used to live in. The fallback is for a tab that was
  * open across the deploy that moved these: without it that visitor's typed
- * credential would vanish on the first reload after the change. Whatever it
- * finds in the old slot is promoted and the old slot is emptied.
+ * credential, or their running session, would vanish on the first reload after
+ * the change. Whatever it finds in the old slot is promoted and the old slot is
+ * emptied.
  */
-function readPersistentCredential(storageKey: string): string {
+function readPersistentValue(storageKey: string): string {
   if (typeof window === 'undefined') return '';
   try {
     const value = window.localStorage.getItem(storageKey);
@@ -116,7 +128,7 @@ function readPersistentCredential(storageKey: string): string {
   return '';
 }
 
-function writePersistentCredential(storageKey: string, value: string): void {
+function writePersistentValue(storageKey: string, value: string): void {
   if (typeof window === 'undefined') return;
   const trimmed = value.trim();
   try {
@@ -136,10 +148,27 @@ function writePersistentCredential(storageKey: string, value: string): void {
   }
 }
 
-export function getStoredStudySession(): StudySessionState | null {
+/**
+ * Whether a session record is past its own `expiresAt`.
+ *
+ * The client-side half of the resurrection guard: a record that is obviously
+ * dead is not worth a request, and sending one would also hand the dead token
+ * to every request header until the 401 came back. An `expiresAt` that does
+ * not parse is left to the backend to judge -- that is a malformed record, not
+ * an expired one, and the backend's own check reads it the same way.
+ */
+export function isStudySessionExpired(
+  session: Pick<StudySessionState, 'expiresAt'>,
+  nowMs: number = Date.now()
+): boolean {
+  const expiresAtMs = Date.parse(session.expiresAt);
+  return Number.isFinite(expiresAtMs) && expiresAtMs <= nowMs;
+}
+
+function readStoredStudySessionRecord(): StudySessionState | null {
   if (typeof window === 'undefined') return null;
   try {
-    const raw = window.sessionStorage.getItem(STUDY_SESSION_STORAGE_KEY);
+    const raw = readPersistentValue(STUDY_SESSION_STORAGE_KEY);
     if (!raw) return null;
     const parsed = JSON.parse(raw) as Partial<StudySessionState>;
     if (
@@ -180,33 +209,59 @@ export function getStoredStudySession(): StudySessionState | null {
   }
 }
 
+/**
+ * The stored session, or null if there is none or the stored one has expired.
+ *
+ * An expired record is reported as absent rather than removed here: this is
+ * read from several state initialisers in one render and from every API
+ * request's header builder, and none of those is the place for a storage
+ * write. `clearExpiredStoredStudySession` is, once, at mount.
+ */
+export function getStoredStudySession(): StudySessionState | null {
+  const session = readStoredStudySessionRecord();
+  if (!session || isStudySessionExpired(session)) return null;
+  return session;
+}
+
+/**
+ * Whether storage holds a record whose `expiresAt` has passed. A pure read, so
+ * it can answer from a state initialiser: the visitor is told their session
+ * ended rather than silently shown the start page.
+ */
+export function hasExpiredStoredStudySession(): boolean {
+  const session = readStoredStudySessionRecord();
+  return Boolean(session && isStudySessionExpired(session));
+}
+
+/**
+ * Removes that expired record. Credentials are left alone: they are still
+ * good, and this is exactly the "came back later" path they were persisted for.
+ */
+export function clearExpiredStoredStudySession(): void {
+  if (!hasExpiredStoredStudySession()) return;
+  clearStoredStudySession({ keepCredentials: true });
+}
+
 export function setStoredStudySession(session: StudySessionState): void {
-  if (typeof window === 'undefined') return;
-  try {
-    window.sessionStorage.setItem(STUDY_SESSION_STORAGE_KEY, JSON.stringify(session));
-  } catch {
-    // Ignore storage failures.
-  }
+  writePersistentValue(STUDY_SESSION_STORAGE_KEY, JSON.stringify(session));
 }
 
 export interface ClearStoredStudySessionOptions {
   /**
    * Keep whichever credential the visitor typed -- the OpenAI key or the booth
    * access code. Used on every path that ends a session and sends the visitor
-   * back to the start page: finishing a task, and a study token going stale on a
-   * backend restart. In both cases the credential is still good, so re-typing it
-   * would be pure friction.
+   * back to the start page: finishing a task, a study token going stale on a
+   * backend restart, and a stored session that turned out to be expired or
+   * unknown when the app came back. In all of these the credential is still
+   * good, so re-typing it would be pure friction.
    */
   keepCredentials?: boolean;
 }
 
 export function clearStoredStudySession(options?: ClearStoredStudySessionOptions): void {
   if (typeof window === 'undefined') return;
-  try {
-    window.sessionStorage.removeItem(STUDY_SESSION_STORAGE_KEY);
-  } catch {
-    // Ignore storage failures.
-  }
+  // Empties both the current slot and the legacy sessionStorage one.
+  writePersistentValue(STUDY_SESSION_STORAGE_KEY, '');
   if (!options?.keepCredentials) {
     clearStoredApiKey();
     clearStoredAccessCode();
@@ -214,27 +269,27 @@ export function clearStoredStudySession(options?: ClearStoredStudySessionOptions
 }
 
 export function getStoredApiKey(): string {
-  return readPersistentCredential(OPENAI_API_KEY_STORAGE_KEY);
+  return readPersistentValue(OPENAI_API_KEY_STORAGE_KEY);
 }
 
 export function setStoredApiKey(value: string): void {
-  writePersistentCredential(OPENAI_API_KEY_STORAGE_KEY, value);
+  writePersistentValue(OPENAI_API_KEY_STORAGE_KEY, value);
 }
 
 export function clearStoredApiKey(): void {
-  writePersistentCredential(OPENAI_API_KEY_STORAGE_KEY, '');
+  writePersistentValue(OPENAI_API_KEY_STORAGE_KEY, '');
 }
 
 export function getStoredAccessCode(): string {
-  return readPersistentCredential(DEMO_ACCESS_CODE_STORAGE_KEY);
+  return readPersistentValue(DEMO_ACCESS_CODE_STORAGE_KEY);
 }
 
 export function setStoredAccessCode(value: string): void {
-  writePersistentCredential(DEMO_ACCESS_CODE_STORAGE_KEY, value);
+  writePersistentValue(DEMO_ACCESS_CODE_STORAGE_KEY, value);
 }
 
 export function clearStoredAccessCode(): void {
-  writePersistentCredential(DEMO_ACCESS_CODE_STORAGE_KEY, '');
+  writePersistentValue(DEMO_ACCESS_CODE_STORAGE_KEY, '');
 }
 
 /**
