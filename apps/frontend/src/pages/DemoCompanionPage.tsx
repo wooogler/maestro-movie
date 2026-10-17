@@ -20,14 +20,14 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { api } from '../api/client';
 import { AgentMemoryPanel } from '../components/memory';
-import { PREFERENCE_PRESETS } from '../study/preferenceProfile';
+import { PREFERENCE_PRESETS, localizePreset } from '../study/preferenceProfile';
 import { useCompanionLink } from '../components/companion/useCompanionLink';
 import { useRealtimeVoice, type VoiceSpeakItem } from '../hooks/useRealtimeVoice';
 import { useScreenWakeLock } from '../hooks/useScreenWakeLock';
 import { useLanguage } from '../i18n';
 
 export function DemoCompanionPage() {
-  const { s } = useLanguage();
+  const { s, language } = useLanguage();
 
   const [companionToken] = useState<string | null>(() => {
     if (typeof window === 'undefined') return null;
@@ -233,7 +233,7 @@ export function DemoCompanionPage() {
                 {s.preferenceMemoryTitle}
               </summary>
               <div className="mt-2 grid gap-1.5">
-                {PREFERENCE_PRESETS.map((preset) => (
+                {PREFERENCE_PRESETS.map((raw) => localizePreset(raw, language)).map((preset) => (
                   <button
                     key={preset.id}
                     type="button"

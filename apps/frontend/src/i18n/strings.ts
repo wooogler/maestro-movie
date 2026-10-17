@@ -100,8 +100,10 @@ export interface UiStrings {
   plannerModelHint: string;
   plannerModelDefaultHint: string;
   plannerModelStatsTitle: string;
-  plannerModelStatsAvg: (seconds: number, turns: number) => string;
-  plannerModelStatsLast: (seconds: number) => string;
+  /** `{seconds}` and `{turns}` are replaced. */
+  plannerModelStatsAvg: string;
+  /** `{seconds}` is replaced. */
+  plannerModelStatsLast: string;
   settings: string;
   settingsTitle: string;
   close: string;
@@ -134,6 +136,25 @@ export interface UiStrings {
   memoryRestore: string;
   memoryForgetAll: string;
   memoryForgetAllConfirm: string;
+  // The memory panel's own copy (chips, tabs, banners)
+  memoryEmpty: string;
+  memoryConflict: string;
+  memoryBacktracking: string;
+  /** `{stage}` is replaced with the stage name. */
+  memoryBacktrackTo: string;
+  memoryTabPreferences: string;
+  memoryTabWorkflow: string;
+  memoryNoPreferences: string;
+  memoryForgotten: string;
+  memoryHard: string;
+  memorySoft: string;
+  /** `{stages}` is replaced with the stage names. */
+  memoryAppliesTo: string;
+  // The preset picker on the setup screen
+  presetStartEmpty: string;
+  presetStartEmptyBlurb: string;
+  presetPreviewTitle: string;
+  presetPreviewNote: string;
   devicesTitle: string;
   deviceKiosk: string;
   devicePhone: string;
@@ -298,9 +319,8 @@ const EN: UiStrings = {
     'The model that decides what the agent does and says. Takes effect from the next turn; the voice itself is unaffected.',
   plannerModelDefaultHint: 'Whatever this deployment is configured with. Pick a model to compare it.',
   plannerModelStatsTitle: 'This session',
-  plannerModelStatsAvg: (seconds, turns) =>
-    `${seconds.toFixed(1)}s avg · ${turns} ${turns === 1 ? 'turn' : 'turns'}`,
-  plannerModelStatsLast: (seconds) => `last ${seconds.toFixed(1)}s`,
+  plannerModelStatsAvg: '{seconds}s avg · {turns} turn(s)',
+  plannerModelStatsLast: 'last {seconds}s',
   settings: 'Settings',
   settingsTitle: 'Settings',
   close: 'Close',
@@ -331,6 +351,21 @@ const EN: UiStrings = {
   memoryRestore: 'Restore',
   memoryForgetAll: 'Forget everything',
   memoryForgetAllConfirm: 'Confirm \u2014 forget all?',
+  memoryEmpty: 'Nothing yet \u2014 say what you are looking for and it will appear here.',
+  memoryConflict: 'Conflict detected',
+  memoryBacktracking: 'Backtracking',
+  memoryBacktrackTo: 'Going back to the {stage} step',
+  memoryTabPreferences: 'Preferences',
+  memoryTabWorkflow: 'Workflow',
+  memoryNoPreferences: 'No preferences extracted yet.',
+  memoryForgotten: 'Forgotten',
+  memoryHard: 'Hard',
+  memorySoft: 'Soft',
+  memoryAppliesTo: 'Applies to: {stages}',
+  presetStartEmpty: 'Start empty',
+  presetStartEmptyBlurb: 'The agent begins knowing nothing, as it does today.',
+  presetPreviewTitle: 'The agent will start with',
+  presetPreviewNote: 'Anything here can be removed from the memory panel once the session starts.',
   devicesTitle: 'Devices',
   deviceKiosk: 'Booking screen',
   devicePhone: 'Visitor phone',
@@ -489,8 +524,8 @@ const KO: UiStrings = {
     '에이전트가 무엇을 하고 말할지 결정하는 모델입니다. 다음 턴부터 적용되며, 음성 자체에는 영향이 없습니다.',
   plannerModelDefaultHint: '이 배포에 설정된 모델을 그대로 씁니다. 비교해 보려면 모델을 고르세요.',
   plannerModelStatsTitle: '이번 세션',
-  plannerModelStatsAvg: (seconds, turns) => `평균 ${seconds.toFixed(1)}초 · ${turns}턴`,
-  plannerModelStatsLast: (seconds) => `마지막 ${seconds.toFixed(1)}초`,
+  plannerModelStatsAvg: '평균 {seconds}초 · {turns}턴',
+  plannerModelStatsLast: '마지막 {seconds}초',
   settings: '설정',
   settingsTitle: '설정',
   close: '닫기',
@@ -521,6 +556,21 @@ const KO: UiStrings = {
   memoryRestore: '되돌리기',
   memoryForgetAll: '전체 지우기',
   memoryForgetAllConfirm: '전체를 정말 지울까요?',
+  memoryEmpty: '아직 없습니다. 원하는 것을 말하면 여기에 나타납니다.',
+  memoryConflict: '충돌 감지',
+  memoryBacktracking: '되돌아가는 중',
+  memoryBacktrackTo: '{stage} 단계로 돌아갑니다',
+  memoryTabPreferences: '선호',
+  memoryTabWorkflow: '진행 흐름',
+  memoryNoPreferences: '아직 추출된 선호가 없습니다.',
+  memoryForgotten: '잊은 항목',
+  memoryHard: '필수',
+  memorySoft: '선호',
+  memoryAppliesTo: '적용 단계: {stages}',
+  presetStartEmpty: '빈 상태로 시작',
+  presetStartEmptyBlurb: '에이전트가 아무것도 모르는 채로 시작합니다. 지금과 같습니다.',
+  presetPreviewTitle: '에이전트는 이 선호를 알고 시작합니다',
+  presetPreviewNote: '세션이 시작된 뒤 메모리 패널에서 어느 것이든 지울 수 있습니다.',
   devicesTitle: '연결된 기기',
   deviceKiosk: '예매 화면',
   devicePhone: '방문자 폰',

@@ -654,15 +654,6 @@ export function StudyStartPage({
                     : 'border-dark-border bg-dark text-fg hover:border-primary hover:text-fg-strong'
                 }`}
               >
-                <span
-                  className={`flex h-6 w-6 shrink-0 items-center justify-center rounded-full text-xs font-semibold ${
-                    demoMode && apiKeyMissing
-                      ? 'bg-danger/10 text-danger-text'
-                      : 'bg-primary/15 text-primary-text'
-                  }`}
-                >
-                  {demoMode ? '1' : '2'}
-                </span>
                 {credentialPresent ? (
                   <span aria-hidden="true" className="text-primary-text">
                     ✓
@@ -688,24 +679,23 @@ export function StudyStartPage({
                 title="Check microphone permission and speaker output"
                 className="inline-flex h-14 items-center gap-2 rounded-xl border border-primary/35 bg-primary/10 px-4 text-base font-semibold text-primary-text transition-colors hover:border-primary/60 hover:bg-primary/15 disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:border-primary/35 disabled:hover:bg-primary/10 sm:h-11 sm:rounded-lg sm:text-sm"
               >
-                <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-primary/15 text-xs font-semibold text-primary-text">
-                  {demoMode ? '2' : '3'}
-                </span>
                 {demoMode ? ui.micCheck : 'Mic Check'}
               </button>
-              <button
-                type="button"
-                onClick={() => {
-                  queueSetupGuiAction('openTutorialVideo');
-                  setTutorialVideoOpen(true);
-                }}
-                className="inline-flex h-14 items-center gap-2 rounded-xl border border-primary/35 bg-primary/10 px-4 text-base font-semibold text-primary-text transition-colors hover:border-primary/60 hover:bg-primary/15 sm:h-11 sm:rounded-lg sm:text-sm"
-              >
-                <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-primary/15 text-xs font-semibold text-primary-text">
-                  {demoMode ? '3' : '4'}
-                </span>
-                {demoMode ? ui.watchTutorial : 'Watch Tutorial Video'}
-              </button>
+              {/* Study only. The video walks a participant through a lab
+                  condition; a booth visitor has a presenter beside them, and
+                  the button was one more thing to not press. */}
+              {demoMode ? null : (
+                <button
+                  type="button"
+                  onClick={() => {
+                    queueSetupGuiAction('openTutorialVideo');
+                    setTutorialVideoOpen(true);
+                  }}
+                  className="inline-flex h-14 items-center gap-2 rounded-xl border border-primary/35 bg-primary/10 px-4 text-base font-semibold text-primary-text transition-colors hover:border-primary/60 hover:bg-primary/15 sm:h-11 sm:rounded-lg sm:text-sm"
+                >
+                  Watch Tutorial Video
+                </button>
+              )}
               <button
                 type="button"
                 hidden
@@ -741,15 +731,6 @@ export function StudyStartPage({
           <div className="space-y-4">
             {demoMode ? (
               <>
-              <section className="space-y-3">
-                <h2 className="text-sm font-semibold uppercase tracking-wide text-fg-muted">
-                  Demo
-                </h2>
-                <div className="rounded-xl border border-dark-border bg-dark px-4 py-3 text-sm text-fg-muted">
-                  {ui.demoPrivacyNote}
-                </div>
-              </section>
-
               {/*
                 The consent box. It is asked here rather than on the way out
                 because this is the last screen that exists before the session:

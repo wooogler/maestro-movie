@@ -47,7 +47,7 @@ section('1. PRESET PICKER — the preview is the rail\'s own vocabulary');
   // teach the same thing or it is teaching the wrong thing.
   check('a hard preference renders solid', picked.includes('border-solid'));
   check('a soft preference renders dashed', picked.includes('border-dashed'));
-  check('stage dots carry their label', picked.includes('Applies to: seat'));
+  check('stage dots carry their label', picked.includes('Applies to: Seat'));
   check('nothing is removable before a session exists', !picked.includes('>Forget<'));
 
   const empty = renderToStaticMarkup(

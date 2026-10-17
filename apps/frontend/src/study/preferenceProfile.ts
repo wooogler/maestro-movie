@@ -148,6 +148,116 @@ export const PREFERENCE_PRESETS: PreferencePreset[] = [
   },
 ];
 
+/**
+ * Korean copy for every preset, keyed by id so the English data above stays the
+ * single source for ids, strengths and stages. A preset or preference missing
+ * here falls back to English rather than disappearing; the check script keeps
+ * the two in step.
+ */
+const PRESET_KO: Record<string, { label: string; blurb: string; preferences: Record<string, string> }> = {
+  family_matinee: {
+    label: '가족 낮 상영',
+    blurb: '아이들과 함께 보려는 부모, 이른 시간대.',
+    preferences: {
+      prf_family_rating: 'G 또는 PG 등급 영화만.',
+      prf_family_early: '상영 시작이 오후 5시 이전이어야 합니다.',
+      prf_family_close: '더 가까운 극장을 선호합니다.',
+    },
+  },
+  date_night: {
+    label: '데이트 나이트',
+    blurb: '두 사람, 커플석, 저녁 시간.',
+    preferences: {
+      prf_date_couple: '붙어 있는 커플석 두 자리가 필요합니다.',
+      prf_date_evening: '상영 시작이 오후 6시 이후여야 합니다.',
+      prf_date_recliner: '리클라이너 좌석을 선호합니다.',
+    },
+  },
+  big_screen: {
+    label: '큰 화면',
+    blurb: 'IMAX를 원하지만 멀리 운전은 안 함. 처음부터 충돌 상태.',
+    preferences: {
+      prf_big_imax: '상영은 IMAX여야 합니다.',
+      prf_big_distance: '15마일 넘게 운전하지 않습니다.',
+    },
+  },
+  late_show: {
+    label: '심야 상영',
+    blurb: '퇴근 후, 집에서 가까운 곳.',
+    preferences: {
+      prf_late_evening: '상영 시작이 오후 9시 이후여야 합니다.',
+      prf_late_distance: '15마일 넘게 운전하지 않습니다.',
+    },
+  },
+  budget: {
+    label: '가성비',
+    blurb: '가격이 먼저. 극장은 조용히 알아서 골라집니다.',
+    preferences: {
+      prf_budget_price: '좌석당 12달러 넘게 내지 않습니다.',
+      prf_budget_short: '더 짧은 영화를 선호합니다.',
+    },
+  },
+  easy_trip: {
+    label: '편한 이동',
+    blurb: '느슨하지만, 가장 가까운 극장은 포기하게 됩니다.',
+    preferences: {
+      prf_easy_amenities: '극장에 무료 주차와 지정 좌석제가 있어야 합니다.',
+      prf_easy_rows: '앞 두 줄은 피합니다.',
+    },
+  },
+};
+
+export type PresetLanguage = 'en' | 'ko';
+
+/**
+ * The preset as the visitor should read it. Ids, strengths and stages are
+ * untouched, so a Korean session loads exactly the same memory -- the agent
+ * replaces entries by id -- with the words the visitor can read on the rail.
+ */
+export function localizePreset(preset: PreferencePreset, language: PresetLanguage): PreferencePreset {
+  if (language !== 'ko') return preset;
+  const ko = PRESET_KO[preset.id];
+  if (!ko) return preset;
+  return {
+    ...preset,
+    label: ko.label,
+    blurb: ko.blurb,
+    preferences: preset.preferences.map((entry) =>
+      ko.preferences[entry.id] ? { ...entry, description: ko.preferences[entry.id] } : entry
+    ),
+  };
+}
+
+/**
+ * A loaded profile re-read in the session language. Descriptions are looked up
+ * by id in the preset the profile came from, so a profile created before the
+ * visitor switched language -- or one carried in from the setup screen -- is
+ * sent and shown in the language they are reading now.
+ */
+export function localizeProfile(
+  profile: PreferenceProfile | null,
+  language: PresetLanguage
+): PreferenceProfile | null {
+  if (!profile || language !== 'ko') return profile;
+  const preset = PREFERENCE_PRESETS.find((candidate) => candidate.id === profile.presetId);
+  if (!preset) return profile;
+  const words = new Map(localizePreset(preset, language).preferences.map((entry) => [entry.id, entry.description]));
+  return {
+    ...profile,
+    preferences: profile.preferences.map((entry) =>
+      words.has(entry.id) ? { ...entry, description: words.get(entry.id) as string } : entry
+    ),
+  };
+}
+
+/** For the check script: which preset ids and preference ids carry Korean copy. */
+export function listPresetKoreanCoverage(): Array<{ presetId: string; preferenceIds: string[] }> {
+  return Object.entries(PRESET_KO).map(([presetId, entry]) => ({
+    presetId,
+    preferenceIds: Object.keys(entry.preferences),
+  }));
+}
+
 export function findPreferencePreset(presetId: string): PreferencePreset | null {
   return PREFERENCE_PRESETS.find((preset) => preset.id === presetId) ?? null;
 }
@@ -184,12 +294,13 @@ export function normalizeProfilePreferences(preferences: AgentPreference[]): Age
 
 export function createProfileFromPreset(
   preset: PreferencePreset,
-  revision: number
+  revision: number,
+  language: PresetLanguage = 'en'
 ): PreferenceProfile {
   return {
     presetId: preset.id,
     revision,
-    preferences: normalizeProfilePreferences(preset.preferences),
+    preferences: normalizeProfilePreferences(localizePreset(preset, language).preferences),
   };
 }
 

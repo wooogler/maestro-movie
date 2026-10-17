@@ -1,12 +1,11 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import type { AgentMemorySnapshot } from '../../agent/protocol';
 import {
-  MEMORY_STAGE_LABELS,
   MEMORY_STAGE_ORDER,
-  isMemoryStage,
   describeScope,
+  isMemoryStage,
+  memoryStageLabel,
   readCommittedSelection,
-  type MemoryStage,
 } from './memoryFormat';
 import { WorkflowGraph } from './WorkflowGraph';
 import { PreferenceChip } from './PreferenceChip';
@@ -199,7 +198,7 @@ export function AgentMemoryPanel({
   onPreferenceClearAll,
   pendingPreferenceIds,
 }: AgentMemoryPanelProps) {
-  const { s } = useLanguage();
+  const { s, language } = useLanguage();
   const preferences = snapshot?.preferences ?? [];
   const forgotten = snapshot?.forgottenPreferences ?? [];
   const deadEnds = snapshot?.deadEnds ?? [];
@@ -265,14 +264,14 @@ export function AgentMemoryPanel({
             changed its mind; the tab dots already say something moved.
           */}
           <h2 className={`font-semibold text-fg-strong ${isMirror ? 'text-2xl' : 'text-base'}`}>
-            What the agent remembers
+            {s.mirrorTitle}
           </h2>
         </header>
       )}
 
       {!snapshot && (
         <p className="rounded-lg border border-dashed border-dark-border px-3 py-6 text-center text-sm text-fg-muted">
-          Nothing yet — say what you are looking for and it will appear here.
+          {s.memoryEmpty}
         </p>
       )}
 
@@ -284,7 +283,7 @@ export function AgentMemoryPanel({
           {pendingConflict && (
             <section className="rounded-lg border border-accent-line/60 bg-accent/10 px-3 py-2">
               <h3 className="text-xs font-semibold uppercase tracking-wide text-accent-text">
-                Conflict detected
+                {s.memoryConflict}
               </h3>
               <p className="mt-1 text-sm leading-5 text-fg-strong">{pendingConflict.description}</p>
               {describeScope(pendingConflict.scope) && (
@@ -296,10 +295,13 @@ export function AgentMemoryPanel({
           {backtrackTarget && (
             <section className="rounded-lg border border-primary/60 bg-primary/10 px-3 py-2">
               <h3 className="text-xs font-semibold uppercase tracking-wide text-primary-text">
-                Backtracking
+                {s.memoryBacktracking}
               </h3>
               <p className="mt-1 text-sm text-fg-strong">
-                Going back to the {MEMORY_STAGE_LABELS[backtrackTarget as MemoryStage] ?? backtrackTarget} step
+                {s.memoryBacktrackTo.replace(
+                  '{stage}',
+                  isMemoryStage(backtrackTarget) ? memoryStageLabel(backtrackTarget, language) : backtrackTarget
+                )}
               </p>
             </section>
           )}
@@ -307,7 +309,7 @@ export function AgentMemoryPanel({
           <div role="tablist" aria-label="Agent memory" className="flex gap-1 rounded-lg bg-dark-lighter p-1">
             <TabButton
               id="preferences"
-              label="Preferences"
+              label={s.memoryTabPreferences}
               count={preferences.length}
               isActive={tab === 'preferences'}
               hasPending={preferencesPending}
@@ -315,7 +317,7 @@ export function AgentMemoryPanel({
             />
             <TabButton
               id="workflow"
-              label="Workflow"
+              label={s.memoryTabWorkflow}
               isActive={tab === 'workflow'}
               hasPending={workflowPending}
               onSelect={setTab}
@@ -330,7 +332,7 @@ export function AgentMemoryPanel({
               className="space-y-2"
             >
               {preferences.length === 0 ? (
-                <p className="text-sm text-fg-muted">No preferences extracted yet.</p>
+                <p className="text-sm text-fg-muted">{s.memoryNoPreferences}</p>
               ) : (
                 <>
                   <ul className="space-y-1.5">
@@ -391,7 +393,7 @@ export function AgentMemoryPanel({
               {forgotten.length > 0 && onPreferenceRestore && (
                 <section className="mt-3 border-t border-dark-border pt-3">
                   <h3 className="text-[10px] font-semibold uppercase tracking-wide text-fg-muted">
-                    Forgotten
+                    {s.memoryForgotten}
                   </h3>
                   <ul className="mt-1.5 space-y-1">
                     {forgotten.map((preference) => (
@@ -406,7 +408,7 @@ export function AgentMemoryPanel({
                           type="button"
                           onClick={() => onPreferenceRestore(preference.id)}
                           disabled={isPending(preference.id)}
-                          title={`Restore: ${preference.description}`}
+                          title={`${s.memoryRestore}: ${preference.description}`}
                           className="shrink-0 rounded px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-fg-muted transition-colors hover:bg-primary/20 hover:text-fg-strong focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary disabled:cursor-not-allowed disabled:opacity-50"
                         >
                           {s.memoryRestore}

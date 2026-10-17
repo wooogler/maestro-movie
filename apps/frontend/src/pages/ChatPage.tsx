@@ -51,6 +51,7 @@ import {
   findPreferencePreset,
   toPreferenceProfilePayload,
   type PreferenceProfile,
+  localizeProfile,
 } from '../study/preferenceProfile';
 import type { AgentMemorySnapshot } from '../agent/protocol';
 import { CompanionPairingCard } from '../components/companion/CompanionPairingCard';
@@ -710,9 +711,14 @@ export function ChatPage({
   const [sessionProfile, setSessionProfile] = useState<PreferenceProfile | null>(
     preferenceProfile
   );
+  // The profile is stored in English (ids are what matter to the agent) and
+  // translated on the way out, so the rail and the agent both see the words
+  // the visitor is reading. Read here rather than from the `language` binding
+  // further down, which this memo would reach before it is declared.
+  const { language: profileLanguage } = useLanguage();
   const preferenceProfilePayload = useMemo(
-    () => toPreferenceProfilePayload(sessionProfile),
-    [sessionProfile]
+    () => toPreferenceProfilePayload(localizeProfile(sessionProfile, profileLanguage)),
+    [sessionProfile, profileLanguage]
   );
   const resetChat = useChatStore((s) => s.reset);
 

@@ -6,7 +6,7 @@ import {
   subscribeToMemory,
   useMemoryViewer,
 } from '../components/memory';
-import { PREFERENCE_PRESETS } from '../study/preferenceProfile';
+import { PREFERENCE_PRESETS, localizePreset } from '../study/preferenceProfile';
 import { useLanguage } from '../i18n';
 
 /**
@@ -34,7 +34,7 @@ import { useLanguage } from '../i18n';
 const EMPTY_PENDING: ReadonlySet<string> = new Set();
 
 export function DemoMemoryMirrorPage() {
-  const { s } = useLanguage();
+  const { s, language } = useLanguage();
   const [viewToken] = useState<string | null>(() => {
     if (typeof window === 'undefined') return null;
     const raw = window.location.hash.replace(/^#/, '').trim();
@@ -158,7 +158,7 @@ export function DemoMemoryMirrorPage() {
               {s.preferenceMemoryTitle}
             </summary>
             <div className="mt-3 grid gap-2">
-              {PREFERENCE_PRESETS.map((preset) => (
+              {PREFERENCE_PRESETS.map((raw) => localizePreset(raw, language)).map((preset) => (
                 <button
                   key={preset.id}
                   type="button"

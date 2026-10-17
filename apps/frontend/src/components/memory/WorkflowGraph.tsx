@@ -1,11 +1,12 @@
 import { useMemo } from 'react';
+import { useLanguage } from '../../i18n';
 import type {
   AgentDeadEnd,
   AgentMemorySnapshot,
   AgentStageBinding,
 } from '../../agent/protocol';
 import {
-  MEMORY_STAGE_LABELS,
+  memoryStageLabel,
   MEMORY_STAGE_ORDER,
   describeFilter,
   describeScope,
@@ -83,6 +84,7 @@ export function WorkflowGraph({
   newDeadEndIds,
   isMirror,
 }: WorkflowGraphProps) {
+  const { language } = useLanguage();
   const preferencesById = useMemo(
     () => new Map((snapshot.preferences ?? []).map((item) => [item.id, item])),
     [snapshot.preferences]
@@ -172,7 +174,7 @@ export function WorkflowGraph({
                         isActive ? 'text-fg-strong' : 'text-fg-muted'
                       }`}
                     >
-                      {MEMORY_STAGE_LABELS[stage]}
+                      {memoryStageLabel(stage, language)}
                     </span>
                     {committed ? (
                       <span

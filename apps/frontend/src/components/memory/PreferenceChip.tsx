@@ -1,8 +1,9 @@
 import type { AgentPreference } from '../../agent/protocol';
 import {
   MEMORY_STAGE_INITIALS,
-  MEMORY_STAGE_LABELS,
   MEMORY_STAGE_ORDER,
+  isMemoryStage,
+  memoryStageLabel,
 } from './memoryFormat';
 import { useLanguage } from '../../i18n';
 
@@ -17,13 +18,17 @@ import { useLanguage } from '../../i18n';
  */
 
 export function StageDots({ stages }: { stages: string[] }) {
+  const { s, language } = useLanguage();
   const active = new Set(stages);
+  const names = stages
+    .map((stage) => (isMemoryStage(stage) ? memoryStageLabel(stage, language) : stage))
+    .join(', ');
   return (
-    <span className="flex items-center gap-0.5" aria-label={`Applies to: ${stages.join(', ')}`}>
+    <span className="flex items-center gap-0.5" aria-label={s.memoryAppliesTo.replace('{stages}', names)}>
       {MEMORY_STAGE_ORDER.map((stage) => (
         <span
           key={stage}
-          title={MEMORY_STAGE_LABELS[stage]}
+          title={memoryStageLabel(stage, language)}
           className={`inline-flex h-4 min-w-4 items-center justify-center rounded px-1 text-[9px] font-semibold leading-none ${
             active.has(stage)
               ? 'bg-fg-strong/85 text-dark'
@@ -71,7 +76,7 @@ export function PreferenceChip({
             hard ? 'bg-fg-strong/85 text-dark' : 'bg-dark-lighter text-fg-muted'
           }`}
         >
-          {hard ? 'Hard' : 'Soft'}
+          {hard ? s.memoryHard : s.memorySoft}
         </span>
       </div>
       {/* The control sits on the stage-dot row, not beside the description:

@@ -167,8 +167,11 @@ export function SettingsModal({
             </select>
             <p className="mt-2 text-xs text-fg-muted">
               {plannerModel
-                ? PLANNER_MODEL_OPTIONS.find((option) => option.id === plannerModel)?.description ??
-                  ''
+                ? (() => {
+                    const option = PLANNER_MODEL_OPTIONS.find((candidate) => candidate.id === plannerModel);
+                    if (!option) return '';
+                    return language === 'ko' ? option.descriptionKo : option.description;
+                  })()
                 : s.plannerModelDefaultHint}
             </p>
             {plannerTurnStats.length > 0 ? (
@@ -181,9 +184,13 @@ export function SettingsModal({
                     <div key={entry.model} className="contents">
                       <dt className="truncate text-fg">{entry.model}</dt>
                       <dd className="text-fg-muted">
-                        {s.plannerModelStatsAvg(entry.avgMs / 1000, entry.turns)}
+                        {s.plannerModelStatsAvg
+                          .replace('{seconds}', (entry.avgMs / 1000).toFixed(1))
+                          .replace('{turns}', String(entry.turns))}
                       </dd>
-                      <dd className="text-fg-muted">{s.plannerModelStatsLast(entry.lastMs / 1000)}</dd>
+                      <dd className="text-fg-muted">
+                        {s.plannerModelStatsLast.replace('{seconds}', (entry.lastMs / 1000).toFixed(1))}
+                      </dd>
                     </div>
                   ))}
                 </dl>

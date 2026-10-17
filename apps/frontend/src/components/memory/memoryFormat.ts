@@ -18,6 +18,20 @@ export const MEMORY_STAGE_LABELS: Record<MemoryStage, string> = {
 };
 
 /** Short form for the stage dots on a preference chip, where space is scarce. */
+const MEMORY_STAGE_LABELS_KO: Record<MemoryStage, string> = {
+  movie: '영화',
+  theater: '극장',
+  date: '날짜',
+  time: '상영 시간',
+  seat: '좌석',
+  confirm: '확인',
+};
+
+/** The stage's name in the session language. */
+export function memoryStageLabel(stage: MemoryStage, language: string): string {
+  return language === 'ko' ? MEMORY_STAGE_LABELS_KO[stage] : MEMORY_STAGE_LABELS[stage];
+}
+
 export const MEMORY_STAGE_INITIALS: Record<MemoryStage, string> = {
   movie: 'M',
   theater: 'T',

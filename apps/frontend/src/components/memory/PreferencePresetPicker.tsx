@@ -1,5 +1,31 @@
-import { PreferenceChip } from './PreferenceChip';
-import { PREFERENCE_PRESETS } from '../../study/preferenceProfile';
+import type { AgentMemorySnapshot } from '../../agent/protocol';
+import { AgentMemoryPanel } from './AgentMemoryPanel';
+import { PREFERENCE_PRESETS, localizePreset, type PreferencePreset } from '../../study/preferenceProfile';
+import { useLanguage } from '../../i18n';
+
+/**
+ * The preset dressed as a memory snapshot, so the preview below the picker IS
+ * the memory panel -- same tabs, same hard/soft split, same stage dots -- and
+ * not a lookalike. Everything the agent would add during a session (dead ends,
+ * commitments, forgotten items) is empty, which is also true of the real
+ * snapshot the agent publishes right after loading a profile.
+ */
+function presetAsSnapshot(preset: PreferencePreset): AgentMemorySnapshot {
+  return {
+    updatedAt: '',
+    reason: 'preset-preview',
+    stage: null,
+    preferences: preset.preferences,
+    deadEnds: [],
+    attemptedBranches: [],
+    committedWorkflow: null,
+    pendingConflict: null,
+    backtrackContinuation: null,
+    stageBindings: [],
+    forgottenPreferences: [],
+    revokedAdaptations: [],
+  };
+}
 
 interface PreferencePresetPickerProps {
   /** Id of the loaded preset, or null for a session that starts empty. */
@@ -25,19 +51,21 @@ export function PreferencePresetPicker({
   onSelect,
   disabled = false,
 }: PreferencePresetPickerProps) {
-  const selected = PREFERENCE_PRESETS.find((preset) => preset.id === selectedPresetId) ?? null;
+  const { s, language } = useLanguage();
+  const presets = PREFERENCE_PRESETS.map((preset) => localizePreset(preset, language));
+  const selected = presets.find((preset) => preset.id === selectedPresetId) ?? null;
 
   return (
     <div className="space-y-3">
-      <div role="radiogroup" aria-label="Preference memory" className="grid gap-2">
+      <div role="radiogroup" aria-label={s.preferenceMemoryTitle} className="grid gap-2">
         <PresetOption
-          label="Start empty"
-          blurb="The agent begins knowing nothing, as it does today."
+          label={s.presetStartEmpty}
+          blurb={s.presetStartEmptyBlurb}
           isSelected={selectedPresetId === null}
           disabled={disabled}
           onSelect={() => onSelect(null)}
         />
-        {PREFERENCE_PRESETS.map((preset) => (
+        {presets.map((preset) => (
           <PresetOption
             key={preset.id}
             label={preset.label}
@@ -53,21 +81,13 @@ export function PreferencePresetPicker({
       {selected && (
         <div className="rounded-xl border border-dark-border bg-dark px-3 py-3">
           <h3 className="text-[10px] font-semibold uppercase tracking-wide text-fg-muted">
-            The agent will start with
+            {s.presetPreviewTitle}
           </h3>
-          <ul className="mt-2 space-y-1.5">
-            {selected.preferences.map((preference) => (
-              <PreferenceChip
-                key={preference.id}
-                preference={preference}
-                isNew={false}
-                isBlocked={false}
-              />
-            ))}
-          </ul>
+          <div className="mt-2">
+            <AgentMemoryPanel snapshot={presetAsSnapshot(selected)} showHeading={false} />
+          </div>
           <p className="mt-2.5 text-xs leading-relaxed text-fg-faint">
-            Anything here can be removed from the memory panel once the session
-            starts.
+            {s.presetPreviewNote}
           </p>
         </div>
       )}
