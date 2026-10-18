@@ -24,6 +24,7 @@ interface SetSpecOptions {
     toolName: string;
     reason: string;
     source: 'agent' | 'devtools';
+    preferenceIds?: string[];
   };
   interactionMeta?: {
     action: string;
@@ -195,6 +196,11 @@ export function useToolHandler<T extends DataItem>({
                 toolName,
                 reason,
                 source,
+                // Spread only when present, so a snapshot that was never
+                // preference-driven carries no field for it.
+                ...(source === 'agent' && context?.preferenceIds && context.preferenceIds.length > 0
+                  ? { preferenceIds: context.preferenceIds.slice() }
+                  : {}),
               }
             : undefined,
           interactionMeta:

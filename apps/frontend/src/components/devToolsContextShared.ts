@@ -4,6 +4,8 @@ import type { UISpec } from '../spec';
 export interface ToolApplyContext {
   source?: 'agent' | 'devtools';
   reason?: string;
+  /** Ids of the stored preferences the agent says drove this call, if any. */
+  preferenceIds?: string[];
 }
 
 export type ToolApplyHandler = (

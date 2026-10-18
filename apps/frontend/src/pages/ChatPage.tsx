@@ -53,7 +53,8 @@ import {
   type PreferenceProfile,
   localizeProfile,
 } from '../study/preferenceProfile';
-import type { AgentMemorySnapshot } from '../agent/protocol';
+import type { AgentMemorySnapshot, AgentPreference } from '../agent/protocol';
+import { PreferenceBriefingCard } from '../components/memory/PreferenceBriefingCard';
 import { CompanionPairingCard } from '../components/companion/CompanionPairingCard';
 import { DeviceRosterCard } from '../components/companion/DeviceRosterCard';
 import { useDevicePresence } from '../hooks/useDevicePresence';
@@ -711,6 +712,41 @@ export function ChatPage({
   const [sessionProfile, setSessionProfile] = useState<PreferenceProfile | null>(
     preferenceProfile
   );
+  /*
+    The briefing: what the agent remembers, shown before it may act on it.
+
+    Only a demo session with a non-empty profile has one, and a quick card is
+    excluded because the visitor tapped "start and talk" one screen ago. While
+    it is pending the host stays OFF the relay (see `enabled` on the bridge),
+    so the agent keeps waiting for a host and plans its opening line only once
+    the visitor has confirmed — against the preferences that survived, which
+    the first snapshot then carries. Nothing is sent for a removal made here:
+    the profile the session opens with simply does not contain it.
+  */
+  const briefingProfile =
+    studyModePreset &&
+    normalizeStudyMode(studyModePreset) === DEMO_STUDY_MODE &&
+    !quickStartCard &&
+    preferenceProfile &&
+    preferenceProfile.preferences.length > 0
+      ? preferenceProfile
+      : null;
+  const [briefingPending, setBriefingPending] = useState<boolean>(() => briefingProfile !== null);
+  const handleBriefingConfirm = useCallback(
+    (kept: AgentPreference[]) => {
+      if (!briefingProfile) return;
+      const keptIds = new Set(kept.map((entry) => entry.id));
+      // A fresh revision, so an agent that kept its memory across a host
+      // reconnect still replaces the profile with exactly this remainder.
+      setSessionProfile((current) => ({
+        presetId: briefingProfile.presetId,
+        revision: (current?.revision ?? briefingProfile.revision) + 1,
+        preferences: briefingProfile.preferences.filter((entry) => keptIds.has(entry.id)),
+      }));
+      setBriefingPending(false);
+    },
+    [briefingProfile]
+  );
   // The profile is stored in English (ids are what matter to the agent) and
   // translated on the way out, so the rail and the agent both see the words
   // the visitor is reading. Read here rather than from the `language` binding
@@ -719,6 +755,10 @@ export function ChatPage({
   const preferenceProfilePayload = useMemo(
     () => toPreferenceProfilePayload(localizeProfile(sessionProfile, profileLanguage)),
     [sessionProfile, profileLanguage]
+  );
+  const briefingProfileLocalized = useMemo(
+    () => (briefingPending ? localizeProfile(briefingProfile, profileLanguage) : null),
+    [briefingPending, briefingProfile, profileLanguage]
   );
   const resetChat = useChatStore((s) => s.reset);
 
@@ -1733,6 +1773,7 @@ export function ChatPage({
           toolName: string;
           reason: string;
           source: 'agent' | 'devtools';
+          preferenceIds?: string[];
         };
         interactionMeta?: {
           action: string;
@@ -1870,8 +1911,18 @@ export function ChatPage({
     if (toolName !== 'postMessage') {
       await waitForSpeechStart();
     }
-    return onToolApply(toolName, params, context);
-  }, [onToolApply, waitForSpeechStart]);
+    /*
+      The ids the agent named ride into the GUI card only in the demo. The
+      message history goes back to the agent on every snapshot, so in a study
+      condition an extra field on a system message would reach the planner's
+      prompt — and the chips it is for are drawn nowhere else anyway.
+    */
+    const scopedContext =
+      context?.preferenceIds && !showMemoryPanel
+        ? { source: context.source, reason: context.reason }
+        : context;
+    return onToolApply(toolName, params, scopedContext);
+  }, [onToolApply, showMemoryPanel, waitForSpeechStart]);
 
   // The voice session is declared further down, once the relay state it needs
   // exists. These stable shims let the callbacks above reach it.
@@ -2187,7 +2238,8 @@ export function ChatPage({
     preferenceProfile: showMemoryPanel ? preferenceProfilePayload : null,
     sessionId: studySession?.relaySessionId,
     studyToken: studySession?.studyToken,
-    enabled: isAgentInteractionEnabled && Boolean(studySession),
+    // Held off the relay while the briefing is up; see `briefingPending`.
+    enabled: isAgentInteractionEnabled && Boolean(studySession) && !briefingPending,
     onToolCall: handleAgentToolCall,
     onAgentMessage: handleAgentMessage,
     onSessionEnd: handleSessionReset,
@@ -2233,6 +2285,18 @@ export function ChatPage({
   useEffect(() => {
     memoryPublisherRef.current?.publish(agentMemory, currentStage ?? null);
   }, [agentMemory, currentStage]);
+
+  /*
+    What the GUI card's "from memory" chips resolve ids against. Forgotten
+    entries are included on purpose: a card produced while a preference was
+    held should keep naming it after the visitor removes it, which is exactly
+    the moment that chip explains something.
+  */
+  const adaptationMemoryPreferences = useMemo<AgentPreference[] | null>(
+    () =>
+      agentMemory ? [...agentMemory.preferences, ...agentMemory.forgottenPreferences] : null,
+    [agentMemory]
+  );
 
   /*
     Removing a preference the agent got wrong.
@@ -2497,7 +2561,11 @@ export function ChatPage({
     });
     sendSessionResetToAgent('host-manual-reset');
     handleSessionReset();
-  }, [handleSessionReset, loading, logStudyEvent, sendSessionResetToAgent, stopAgentSpeech]);
+    // A reset is the next visitor. They get the briefing the first one got,
+    // over the full preset — the agent's reset cleared what the last visitor
+    // removed, and the confirm bumps the revision again.
+    if (briefingProfile) setBriefingPending(true);
+  }, [briefingProfile, handleSessionReset, loading, logStudyEvent, sendSessionResetToAgent, stopAgentSpeech]);
 
   const handleFinishStudy = useCallback(async () => {
     if (loading) return;
@@ -3378,6 +3446,7 @@ export function ChatPage({
               voiceInputStatus={voiceInputStatus}
               voiceError={voiceError}
               compactLayoutEnabled={normalizedStudyModePreset === 'demo'}
+              memoryPreferences={showMemoryPanel ? adaptationMemoryPreferences : null}
               highlightVoiceToggle={highlightVoiceToggle}
               voiceToggleDisabled={voiceModeButtonDisabled}
               onToggleVoiceMode={handleVoiceModeToggle}
@@ -3553,6 +3622,12 @@ export function ChatPage({
         </div>
       </div>
       </div>
+
+      {briefingProfileLocalized && isAgentInteractionEnabled ? (
+        <div className="absolute inset-0 z-40 flex items-center justify-center overflow-y-auto bg-dark/85 p-4">
+          <PreferenceBriefingCard profile={briefingProfileLocalized} onConfirm={handleBriefingConfirm} />
+        </div>
+      ) : null}
 
       {settingsOpen ? (
         <SettingsModal

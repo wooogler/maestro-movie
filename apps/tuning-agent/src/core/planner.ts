@@ -949,6 +949,9 @@ export async function planNextAction(
       // a study session's planner input is byte-identical to what it was.
       ...(context.narrateAdaptations ? { narrateAdaptations: true } : {}),
       ...(context.spokenBrevity ? { spokenBrevity: true } : {}),
+      // Profile-seeded preferences exist only in the demo; see
+      // PRELOADED_MEMORY_RULES for why the planner is told about them.
+      ...(memory.hasProfilePreferences() ? { preloadedMemory: true } : {}),
     };
 
     const llm = await planActionWithOpenAI(plannerInput);

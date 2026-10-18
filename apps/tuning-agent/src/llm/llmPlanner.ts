@@ -62,6 +62,12 @@ interface PlannerInput {
    * `buildSystemPrompt` resolves that rather than trusting the caller.
    */
   spokenBrevity?: boolean;
+  /**
+   * At least one preference in memory was seeded from a visitor profile before
+   * the visitor said anything. Demo only — absent or false leaves the prompt
+   * exactly as it was. See PRELOADED_MEMORY_RULES.
+   */
+  preloadedMemory?: boolean;
 }
 
 interface PlannerAction {
@@ -554,6 +560,28 @@ const SPOKEN_BREVITY_RULES =
   "- Never say again, in any wording, something you already said that still stands. A rephrasing of it is a repetition.\n" +
   "- Where this section conflicts with the assistantMessage style rules or the tool-calling rules, this section wins.";
 
+/**
+ * Demo only: the visitor chose a preference profile on the start screen, so
+ * memory holds criteria nobody stated in this conversation.
+ *
+ * Read out of the 2026-10-18 booth trace: with a profile loaded, the planner
+ * entered the movie stage and called filter FIRST (five films to two), then
+ * augmented only the two survivors; entered the theater stage and sorted by
+ * distance without ever showing a distance; entered the time stage and filtered
+ * three showtimes to one before augmenting. The visibility gate in the GUI
+ * rules says augment comes first, but the planner read it as a rule about what
+ * the user just asked for, and a remembered preference did not feel like that.
+ * To the visitor it looked as if augmentation had stopped working — the screen
+ * simply shrank. This section makes the gate explicit for remembered criteria
+ * without touching the study prompt (a study session never loads a profile).
+ */
+const PRELOADED_MEMORY_RULES =
+  "Remembered preferences (this session):\n" +
+  "- Some preferences in memory were loaded from the visitor's profile before they said anything. They are criteria like any other, and the visibility gate applies to them in full.\n" +
+  "- On entering a stage where a remembered preference is relevant, the order is fixed: FIRST augment — every option on screen, every missing field, in one call — THEN filter, sort or highlight by strength, THEN the respond turn. Never filter or sort first and augment what is left: the visitor must see what the preference is acting on before the screen narrows or reorders.\n" +
+  "- A soft comparison preference (closer, cheaper, earlier) is applied by augmenting its field and then sorting. The sort does not replace the augment.\n" +
+  "- If the field is already in visibleItems[].value, skip the augment and apply by strength as the GUI rules say.";
+
 export function buildLanguageSection(language: string | undefined): string | null {
   if (!language || language === "en") return null;
   return LANGUAGE_PROMPTS[language] ?? null;
@@ -577,9 +605,12 @@ export function buildSystemPrompt(
   language?: string,
   narrateAdaptations?: boolean,
   spokenBrevity?: boolean,
+  preloadedMemory?: boolean,
 ): string {
   const cpMemory = hasCpMemoryContext(workflow);
   const guiAdaptation = workflow.guiAdaptationEnabled !== false;
+  // Only meaningful where there are GUI tools to order, like `narrate`.
+  const preloaded = preloadedMemory === true && guiAdaptation;
   const narrate = narrateAdaptations === true && guiAdaptation;
   // The two are contradictory by construction — a card wants the adaptation
   // described, a voice session wants it left to the screen. Resolved here so a
@@ -587,7 +618,7 @@ export function buildSystemPrompt(
   const brevity = spokenBrevity === true && !narrate;
   // Language belongs in the key: a visitor may switch mid-session, and the
   // cached prompt would otherwise keep the language they started in.
-  const key = `cp:${cpMemory}|gui:${guiAdaptation}|meta:${stageMeta ? stageMeta.length : 0}|lang:${language ?? "en"}|narrate:${narrate}|brief:${brevity}`;
+  const key = `cp:${cpMemory}|gui:${guiAdaptation}|meta:${stageMeta ? stageMeta.length : 0}|lang:${language ?? "en"}|narrate:${narrate}|brief:${brevity}|preload:${preloaded}`;
 
   if (key === cachedSystemPromptKey && cachedSystemPrompt) {
     return cachedSystemPrompt;
@@ -607,6 +638,12 @@ export function buildSystemPrompt(
     sections.push(GUI_ADAPTATION_ENABLED_RULES);
   } else {
     sections.push(GUI_ADAPTATION_DISABLED_RULES);
+  }
+  // Right after the GUI rules whose visibility gate it restates, so the two
+  // read as one instruction; before narration and brevity, which govern
+  // wording and must still win on wording.
+  if (preloaded) {
+    sections.push(PRELOADED_MEMORY_RULES);
   }
   // Straight after the rules it overrides, and only when there are adaptations
   // to narrate — with GUI adaptation off there is nothing for it to describe.
@@ -1176,6 +1213,7 @@ export async function planActionWithOpenAI(
       input.language,
       input.narrateAdaptations,
       input.spokenBrevity,
+      input.preloadedMemory,
     ) +
     "\n" +
     OPENAI_TOOL_CALLING_RULES;

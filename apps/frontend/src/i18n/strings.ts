@@ -17,6 +17,25 @@ import type { Language } from './language';
 /** Sun-first, matching the calendar grid's column order. */
 export type WeekdayNames = readonly [string, string, string, string, string, string, string];
 
+/**
+ * GUI tools the agent can be seen applying, plus the two stage moves and a
+ * catch-all for a tool the UI has no phrase for.
+ */
+export type AgentStepKey =
+  | 'select'
+  | 'selectMultiple'
+  | 'filter'
+  | 'sort'
+  | 'highlight'
+  | 'augment'
+  | 'clearModification'
+  | 'next'
+  | 'prev'
+  | 'movedNext'
+  | 'movedBack'
+  | 'updatedGui'
+  | 'other';
+
 export interface UiStrings {
   // Action bar and stage chrome
   back: string;
@@ -57,6 +76,13 @@ export interface UiStrings {
   voice: string;
   turnOnVoice: string;
   turnOffVoice: string;
+  /**
+   * The label over a GUI step in the demo's split view and its timeline
+   * markers: who did it and what. One full phrase per tool rather than an
+   * actor + verb pair, because Korean puts the actor particle and the verb
+   * ending where English puts neither.
+   */
+  agentStepLabels: Record<AgentStepKey, string>;
   voiceSettingsTitle: string;
   voiceSettingsHint: string;
 
@@ -155,6 +181,14 @@ export interface UiStrings {
   presetStartEmptyBlurb: string;
   presetPreviewTitle: string;
   presetPreviewNote: string;
+  // The briefing card the booking screen opens with when memory is preloaded
+  briefingTitle: string;
+  briefingBody: string;
+  briefingStart: string;
+  briefingStartEmpty: string;
+  briefingNothingLeft: string;
+  /** Label on the chips that name the memory behind a GUI adaptation. */
+  adaptationFromMemory: string;
   devicesTitle: string;
   deviceKiosk: string;
   devicePhone: string;
@@ -280,6 +314,21 @@ const EN: UiStrings = {
   voice: 'Voice',
   turnOnVoice: 'Turn on voice mode',
   turnOffVoice: 'Turn off voice mode',
+  agentStepLabels: {
+    select: 'Agent is selecting',
+    selectMultiple: 'Agent is selecting multiple seats',
+    filter: 'Agent is filtering',
+    sort: 'Agent is sorting',
+    highlight: 'Agent is highlighting',
+    augment: 'Agent is updating labels',
+    clearModification: 'Agent is clearing modifications',
+    next: 'Agent is moving to the next stage',
+    prev: 'Agent is going back',
+    movedNext: 'Agent moved to the next stage',
+    movedBack: 'Agent went back',
+    updatedGui: 'Agent updated the GUI',
+    other: 'Agent is applying a change',
+  },
   voiceSettingsTitle: 'Voice verbosity settings',
   voiceSettingsHint: 'Choose how much the agent says out loud',
 
@@ -366,6 +415,13 @@ const EN: UiStrings = {
   presetStartEmptyBlurb: 'The agent begins knowing nothing, as it does today.',
   presetPreviewTitle: 'The agent will start with',
   presetPreviewNote: 'Anything here can be removed from the memory panel once the session starts.',
+  briefingTitle: 'The agent remembers you',
+  briefingBody:
+    'From a previous visit, it already knows the preferences below. Remove anything that is not true today, then start.',
+  briefingStart: 'Start with these',
+  briefingStartEmpty: 'Start with nothing',
+  briefingNothingLeft: 'Nothing left \u2014 the agent will start knowing nothing.',
+  adaptationFromMemory: 'From memory',
   devicesTitle: 'Devices',
   deviceKiosk: 'Booking screen',
   devicePhone: 'Visitor phone',
@@ -416,7 +472,7 @@ const EN: UiStrings = {
   watchTutorial: 'Watch Tutorial Video',
   startDemo: 'Start Demo',
   demoPrivacyNote:
-    'Your key stays in this browser tab and is used only for this session. Voice mode is available from the mic button once the booking task starts.',
+    'Your key stays in this browser tab and is used only for this session. Voice starts as soon as the booking opens; the mic button turns it off.',
 
   consentTitle: 'Research recording',
   consentCheckboxLabel: 'Yes, record this session for research.',
@@ -485,6 +541,21 @@ const KO: UiStrings = {
   voice: '음성',
   turnOnVoice: '음성 모드 켜기',
   turnOffVoice: '음성 모드 끄기',
+  agentStepLabels: {
+    select: '에이전트가 선택하는 중',
+    selectMultiple: '에이전트가 좌석 여러 개를 선택하는 중',
+    filter: '에이전트가 걸러내는 중',
+    sort: '에이전트가 정렬하는 중',
+    highlight: '에이전트가 강조하는 중',
+    augment: '에이전트가 정보를 덧붙이는 중',
+    clearModification: '에이전트가 변경을 되돌리는 중',
+    next: '에이전트가 다음 단계로 넘어가는 중',
+    prev: '에이전트가 이전 단계로 돌아가는 중',
+    movedNext: '에이전트가 다음 단계로 넘어감',
+    movedBack: '에이전트가 이전 단계로 돌아감',
+    updatedGui: '에이전트가 화면을 바꿈',
+    other: '에이전트가 화면을 조정하는 중',
+  },
   voiceSettingsTitle: '음성 상세도 설정',
   voiceSettingsHint: '에이전트가 소리 내어 말하는 양을 고릅니다',
 
@@ -571,6 +642,12 @@ const KO: UiStrings = {
   presetStartEmptyBlurb: '에이전트가 아무것도 모르는 채로 시작합니다. 지금과 같습니다.',
   presetPreviewTitle: '에이전트는 이 선호를 알고 시작합니다',
   presetPreviewNote: '세션이 시작된 뒤 메모리 패널에서 어느 것이든 지울 수 있습니다.',
+  briefingTitle: '에이전트가 기억하고 있는 것',
+  briefingBody: '이전 방문에서 기억한 선호입니다. 오늘과 맞지 않는 것은 지우고 시작하세요.',
+  briefingStart: '이대로 시작',
+  briefingStartEmpty: '아무것도 없이 시작',
+  briefingNothingLeft: '남은 것이 없습니다. 에이전트는 아무것도 모르는 채로 시작합니다.',
+  adaptationFromMemory: '기억한 선호',
   devicesTitle: '연결된 기기',
   deviceKiosk: '예매 화면',
   devicePhone: '방문자 폰',
@@ -621,7 +698,7 @@ const KO: UiStrings = {
   watchTutorial: '튜토리얼 영상 보기',
   startDemo: '데모 시작',
   demoPrivacyNote:
-    '입력한 키는 이 브라우저 탭에만 남고 이번 세션에서만 사용됩니다. 예매가 시작되면 마이크 버튼으로 음성 모드를 켤 수 있습니다.',
+    '입력한 키는 이 브라우저 탭에만 남고 이번 세션에서만 사용됩니다. 예매가 시작되면 음성 모드가 바로 켜지며, 마이크 버튼으로 끌 수 있습니다.',
 
   consentTitle: '연구 기록 동의',
   consentCheckboxLabel: '네, 이 세션을 연구 목적으로 기록해도 좋습니다.',

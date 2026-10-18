@@ -18,6 +18,9 @@ import { renderToStaticMarkup } from 'react-dom/server';
 import { AgentMemoryPanel } from './AgentMemoryPanel';
 import { PreferencePresetPicker } from './PreferencePresetPicker';
 import { PreferenceChip } from './PreferenceChip';
+import { PreferenceBriefingCard } from './PreferenceBriefingCard';
+import { LanguageProvider } from '../../i18n';
+import { createProfileFromPreset, findPreferencePreset } from '../../study/preferenceProfile';
 import { CompanionPairingCard } from '../companion/CompanionPairingCard';
 import type { AgentMemorySnapshot } from '../../agent/protocol';
 import { applyFilter, applyHighlight, clearHighlight, pruneFilters } from '../../spec/modifiers';
@@ -321,6 +324,35 @@ section('4. PHONE PAIRING — the same card on two screens, one of them earlier'
     'no token means no QR anywhere',
     renderToStaticMarkup(createElement(CompanionPairingCard, { companionToken: null })) === ''
   );
+}
+
+section('4. BRIEFING CARD — what the agent remembers, before it may act on it');
+{
+  const preset = findPreferencePreset('family_matinee');
+  if (!preset) throw new Error('family_matinee preset missing');
+  const profile = createProfileFromPreset(preset, 1);
+  const briefed = renderToStaticMarkup(
+    createElement(PreferenceBriefingCard, { profile, onConfirm: noop })
+  );
+  check('it is a dialog', briefed.includes('role="dialog"'));
+  check('every preference is listed', preset.preferences.every((p) => briefed.includes(p.description)));
+  check('each one is removable in a single press', (briefed.match(/>Forget</g) ?? []).length === preset.preferences.length);
+  check('nothing is armed for a second press', !briefed.includes('>Confirm?<'));
+  check('the confirm button starts with what is kept', briefed.includes('Start with these'));
+  check('the rail vocabulary is reused (hard = solid)', briefed.includes('border-solid'));
+
+  const korean = renderToStaticMarkup(
+    createElement(LanguageProvider, {
+      initialLanguage: 'ko',
+      children: createElement(PreferenceBriefingCard, {
+        profile: createProfileFromPreset(preset, 1, 'ko'),
+        onConfirm: noop,
+      }),
+    })
+  );
+  check('in Korean the title is Korean', korean.includes('에이전트가 기억하고 있는 것'));
+  check('and so is every preference', korean.includes('G 또는 PG 등급 영화만.'));
+  check('and the confirm button', korean.includes('이대로 시작'));
 }
 
 if (failures > 0) {

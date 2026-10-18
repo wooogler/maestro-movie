@@ -69,6 +69,7 @@ function digest(value: string): string {
 
 const NARRATION_MARKER = 'Narrating the adaptation';
 const BREVITY_MARKER = 'Writing for the ear';
+const PRELOAD_MARKER = 'Remembered preferences (this session)';
 
 /*
   The prompt the recorded study ran against, pinned by content.
@@ -119,6 +120,12 @@ for (const config of STUDY_CONFIGS) {
   check(`${key}: the brevity flag off changes nothing`, before === brevityOff);
   check(`${key}: ...and neither does leaving it undefined`, before === brevityUndefined);
   check(`${key}: no brevity section appears`, !before.includes(BREVITY_MARKER));
+
+  const preloadOff = buildSystemPrompt(wf, STAGE_META, config.language, false, false, false);
+  const preloadUndefined = buildSystemPrompt(wf, STAGE_META, config.language, false, false, undefined);
+  check(`${key}: the preloaded-memory flag off changes nothing`, before === preloadOff);
+  check(`${key}: ...and neither does leaving it undefined`, before === preloadUndefined);
+  check(`${key}: no remembered-preferences section appears`, !before.includes(PRELOAD_MARKER));
 }
 check(
   'the style rule the narration section would override is still there, untouched',
@@ -224,6 +231,35 @@ console.log('\n7. the brevity flag is part of the memo key too');
     'language still separates with the brevity flag on',
     buildSystemPrompt(workflow(true), STAGE_META, 'ko', false, true) !== briefAgain
   );
+}
+
+console.log('\n8. a profile-seeded demo session gets the remembered-preferences section');
+{
+  const off = buildSystemPrompt(workflow(true, true), STAGE_META, 'ko', false, true, false);
+  const on = buildSystemPrompt(workflow(true, true), STAGE_META, 'ko', false, true, true);
+  check('the section is appended', on.includes(PRELOAD_MARKER));
+  check('it only adds — every line of the off prompt is still there', off.split('\n').every((line) => on.includes(line)));
+  check(
+    'it restates the visibility gate: augment before filter, sort or highlight',
+    /FIRST augment[\s\S]*THEN filter, sort or highlight/.test(on)
+  );
+  check(
+    'it comes after the GUI rules whose gate it restates',
+    on.indexOf(PRELOAD_MARKER) > on.indexOf('Step 1 — visibility gate')
+  );
+  check(
+    'and before the brevity section, which still wins on wording',
+    on.indexOf(PRELOAD_MARKER) < on.indexOf(BREVITY_MARKER)
+  );
+  check('and before the language section', on.indexOf(PRELOAD_MARKER) < on.indexOf('Language:'));
+  const plain = buildSystemPrompt(workflow(false, true), STAGE_META, 'en', false, false, false);
+  const asked = buildSystemPrompt(workflow(false, true), STAGE_META, 'en', false, false, true);
+  check('with GUI adaptation off there is nothing to order, so nothing is added', plain === asked);
+  const withFirst = buildSystemPrompt(workflow(true, true), STAGE_META, 'en', false, false, true);
+  const withoutAfter = buildSystemPrompt(workflow(true, true), STAGE_META, 'en', false, false, false);
+  const withAgain = buildSystemPrompt(workflow(true, true), STAGE_META, 'en', false, false, true);
+  check('the memo keys on the flag: off after on is off', !withoutAfter.includes(PRELOAD_MARKER));
+  check('and on after off is on again', withAgain.includes(PRELOAD_MARKER) && withFirst === withAgain);
 }
 
 console.log(

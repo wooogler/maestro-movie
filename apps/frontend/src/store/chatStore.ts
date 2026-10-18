@@ -17,6 +17,12 @@ export interface SystemMessageAnnotation {
   toolName: string;
   reason: string;
   source: 'agent' | 'devtools';
+  /**
+   * The stored preferences the agent named as the reason for this change.
+   * Demo only — the host drops them elsewhere, so a study session's message
+   * history never carries the field.
+   */
+  preferenceIds?: string[];
 }
 
 export interface AgentMessageActionTag {

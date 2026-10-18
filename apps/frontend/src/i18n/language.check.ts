@@ -142,20 +142,40 @@ section('3. the string table is complete and distinct');
 // -----------------------------------------------------------------------------
 {
   const keys = Object.keys(UI_STRINGS.en) as Array<keyof UiStrings>;
+  check('both languages define the same keys', keys.every((key) => key in UI_STRINGS.ko));
+  // The visible strings, one leaf at a time. A record such as `agentStepLabels`
+  // holds a phrase per tool, and asserting the record itself would turn it into
+  // "[object Object]" — which contains no Hangul and is never equal to itself.
   // `weekdayShort` is an array, and `locale` is a BCP-47 tag rather than prose;
   // neither is asserted the way the visible strings are.
-  const prose = keys.filter((key) => key !== 'weekdayShort' && key !== 'locale');
-  check('both languages define the same keys', keys.every((key) => key in UI_STRINGS.ko));
+  const leaves = (table: UiStrings): Array<[string, string]> => {
+    const out: Array<[string, string]> = [];
+    for (const key of keys) {
+      if (key === 'weekdayShort' || key === 'locale') continue;
+      const value = table[key] as unknown;
+      if (typeof value === 'string') out.push([key, value]);
+      else if (value && typeof value === 'object') {
+        for (const [sub, text] of Object.entries(value as Record<string, string>)) out.push([`${key}.${sub}`, text]);
+      }
+    }
+    return out;
+  };
+  const en = new Map(leaves(UI_STRINGS.en));
+  const ko = new Map(leaves(UI_STRINGS.ko));
+  check(
+    'both languages define the same nested keys',
+    [...en.keys()].every((path) => ko.has(path)) && [...ko.keys()].every((path) => en.has(path))
+  );
   check(
     // Catches a key that was copied across and never translated.
     'no Korean value was left as its English placeholder',
-    prose.every((key) => UI_STRINGS.ko[key] !== UI_STRINGS.en[key]),
-    prose.filter((key) => UI_STRINGS.ko[key] === UI_STRINGS.en[key]).join(', ')
+    [...en].every(([path, text]) => ko.get(path) !== text),
+    [...en].filter(([path, text]) => ko.get(path) === text).map(([path]) => path).join(', ')
   );
   check(
     'every Korean string actually contains Hangul',
-    prose.every((key) => /[가-힣]/.test(String(UI_STRINGS.ko[key]))),
-    prose.filter((key) => !/[가-힣]/.test(String(UI_STRINGS.ko[key]))).join(', ')
+    [...ko.values()].every((text) => /[가-힣]/.test(text)),
+    [...ko].filter(([, text]) => !/[가-힣]/.test(text)).map(([path]) => path).join(', ')
   );
   check(
     'each language names a locale for the formatted month heading',

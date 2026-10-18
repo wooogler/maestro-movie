@@ -625,7 +625,12 @@ function App() {
                       quickStartCard={quickDemoCard}
                       // A card visitor tapped "start and talk" one screen ago;
                       // making them find the mic button would undo the point.
-                      startWithVoice={Boolean(quickDemoCard)}
+                      // The same holds for the full demo: the visitor tapped
+                      // "start booking" on the pairing screen, which is also
+                      // where the audio element is unlocked — a booth visit
+                      // should begin listening and speaking, not with a hunt
+                      // for the mic button. Study conditions keep the toggle.
+                      startWithVoice={Boolean(quickDemoCard) || demoMode}
                     />
                   ) : (
                     <Navigate to="/" replace />

@@ -490,6 +490,10 @@ export function useAgentBridge({
           typeof message.payload?.reason === 'string' && message.payload.reason.trim()
             ? message.payload.reason.trim()
             : undefined;
+        const preferenceIdsRaw = message.payload?.preferenceIds;
+        const preferenceIds = Array.isArray(preferenceIdsRaw)
+          ? preferenceIdsRaw.filter((id): id is string => typeof id === 'string' && id.trim().length > 0)
+          : [];
 
         if (typeof toolName !== 'string') {
           sendEnvelope({
@@ -515,6 +519,7 @@ export function useAgentBridge({
             const result = await applyTool(toolName, (params as Record<string, unknown>) ?? {}, {
               source: 'agent',
               reason,
+              ...(preferenceIds.length > 0 ? { preferenceIds } : {}),
             });
             const immediateUiSpec = isUiSpec(result) ? result : undefined;
             sendEnvelope({

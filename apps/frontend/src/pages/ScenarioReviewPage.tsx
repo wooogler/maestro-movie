@@ -13,6 +13,7 @@ import { CompanionPairingCard } from '../components/companion/CompanionPairingCa
 import { DeviceRosterCard } from '../components/companion/DeviceRosterCard';
 import { useMemoryViewer } from '../components/memory';
 import { useDevicePresence } from '../hooks/useDevicePresence';
+import { unlockVoiceAudioElement } from '../study/voiceAudioUnlock';
 import type { VoiceOutputTarget } from '../hooks/useVoiceCompanionHost';
 import { useLanguage } from '../i18n';
 
@@ -241,7 +242,15 @@ export function ScenarioReviewPage({
               </div>
               <button
                 type="button"
-                onClick={() => navigate('/booking')}
+                onClick={() => {
+                  // The booking page starts with voice on (App.tsx,
+                  // `startWithVoice`), and this tap is the last user gesture
+                  // before it mounts. Bless the shared audio element here, as
+                  // the quick-card face does, or the agent's first sentence is
+                  // silent on a browser that gates play() on a gesture.
+                  unlockVoiceAudioElement();
+                  navigate('/booking');
+                }}
                 autoFocus
                 className="mt-6 w-full rounded-xl bg-primary px-4 py-4 text-base font-semibold text-primary-fg transition-colors hover:bg-primary-hover"
               >

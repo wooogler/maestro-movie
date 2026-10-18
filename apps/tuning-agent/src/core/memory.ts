@@ -131,6 +131,16 @@ export class AgentMemory {
     this.profileRevision = 0;
   }
 
+  /**
+   * True while at least one preference came from a visitor profile (the
+   * `prf_` id prefix) rather than from the conversation. The planner prompt
+   * gains a section when this holds — a study session never loads a profile,
+   * so its prompt is untouched.
+   */
+  hasProfilePreferences(): boolean {
+    return this.preferences.some((item) => isProfilePreferenceId(item.id));
+  }
+
   getPreferences(): Preference[] {
     return this.preferences.map((item) => ({
       ...item,

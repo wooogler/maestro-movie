@@ -1629,7 +1629,27 @@ async function maybePlanAndExecute(trigger: string): Promise<void> {
       turnRepeatGuard.noteExecuted(guardVerdict.signature, viewFingerprint);
     }
 
-    const outcome = await executePlannedAction(relay, action);
+    /*
+      Which memory this GUI change is acting on, named on the envelope itself.
+
+      The planner already reports the ids behind a preference-driven filter or
+      highlight, and the memory snapshot records them after the fact — but
+      the snapshot is keyed by the agent's own context key and lands a beat
+      after the screen moves. The host wants to mark the very card the tool
+      produced, so the ids ride the tool call. Only ids that resolve to a live
+      preference, and only when there are any: a study session's envelope is
+      unchanged whenever the planner named nothing.
+    */
+    const actionPreferenceIds =
+      action.type === 'tool.call' && decision.actionPreferenceIds && decision.actionPreferenceIds.length > 0
+        ? memory.getPreferenceBindings(decision.actionPreferenceIds).map((item) => item.id)
+        : [];
+    const actionToExecute =
+      actionPreferenceIds.length > 0
+        ? { ...action, payload: { ...action.payload, preferenceIds: actionPreferenceIds } }
+        : action;
+
+    const outcome = await executePlannedAction(relay, actionToExecute);
     if (action.type === 'agent.message' && outcome.ok) noteAgentSpeechSent();
     if (outcome.uiSpec !== undefined) {
       const current = memory.getContext();

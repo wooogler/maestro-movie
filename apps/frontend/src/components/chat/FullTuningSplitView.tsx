@@ -25,6 +25,8 @@ import {
 import { guiStageFitScale, splitViewLayout } from './fullTuningLayout';
 import { isCompactViewport } from '../../utils/viewport';
 import { useLanguage } from '../../i18n';
+import type { AgentPreference } from '../../agent/protocol';
+import type { AgentStepKey, UiStrings } from '../../i18n/strings';
 
 interface FullTuningSplitViewProps {
   messages: ChatMessage[];
@@ -67,6 +69,12 @@ interface FullTuningSplitViewProps {
    * the paper describes at every window width.
    */
   compactLayoutEnabled?: boolean;
+  /**
+   * Demo only: the agent's preference memory, live and forgotten, so a card
+   * the agent changed because of a stored preference can name it. Absent in
+   * the study conditions, where no chip is drawn and the card is unchanged.
+   */
+  memoryPreferences?: AgentPreference[] | null;
 }
 
 interface GuiSnapshot {
@@ -89,6 +97,13 @@ interface GuiSnapshot {
   linkedAssistantText?: string;
   linkedAssistantMessageId?: string;
   linkedActionTag?: AgentMessageActionTag;
+  /**
+   * The stored preferences behind the adaptation this card shows (demo only).
+   * A stage snapshot takes them from its own annotation; a message snapshot
+   * inherits its base's, because it shows the very same adapted GUI and the
+   * sentence said over it is usually the one that explains the change.
+   */
+  memoryPreferenceIds?: string[];
   isLatest: boolean;
 }
 
@@ -171,39 +186,33 @@ function setRowAnchorNode(
   }
 }
 
-function getToolActionLabel(toolName: string): string {
-  switch (toolName) {
-    case 'select':
-      return 'is selecting';
-    case 'selectMultiple':
-      return 'is selecting multiple seats';
-    case 'filter':
-      return 'is filtering';
-    case 'sort':
-      return 'is sorting';
-    case 'highlight':
-      return 'is highlighting';
-    case 'augment':
-      return 'is updating labels';
-    case 'clearModification':
-      return 'is clearing modifications';
-    case 'next':
-      return 'is moving to the next stage';
-    case 'prev':
-      return 'is going back';
-    default:
-      return `is applying ${toolName}`;
-  }
+type StepLabels = UiStrings['agentStepLabels'];
+
+const TOOL_STEP_KEYS = new Set<AgentStepKey>([
+  'select',
+  'selectMultiple',
+  'filter',
+  'sort',
+  'highlight',
+  'augment',
+  'clearModification',
+  'next',
+  'prev',
+]);
+
+/** The visitor-facing phrase for a tool step, in the session's language. */
+function getToolActionLabel(toolName: string, labels: StepLabels): string {
+  return labels[(TOOL_STEP_KEYS.has(toolName as AgentStepKey) ? toolName : 'other') as AgentStepKey];
 }
 
-function getAgentActionLabel(actionTag: AgentMessageActionTag): string {
+function getAgentActionLabel(actionTag: AgentMessageActionTag, labels: StepLabels): string {
   switch (actionTag.toolName) {
     case 'next':
-      return 'moved to the next stage';
+      return labels.movedNext;
     case 'prev':
-      return 'went back';
+      return labels.movedBack;
     default:
-      return 'updated the GUI';
+      return labels.updatedGui;
   }
 }
 
@@ -217,14 +226,14 @@ function isAgentLinkedToSystem(
   return Boolean(agentMessage.actionTag);
 }
 
-function getSnapshotContextLabel(snapshot: GuiSnapshot): string {
+function getSnapshotContextLabel(snapshot: GuiSnapshot, labels: StepLabels): string {
   if (snapshot.annotation) {
-    return `${snapshot.annotation.source === 'devtools' ? 'DevTools' : 'Agent'} ${getToolActionLabel(
-      snapshot.annotation.toolName
-    )}`;
+    const label = getToolActionLabel(snapshot.annotation.toolName, labels);
+    // DevTools steps are an operator's, not the agent's; English is fine there.
+    return snapshot.annotation.source === 'devtools' ? `DevTools: ${label}` : label;
   }
   if (snapshot.linkedActionTag) {
-    return `Agent ${getAgentActionLabel(snapshot.linkedActionTag)}`;
+    return getAgentActionLabel(snapshot.linkedActionTag, labels);
   }
   return snapshot.spec.title;
 }
@@ -240,12 +249,12 @@ function getSnapshotContextText(snapshot: GuiSnapshot, voiceMode: boolean): stri
   });
 }
 
-function buildMarkerLabel(snapshot: GuiSnapshot): string {
+function buildMarkerLabel(snapshot: GuiSnapshot, labels: StepLabels): string {
   if (snapshot.annotation) {
-    return getSnapshotContextLabel(snapshot);
+    return getSnapshotContextLabel(snapshot, labels);
   }
   if (snapshot.linkedActionTag) {
-    return getSnapshotContextLabel(snapshot);
+    return getSnapshotContextLabel(snapshot, labels);
   }
   return snapshot.spec.title;
 }
@@ -381,6 +390,7 @@ export function FullTuningSplitView({
   onConfirm,
   initialConversationCollapsed,
   compactLayoutEnabled = false,
+  memoryPreferences = null,
 }: FullTuningSplitViewProps) {
   const timelineContainerRef = useRef<HTMLDivElement | null>(null);
   const timelineBottomRef = useRef<HTMLDivElement | null>(null);
@@ -460,6 +470,7 @@ export function FullTuningSplitView({
           linkedAssistantText: linkedAgentMessage ? linkedTranscriptText(linkedAgentMessage) : undefined,
           linkedAssistantMessageId: linkedAgentMessage?.id,
           linkedActionTag: linkedAgentMessage?.actionTag,
+          memoryPreferenceIds: message.annotation?.preferenceIds,
           isLatest: false,
         };
         nextSnapshots.push(snapshot);
@@ -469,7 +480,7 @@ export function FullTuningSplitView({
           id: `marker-${message.id}`,
           type: 'marker',
           snapshotIndex: currentSnapshotIndex,
-          label: buildMarkerLabel(snapshot),
+          label: buildMarkerLabel(snapshot, s.agentStepLabels),
           stage: message.stage,
         });
         continue;
@@ -512,6 +523,7 @@ export function FullTuningSplitView({
           spec: base.spec,
           linkedAssistantText: transcriptText(message),
           linkedAssistantMessageId: message.id,
+          memoryPreferenceIds: base.memoryPreferenceIds,
           isLatest: false,
         });
         currentSnapshotIndex = nextSnapshots.length - 1;
@@ -540,7 +552,7 @@ export function FullTuningSplitView({
       latestSnapshotIndex: nextSnapshots.length - 1,
       firstRowIdBySnapshotIndex: nextFirstRowIdBySnapshotIndex,
     };
-  }, [messages, activeSpec]);
+  }, [messages, activeSpec, s.agentStepLabels]);
 
   const [activeSnapshotIndex, setActiveSnapshotIndex] = useState(latestSnapshotIndex);
   const [activeSyncRowId, setActiveSyncRowId] = useState<string | null>(
@@ -795,6 +807,24 @@ export function FullTuningSplitView({
     conversationSection: conversationSectionClass,
     showFloatingToggle,
   } = splitViewLayout(conversationCollapsed, compactLayoutEnabled);
+  /*
+    Ids to rail words, rebuilt only when memory changes. Unknown ids are
+    dropped rather than printed: an id is the agent's, not the visitor's.
+  */
+  const preferenceWordsById = useMemo(() => {
+    const words = new Map<string, string>();
+    for (const preference of memoryPreferences ?? []) {
+      if (!words.has(preference.id)) words.set(preference.id, preference.description);
+    }
+    return words;
+  }, [memoryPreferences]);
+  const describePreferences = useCallback(
+    (ids: string[]) =>
+      Array.from(new Set(ids))
+        .map((id) => preferenceWordsById.get(id))
+        .filter((label): label is string => Boolean(label)),
+    [preferenceWordsById]
+  );
   /*
     `syncActiveSnapshotToScroll` walks every timeline row and calls
     `getBoundingClientRect` on each. Wired straight to `onScroll` that ran once
@@ -1088,6 +1118,7 @@ export function FullTuningSplitView({
                     <GuiSnapshotCard
                       snapshot={transitionState.outgoing}
                       voiceModeEnabled={voiceModeEnabled}
+                      describePreferences={describePreferences}
                       interactive={false}
                       agentActive={false}
                       speaking={false}
@@ -1109,6 +1140,7 @@ export function FullTuningSplitView({
                     <GuiSnapshotCard
                       snapshot={activeSnapshot}
                       voiceModeEnabled={voiceModeEnabled}
+                      describePreferences={describePreferences}
                       interactive={activeSnapshot.isLatest && !interactionLocked}
                       agentActive={Boolean(isAgentTyping && activeSnapshot.isLatest)}
                       speaking={activeSnapshot.linkedAssistantMessageId === speakingMessageId}
@@ -1326,6 +1358,12 @@ interface GuiSnapshotCardProps {
   interactive: boolean;
   /** With voice on, a step nobody narrated shows no reason text (`guiStepContextText`). */
   voiceModeEnabled?: boolean;
+  /**
+   * Turns the preference ids on a snapshot's annotation into the words on the
+   * memory rail. Stable per memory snapshot, so the memoised outgoing card is
+   * not re-rendered by anything else. Absent outside the demo.
+   */
+  describePreferences?: (ids: string[]) => string[];
   agentActive?: boolean;
   speaking?: boolean;
   onSelect?: (id: string) => void;
@@ -1352,6 +1390,7 @@ const GuiSnapshotCard = memo(function GuiSnapshotCard({
   snapshot,
   interactive,
   voiceModeEnabled = false,
+  describePreferences,
   agentActive = false,
   speaking = false,
   onSelect,
@@ -1362,6 +1401,10 @@ const GuiSnapshotCard = memo(function GuiSnapshotCard({
   onBack,
   onConfirm,
 }: GuiSnapshotCardProps) {
+  const memoryLabels =
+    describePreferences && snapshot.memoryPreferenceIds?.length
+      ? describePreferences(snapshot.memoryPreferenceIds)
+      : [];
   // Speaking and agentActive are both the baton, so they stay gold and differ
   // by weight -- the agent working the GUI is the louder of the two.
   const frameClass = speaking
@@ -1369,6 +1412,7 @@ const GuiSnapshotCard = memo(function GuiSnapshotCard({
     : agentActive
     ? 'border-accent-line shadow-[0_0_0_6px_var(--app-accent-glow-strong)]'
     : 'border-dark-border';
+  const { s } = useLanguage();
   const contextClass = 'mt-2 text-base font-medium leading-7 text-info-text';
   const contextText = getSnapshotContextText(snapshot, voiceModeEnabled);
   const handleNextAction =
@@ -1384,9 +1428,14 @@ const GuiSnapshotCard = memo(function GuiSnapshotCard({
       <div
         className={`rounded-2xl border bg-dark p-4 transition-colors ${frameClass}`}
       >
-        <div className="mb-4 flex items-start gap-3">
+        {/*
+          With a body under the label the avatar sits on the first line; with
+          no body (voice mode hides the planner's reason) the label alone would
+          hug the top edge of a 44px avatar, so centre the two instead.
+        */}
+        <div className={`mb-4 flex gap-3 ${contextText ? 'items-start' : 'items-center'}`}>
           <div
-            className={`mt-1 flex h-11 w-11 shrink-0 items-center justify-center rounded-full border border-info-border bg-primary text-primary-fg ${
+            className={`${contextText ? 'mt-1 ' : ''}flex h-11 w-11 shrink-0 items-center justify-center rounded-full border border-info-border bg-primary text-primary-fg ${
               agentActive
                 ? 'ring-2 ring-accent-line shadow-[0_0_0_4px_var(--app-accent-glow)]'
                 : ''
@@ -1408,10 +1457,31 @@ const GuiSnapshotCard = memo(function GuiSnapshotCard({
           </div>
           <div className="min-w-0 flex-1">
             <span className="min-w-0 text-sm font-semibold text-info-label">
-              {getSnapshotContextLabel(snapshot)}
+              {getSnapshotContextLabel(snapshot, s.agentStepLabels)}
             </span>
             {contextText ? (
               <div className={contextClass}>{renderMessageText(contextText)}</div>
+            ) : null}
+            {/*
+              The memory behind the change, on the card it changed. The rail
+              already draws the arrow the other way — preference to stage —
+              but the visitor is looking here, at a list that just got
+              shorter, and this is where the question "why?" is asked.
+            */}
+            {memoryLabels.length > 0 ? (
+              <div className="mt-2 flex flex-wrap items-center gap-1.5" data-testid="adaptation-memory">
+                <span className="text-[10px] font-semibold uppercase tracking-wide text-fg-muted">
+                  {s.adaptationFromMemory}
+                </span>
+                {memoryLabels.map((label) => (
+                  <span
+                    key={label}
+                    className="rounded-full border border-accent-line/60 bg-accent/10 px-2 py-0.5 text-xs leading-5 text-accent-text"
+                  >
+                    {label}
+                  </span>
+                ))}
+              </div>
             ) : null}
           </div>
         </div>

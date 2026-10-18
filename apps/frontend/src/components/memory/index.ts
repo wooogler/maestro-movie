@@ -1,6 +1,7 @@
 export { AgentMemoryPanel } from './AgentMemoryPanel';
 export { PreferenceChip, StageDots } from './PreferenceChip';
 export { PreferencePresetPicker } from './PreferencePresetPicker';
+export { PreferenceBriefingCard } from './PreferenceBriefingCard';
 export {
   createMemoryPublisher,
   subscribeToMemory,
