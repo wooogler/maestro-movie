@@ -336,6 +336,44 @@ function buildSeatLayoutMeta(items: unknown[]): Record<string, unknown> | null {
   };
 }
 
+/**
+ * The booth demo is the only mode that gets `currentView.booking` and the
+ * demo prompt section. Read from the supervisor's env rather than passed
+ * through the host, like the rest of the agent's mode switches: a study
+ * session's planner input stays byte-identical to what C1-C4 recorded.
+ */
+const DEMO_SESSION = process.env.AGENT_STUDY_MODE === 'demo';
+
+/**
+ * The confirm stage has no items: what the visitor sees is a summary card,
+ * and the host ships its content in `spec.meta` (ConfirmMeta in the frontend's
+ * spec/generators.ts). `buildCurrentView` never read it, so the planner was
+ * handed `{ stage: "confirm" }` and, on 2026-10-18, told a visitor it could
+ * not verify a booking it had just assembled. This is that card, flattened.
+ */
+function buildConfirmBooking(rawSpec: Record<string, unknown>): Record<string, unknown> | null {
+  const meta = asRecord(rawSpec.meta);
+  if (!meta) return null;
+  const movie = asRecord(meta.movie);
+  const theater = asRecord(meta.theater);
+  const booking: Record<string, unknown> = {};
+  const title = movie ? readTrimmedString(movie.title) : null;
+  const theaterName = theater ? readTrimmedString(theater.name) : null;
+  const date = readTrimmedString(meta.date);
+  const time = readTrimmedString(meta.time);
+  if (title) booking.movie = title;
+  if (theaterName) booking.theater = theaterName;
+  if (date) booking.date = date;
+  if (time) booking.time = time;
+  const seats = normalizeStringArray(meta.seats);
+  if (seats.length > 0) booking.seats = seats;
+  if (typeof meta.totalPrice === 'number' && Number.isFinite(meta.totalPrice)) {
+    booking.totalPrice = meta.totalPrice;
+  }
+  if (typeof meta.bookingId === 'string' && meta.bookingId.trim()) booking.completed = true;
+  return Object.keys(booking).length > 0 ? booking : null;
+}
+
 function buildCurrentView(spec: UISpecLike): Record<string, unknown> | null {
   const rawSpec = asRecord(spec as unknown);
   if (!rawSpec) return null;
@@ -358,6 +396,10 @@ function buildCurrentView(spec: UISpecLike): Record<string, unknown> | null {
 
   if (visibleItems.length > 0) {
     summary.visibleItems = visibleItems;
+  }
+  if (DEMO_SESSION && spec.stage === 'confirm') {
+    const booking = buildConfirmBooking(rawSpec);
+    if (booking) summary.booking = booking;
   }
   const rawVisibleItems = Array.isArray(rawSpec.visibleItems) ? rawSpec.visibleItems.length : 0;
   if (rawVisibleItems > visibleItems.length) {
@@ -952,6 +994,7 @@ export async function planNextAction(
       // Profile-seeded preferences exist only in the demo; see
       // PRELOADED_MEMORY_RULES for why the planner is told about them.
       ...(memory.hasProfilePreferences() ? { preloadedMemory: true } : {}),
+      ...(DEMO_SESSION ? { demoSession: true } : {}),
     };
 
     const llm = await planActionWithOpenAI(plannerInput);

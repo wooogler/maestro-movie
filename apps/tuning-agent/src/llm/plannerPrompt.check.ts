@@ -70,6 +70,7 @@ function digest(value: string): string {
 const NARRATION_MARKER = 'Narrating the adaptation';
 const BREVITY_MARKER = 'Writing for the ear';
 const PRELOAD_MARKER = 'Remembered preferences (this session)';
+const DEMO_MARKER = 'Booth demo (this session)';
 
 /*
   The prompt the recorded study ran against, pinned by content.
@@ -126,6 +127,12 @@ for (const config of STUDY_CONFIGS) {
   check(`${key}: the preloaded-memory flag off changes nothing`, before === preloadOff);
   check(`${key}: ...and neither does leaving it undefined`, before === preloadUndefined);
   check(`${key}: no remembered-preferences section appears`, !before.includes(PRELOAD_MARKER));
+
+  const demoOff = buildSystemPrompt(wf, STAGE_META, config.language, false, false, false, false);
+  const demoUndefined = buildSystemPrompt(wf, STAGE_META, config.language, false, false, false, undefined);
+  check(`${key}: the demo flag off changes nothing`, before === demoOff);
+  check(`${key}: ...and neither does leaving it undefined`, before === demoUndefined);
+  check(`${key}: no booth-demo section appears`, !before.includes(DEMO_MARKER));
 }
 check(
   'the style rule the narration section would override is still there, untouched',
@@ -260,6 +267,28 @@ console.log('\n8. a profile-seeded demo session gets the remembered-preferences 
   const withAgain = buildSystemPrompt(workflow(true, true), STAGE_META, 'en', false, false, true);
   check('the memo keys on the flag: off after on is off', !withoutAfter.includes(PRELOAD_MARKER));
   check('and on after off is on again', withAgain.includes(PRELOAD_MARKER) && withFirst === withAgain);
+}
+
+console.log('\n9. a booth demo session gets the demo section, before brevity and language');
+{
+  const off = buildSystemPrompt(workflow(true, true), STAGE_META, 'ko', false, true, true, false);
+  const on = buildSystemPrompt(workflow(true, true), STAGE_META, 'ko', false, true, true, true);
+  check('the section is appended', on.includes(DEMO_MARKER));
+  check('it only adds — every line of the off prompt is still there', off.split('\n').every((line) => on.includes(line)));
+  check('it forbids talking about tool availability', /Never tell the user which tools/.test(on));
+  check('it tells the planner where the booking summary is', /currentView\.booking/.test(on));
+  check(
+    'it sits after the GUI rules and before the remembered-preferences, brevity and language sections',
+    on.indexOf(DEMO_MARKER) > on.indexOf('Step 1 — visibility gate') &&
+      on.indexOf(DEMO_MARKER) < on.indexOf(PRELOAD_MARKER) &&
+      on.indexOf(DEMO_MARKER) < on.indexOf(BREVITY_MARKER) &&
+      on.indexOf(DEMO_MARKER) < on.indexOf('Language:')
+  );
+  const withFirst = buildSystemPrompt(workflow(true), STAGE_META, 'en', false, false, false, true);
+  const withoutAfter = buildSystemPrompt(workflow(true), STAGE_META, 'en', false, false, false, false);
+  const withAgain = buildSystemPrompt(workflow(true), STAGE_META, 'en', false, false, false, true);
+  check('the memo keys on the flag: off after on is off', !withoutAfter.includes(DEMO_MARKER));
+  check('and on after off is on again', withAgain.includes(DEMO_MARKER) && withFirst === withAgain);
 }
 
 console.log(

@@ -81,13 +81,15 @@ export const PREFERENCE_PRESETS: PreferencePreset[] = [
   {
     id: 'date_night',
     label: 'Date night',
-    blurb: 'Two people, couple seats, evening.',
-    // 93 showings, every one at MJR Troy — the FURTHEST theater at 20.4 mi,
-    // because couple seats (row H, $26) exist in exactly one house. A seat-stage
-    // preference decides the theater stage three steps earlier. Adding any
-    // "within 15 miles" takes it to 0.
+    blurb: 'Two people, two seats together, evening.',
+    // This used to ask for couple seats, which exist only in row H at MJR Troy
+    // (20.4 mi out) — a seat-stage preference that decided the theater three
+    // steps earlier and, at any other house, left the agent with nothing it
+    // could satisfy. On 2026-10-18 it answered a visitor by blaming its tools.
+    // "Two seats together" is satisfiable in every house and still drives the
+    // seat stage.
     preferences: [
-      preference('prf_date_couple', 'Needs two couple seats together.', 'hard', ['seat']),
+      preference('prf_date_couple', 'Needs two seats together.', 'hard', ['seat']),
       preference('prf_date_evening', 'Showtime must start at 6 PM or later.', 'hard', ['time']),
       preference('prf_date_recliner', 'Prefers recliner seating.', 'soft', ['theater']),
     ],
@@ -166,9 +168,9 @@ const PRESET_KO: Record<string, { label: string; blurb: string; preferences: Rec
   },
   date_night: {
     label: '데이트 나이트',
-    blurb: '두 사람, 커플석, 저녁 시간.',
+    blurb: '두 사람, 붙어 있는 두 자리, 저녁 시간.',
     preferences: {
-      prf_date_couple: '붙어 있는 커플석 두 자리가 필요합니다.',
+      prf_date_couple: '붙어 있는 두 자리가 필요합니다.',
       prf_date_evening: '상영 시작이 오후 6시 이후여야 합니다.',
       prf_date_recliner: '리클라이너 좌석을 선호합니다.',
     },

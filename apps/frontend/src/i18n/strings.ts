@@ -189,6 +189,8 @@ export interface UiStrings {
   briefingNothingLeft: string;
   /** Label on the chips that name the memory behind a GUI adaptation. */
   adaptationFromMemory: string;
+  /** Same chip row, for a preference the visitor stated in this conversation. */
+  adaptationFromConversation: string;
   devicesTitle: string;
   deviceKiosk: string;
   devicePhone: string;
@@ -422,6 +424,7 @@ const EN: UiStrings = {
   briefingStartEmpty: 'Start with nothing',
   briefingNothingLeft: 'Nothing left \u2014 the agent will start knowing nothing.',
   adaptationFromMemory: 'From memory',
+  adaptationFromConversation: 'From what you said',
   devicesTitle: 'Devices',
   deviceKiosk: 'Booking screen',
   devicePhone: 'Visitor phone',
@@ -648,6 +651,7 @@ const KO: UiStrings = {
   briefingStartEmpty: '아무것도 없이 시작',
   briefingNothingLeft: '남은 것이 없습니다. 에이전트는 아무것도 모르는 채로 시작합니다.',
   adaptationFromMemory: '기억한 선호',
+  adaptationFromConversation: '말씀하신 선호',
   devicesTitle: '연결된 기기',
   deviceKiosk: '예매 화면',
   devicePhone: '방문자 폰',

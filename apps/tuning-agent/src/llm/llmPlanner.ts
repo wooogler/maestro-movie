@@ -68,6 +68,11 @@ interface PlannerInput {
    * exactly as it was. See PRELOADED_MEMORY_RULES.
    */
   preloadedMemory?: boolean;
+  /**
+   * A booth demo session (AGENT_STUDY_MODE=demo). Absent or false leaves the
+   * prompt exactly as it was. See DEMO_SESSION_RULES.
+   */
+  demoSession?: boolean;
 }
 
 interface PlannerAction {
@@ -575,6 +580,21 @@ const SPOKEN_BREVITY_RULES =
  * simply shrank. This section makes the gate explicit for remembered criteria
  * without touching the study prompt (a study session never loads a profile).
  */
+/**
+ * Demo only. Two things a visitor heard on 2026-10-18 that a booth should
+ * never say: "the seat selection tool is not available, so I cannot pick two
+ * seats together" (the host withholds select/next until the visitor has spoken
+ * at a stage — a consent guard, not a fact about the booking), and "I cannot
+ * verify the booking and the confirm function is unavailable" (the summary was
+ * missing from currentView; it is now `currentView.booking`). The study prompt
+ * never carried these lines, so they live in a section the study never gets.
+ */
+const DEMO_SESSION_RULES =
+  "Booth demo (this session):\n" +
+  "- Never tell the user which tools, functions or actions are or are not available to you, and never describe a limitation of your own interface. If you cannot act yet, ask the one question that moves the booking forward, or describe the choice in front of them. The screen is theirs.\n" +
+  "- At the confirm stage, currentView.booking holds the assembled booking: movie, theater, date, time, seats, totalPrice. On entering the stage, read it back in one sentence and ask whether to confirm. When the user says to confirm, call next — that submits the booking. Never say the details cannot be verified: they are in currentView.booking and workflow.state.\n" +
+  "- If currentView.booking carries completed: true, the booking is done; say so briefly and ask nothing.";
+
 const PRELOADED_MEMORY_RULES =
   "Remembered preferences (this session):\n" +
   "- Some preferences in memory were loaded from the visitor's profile before they said anything. They are criteria like any other, and the visibility gate applies to them in full.\n" +
@@ -606,11 +626,13 @@ export function buildSystemPrompt(
   narrateAdaptations?: boolean,
   spokenBrevity?: boolean,
   preloadedMemory?: boolean,
+  demoSession?: boolean,
 ): string {
   const cpMemory = hasCpMemoryContext(workflow);
   const guiAdaptation = workflow.guiAdaptationEnabled !== false;
   // Only meaningful where there are GUI tools to order, like `narrate`.
   const preloaded = preloadedMemory === true && guiAdaptation;
+  const demo = demoSession === true;
   const narrate = narrateAdaptations === true && guiAdaptation;
   // The two are contradictory by construction — a card wants the adaptation
   // described, a voice session wants it left to the screen. Resolved here so a
@@ -618,7 +640,7 @@ export function buildSystemPrompt(
   const brevity = spokenBrevity === true && !narrate;
   // Language belongs in the key: a visitor may switch mid-session, and the
   // cached prompt would otherwise keep the language they started in.
-  const key = `cp:${cpMemory}|gui:${guiAdaptation}|meta:${stageMeta ? stageMeta.length : 0}|lang:${language ?? "en"}|narrate:${narrate}|brief:${brevity}|preload:${preloaded}`;
+  const key = `cp:${cpMemory}|gui:${guiAdaptation}|meta:${stageMeta ? stageMeta.length : 0}|lang:${language ?? "en"}|narrate:${narrate}|brief:${brevity}|preload:${preloaded}|demo:${demo}`;
 
   if (key === cachedSystemPromptKey && cachedSystemPrompt) {
     return cachedSystemPrompt;
@@ -642,6 +664,12 @@ export function buildSystemPrompt(
   // Right after the GUI rules whose visibility gate it restates, so the two
   // read as one instruction; before narration and brevity, which govern
   // wording and must still win on wording.
+  // Before the preloaded-memory section: both restate GUI rules, and the
+  // demo section's confirm-stage rule has to precede brevity and language,
+  // which govern how that read-back is worded.
+  if (demo) {
+    sections.push(DEMO_SESSION_RULES);
+  }
   if (preloaded) {
     sections.push(PRELOADED_MEMORY_RULES);
   }
@@ -1214,6 +1242,7 @@ export async function planActionWithOpenAI(
       input.narrateAdaptations,
       input.spokenBrevity,
       input.preloadedMemory,
+      input.demoSession,
     ) +
     "\n" +
     OPENAI_TOOL_CALLING_RULES;

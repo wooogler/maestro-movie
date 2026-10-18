@@ -45,7 +45,7 @@ section('1. PRESET PICKER — the preview is the rail\'s own vocabulary');
     createElement(PreferencePresetPicker, { selectedPresetId: 'date_night', onSelect: noop })
   );
   check('the chosen preset reads as chosen', picked.includes('aria-checked="true"'));
-  check('its preferences are previewed', picked.includes('Needs two couple seats together.'));
+  check('its preferences are previewed', picked.includes('Needs two seats together.'));
   // Solid means Hard and dashed means Soft on the rail; the preview has to
   // teach the same thing or it is teaching the wrong thing.
   check('a hard preference renders solid', picked.includes('border-solid'));

@@ -188,6 +188,12 @@ function setRowAnchorNode(
 
 type StepLabels = UiStrings['agentStepLabels'];
 
+/** One chip on the GUI card: the preference's words, and whether it was remembered or just said. */
+interface AdaptationPreferenceLabel {
+  label: string;
+  remembered: boolean;
+}
+
 const TOOL_STEP_KEYS = new Set<AgentStepKey>([
   'select',
   'selectMultiple',
@@ -819,10 +825,17 @@ export function FullTuningSplitView({
     return words;
   }, [memoryPreferences]);
   const describePreferences = useCallback(
-    (ids: string[]) =>
+    (ids: string[]): AdaptationPreferenceLabel[] =>
       Array.from(new Set(ids))
-        .map((id) => preferenceWordsById.get(id))
-        .filter((label): label is string => Boolean(label)),
+        .map((id) => {
+          const label = preferenceWordsById.get(id);
+          // Profile-seeded ids carry the `prf_` prefix (preferenceProfile.ts);
+          // everything else was extracted from this conversation. The chip
+          // row says which, because "remembered" is a claim about a previous
+          // visit and must not be made about something said ten seconds ago.
+          return label ? { label, remembered: id.startsWith('prf_') } : null;
+        })
+        .filter((entry): entry is AdaptationPreferenceLabel => entry !== null),
     [preferenceWordsById]
   );
   /*
@@ -1363,7 +1376,7 @@ interface GuiSnapshotCardProps {
    * memory rail. Stable per memory snapshot, so the memoised outgoing card is
    * not re-rendered by anything else. Absent outside the demo.
    */
-  describePreferences?: (ids: string[]) => string[];
+  describePreferences?: (ids: string[]) => AdaptationPreferenceLabel[];
   agentActive?: boolean;
   speaking?: boolean;
   onSelect?: (id: string) => void;
@@ -1469,18 +1482,38 @@ const GuiSnapshotCard = memo(function GuiSnapshotCard({
               shorter, and this is where the question "why?" is asked.
             */}
             {memoryLabels.length > 0 ? (
-              <div className="mt-2 flex flex-wrap items-center gap-1.5" data-testid="adaptation-memory">
-                <span className="text-[10px] font-semibold uppercase tracking-wide text-fg-muted">
-                  {s.adaptationFromMemory}
-                </span>
-                {memoryLabels.map((label) => (
-                  <span
-                    key={label}
-                    className="rounded-full border border-accent-line/60 bg-accent/10 px-2 py-0.5 text-xs leading-5 text-accent-text"
-                  >
-                    {label}
-                  </span>
-                ))}
+              <div className="mt-2 flex flex-col gap-1" data-testid="adaptation-memory">
+                {/* Remembered first: it is the surprising half, the one the briefing was about. */}
+                {[
+                  { remembered: true, heading: s.adaptationFromMemory },
+                  { remembered: false, heading: s.adaptationFromConversation },
+                ].map((group) => {
+                  const labels = memoryLabels.filter((entry) => entry.remembered === group.remembered);
+                  if (labels.length === 0) return null;
+                  return (
+                    <div
+                      key={group.remembered ? 'remembered' : 'stated'}
+                      className="flex flex-wrap items-center gap-1.5"
+                      data-origin={group.remembered ? 'remembered' : 'stated'}
+                    >
+                      <span className="text-[10px] font-semibold uppercase tracking-wide text-fg-muted">
+                        {group.heading}
+                      </span>
+                      {labels.map((entry) => (
+                        <span
+                          key={entry.label}
+                          className={`rounded-full border px-2 py-0.5 text-xs leading-5 ${
+                            group.remembered
+                              ? 'border-accent-line/60 bg-accent/10 text-accent-text'
+                              : 'border-primary/40 bg-primary/10 text-primary-text'
+                          }`}
+                        >
+                          {entry.label}
+                        </span>
+                      ))}
+                    </div>
+                  );
+                })}
               </div>
             ) : null}
           </div>
