@@ -25,6 +25,7 @@ import type { StudyScenarioDetail } from '../study/sessionStorage';
 import { formatScenarioTitle, isHardTaskScenario } from '../utils/displayFormats';
 import {
   clearPendingStudyLogEvents,
+  hasPendingStudyLogEvent,
   queuePendingStudyLogEvent,
 } from '../study/pendingInteractionEvents';
 
@@ -358,6 +359,17 @@ export function StudyStartPage({
       return;
     }
     onDismissSessionNotice?.();
+    // The box is ticked by default, so a visitor who simply leaves it on never
+    // fires the change handler that queues the consent event. Record it once,
+    // here, so every consented log opens with one; `byDefault` tells it apart
+    // from an explicit tick, which has already queued its own event.
+    if (demoMode && researchConsent && !hasPendingStudyLogEvent('study.consent.granted')) {
+      queuePendingStudyLogEvent({
+        type: 'study.consent.granted',
+        clientTimestamp: new Date().toISOString(),
+        payload: { location: 'study-setup', studyMode: DEMO_STUDY_MODE, byDefault: true },
+      });
+    }
     navigateToTaskReview();
   };
 

@@ -89,6 +89,11 @@ const SESSION_ENDED_MESSAGE =
   describeApiErrorCode('STUDY_SESSION_UNAUTHORIZED') ??
   'This session has ended. Please start again from the beginning.';
 
+// The demo's research-recording box is opt-out: every visitor arrives with it
+// ticked. Both the initial state and every end-of-session reset use this, so the
+// next visitor starts from the default rather than from the last one's choice.
+const DEFAULT_DEMO_RESEARCH_CONSENT = true;
+
 function DemoModeEntry({ onEnter }: { onEnter: () => void }) {
   useEffect(() => {
     onEnter();
@@ -136,24 +141,28 @@ function App() {
   /*
     Whether the current demo visitor agreed to be recorded.
 
+    Opt-out: the box starts ticked, and a visitor who would rather not be
+    recorded unticks it.
+
     Deliberately not persisted anywhere. A booth runs one stranger after another
-    in the same tab, and a stored `true` would answer the question on behalf of
-    the next person to walk up. It starts false for every visitor and is cleared
-    again the moment a session ends.
+    in the same tab, and a stored choice would answer the question on behalf of
+    the next person to walk up -- in particular, one visitor's "no" must not
+    silently carry over to the next. It starts at DEFAULT_DEMO_RESEARCH_CONSENT
+    for every visitor and is put back there the moment a session ends.
 
     The session record IS persisted (see sessionStorage.ts), so after the
-    installed app is closed and reopened mid-session this flag is false again
-    while the session carries on. That is correct, because the flag is only
+    installed app is closed and reopened mid-session this flag is back at its
+    default while the session carries on. That is correct, because the flag is only
     ever consulted when a session is CREATED: ScenarioReviewPage sends it with
     POST /study/sessions, and the backend decides there, once, whether the
     session gets an interaction log and an LLM trace. From then on logging is
     governed by the record -- `interactionLogFile` in the stored session state
     is what useStudyInteractionLogger keys on, and the backend keeps appending
     to the file it opened. So a consented session goes on logging after a
-    relaunch, and one whose visitor never ticked the box has no log file,
+    relaunch, and one whose visitor unticked the box has no log file,
     cannot acquire one, and nothing on the restored path asks again.
   */
-  const [demoResearchConsent, setDemoResearchConsent] = useState(false);
+  const [demoResearchConsent, setDemoResearchConsent] = useState(DEFAULT_DEMO_RESEARCH_CONSENT);
   /*
     The preference memory the next demo session opens with.
 
@@ -391,8 +400,8 @@ function App() {
     setStudySession(null);
     setRestoredSession(null);
     setSessionNotice(null);
-    // The next visitor answers for themselves.
-    setDemoResearchConsent(false);
+    // The next visitor answers for themselves, starting from the default.
+    setDemoResearchConsent(DEFAULT_DEMO_RESEARCH_CONSENT);
     setQuickDemoCard(null);
   };
 
@@ -406,7 +415,7 @@ function App() {
     setStudySession(null);
     setRestoredSession(null);
     setSessionNotice(SESSION_ENDED_MESSAGE);
-    setDemoResearchConsent(false);
+    setDemoResearchConsent(DEFAULT_DEMO_RESEARCH_CONSENT);
     setQuickDemoCard(null);
   }, []);
 

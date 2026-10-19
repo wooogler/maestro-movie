@@ -39,6 +39,10 @@ export function queuePendingStudyLogEvent(event: PendingStudyLogEventInput): voi
   writePendingEvents(events);
 }
 
+export function hasPendingStudyLogEvent(type: string): boolean {
+  return readPendingEvents().some((event) => event.type === type);
+}
+
 export function consumePendingStudyLogEvents(): PendingStudyLogEventInput[] {
   const events = readPendingEvents();
   writePendingEvents([]);

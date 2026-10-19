@@ -482,7 +482,7 @@ const EN: UiStrings = {
   consentBody:
     'We are studying how people work with this agent. If you agree, this session keeps the conversation, the text of what you say, what you do on screen, and the decisions the agent makes. No name, no account, and no audio file. Nothing identifies you.',
   consentOptOutNote:
-    'Optional. Leave it unticked and nothing at all is recorded — the demo works exactly the same either way.',
+    'Recording is on by default. Untick the box if you would rather not be recorded; nothing at all is recorded then, and the demo works the same either way.',
 
   preferenceMemoryTitle: 'Preference memory',
   preferenceMemoryBody:
@@ -709,7 +709,7 @@ const KO: UiStrings = {
   consentBody:
     '저희는 사람들이 이 에이전트와 어떻게 함께 일하는지 연구하고 있습니다. 동의하시면 이번 세션의 대화, 말씀하신 내용의 텍스트, 화면에서 하신 조작, 에이전트의 판단이 연구용으로 저장됩니다. 이름과 계정 정보는 저장하지 않고, 음성 파일도 남기지 않으며, 개인을 식별할 수 있는 정보는 기록되지 않습니다.',
   consentOptOutNote:
-    '선택 사항입니다. 체크하지 않으면 아무것도 기록되지 않으며, 데모는 어느 쪽이든 똑같이 이용하실 수 있습니다.',
+    '기록은 기본으로 켜져 있습니다. 원치 않으시면 체크를 해제하세요. 해제하면 아무것도 기록되지 않으며, 데모는 어느 쪽이든 똑같이 이용하실 수 있습니다.',
 
   preferenceMemoryTitle: '선호 메모리',
   preferenceMemoryBody:
