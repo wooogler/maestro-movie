@@ -279,8 +279,8 @@ export interface UiStrings {
   pairReadyTitle: string;
   preparingDemo: string;
   startBooking: string;
-  pairingLanguageLabel: string;
-  pairingLanguageHint: string;
+  languagePickerLabel: string;
+  languagePickerHint: string;
 
   /**
    * BCP-47 tag for `toLocaleString`. The calendar's month heading is formatted
@@ -513,8 +513,8 @@ const EN: UiStrings = {
   pairReadyTitle: 'Ready to start',
   preparingDemo: 'Starting the demo...',
   startBooking: 'Start booking',
-  pairingLanguageLabel: 'Language',
-  pairingLanguageHint: 'Pick the language you want to speak with the agent.',
+  languagePickerLabel: 'Language',
+  languagePickerHint: 'Pick the language you want to speak with the agent.',
 
   locale: 'en-US',
 };
@@ -742,8 +742,8 @@ const KO: UiStrings = {
   pairReadyTitle: '시작 준비가 되었습니다',
   preparingDemo: '데모를 준비하는 중...',
   startBooking: '예매 시작하기',
-  pairingLanguageLabel: '언어',
-  pairingLanguageHint: '에이전트와 대화할 언어를 고르세요.',
+  languagePickerLabel: '언어',
+  languagePickerHint: '에이전트와 대화할 언어를 고르세요.',
 
   locale: 'ko-KR',
 };
@@ -988,8 +988,8 @@ const JA_OVERRIDES: Partial<UiStrings> = {
   pairReadyTitle: '開始の準備ができました',
   preparingDemo: 'デモを準備中...',
   startBooking: '予約を開始',
-  pairingLanguageLabel: '言語',
-  pairingLanguageHint: 'エージェントと話す言語を選んでください。',
+  languagePickerLabel: '言語',
+  languagePickerHint: 'エージェントと話す言語を選んでください。',
 
   locale: 'ja-JP',
 };
@@ -1221,8 +1221,8 @@ const ZH_HANS_OVERRIDES: Partial<UiStrings> = {
   pairReadyTitle: '准备就绪',
   preparingDemo: '正在启动演示...',
   startBooking: '开始订票',
-  pairingLanguageLabel: '语言',
-  pairingLanguageHint: '请选择您想与智能体对话的语言。',
+  languagePickerLabel: '语言',
+  languagePickerHint: '请选择您想与智能体对话的语言。',
 
   locale: 'zh-CN',
 };
@@ -1455,8 +1455,8 @@ const ZH_HANT_OVERRIDES: Partial<UiStrings> = {
   pairReadyTitle: '準備就緒',
   preparingDemo: '正在啟動示範...',
   startBooking: '開始訂票',
-  pairingLanguageLabel: '語言',
-  pairingLanguageHint: '請選擇您想與代理程式對話的語言。',
+  languagePickerLabel: '語言',
+  languagePickerHint: '請選擇您想與代理程式對話的語言。',
 
   locale: 'zh-TW',
 };

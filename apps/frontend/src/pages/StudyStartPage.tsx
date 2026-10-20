@@ -17,6 +17,7 @@ import {
   type StudyModeId,
 } from './studyOptions';
 import { useLanguage } from '../i18n';
+import { LanguageSelect } from '../components/settings/LanguageSelect';
 import { usePlannerModelSetting, useVoiceVerbositySettings } from '../hooks';
 import { defaultVerbosityFor } from '../voice';
 import { SettingsModal } from '../components/settings/SettingsModal';
@@ -583,6 +584,22 @@ export function StudyStartPage({
                 >
                   {ui.aboutDemoLink}
                 </button>
+              ) : null}
+              {/*
+                The language first, before any step a visitor has to read. The
+                stored choice is what every later screen, the transcription and
+                the agent's replies read, so picking it here re-renders this
+                page in that language at once and needs no further wiring. The
+                settings modal keeps its own switch for a mid-session change.
+                Demo only: a study participant's language is not theirs to pick.
+              */}
+              {demoMode ? (
+                <LanguageSelect
+                  id="start-language"
+                  className="mt-4 sm:max-w-sm"
+                  label={ui.languagePickerLabel}
+                  hint={ui.languagePickerHint}
+                />
               ) : null}
             </div>
             {/*
