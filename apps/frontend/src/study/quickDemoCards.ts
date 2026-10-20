@@ -30,10 +30,25 @@
 // that does not typecheck under the node config the check script next door runs
 // with. A card definition needs the stage name and nothing else.
 import type { Stage } from '../spec/types';
-import type { Language } from '../i18n/language';
+import { isLanguage, type Language } from '../i18n/language';
 
-/** One line, in both booth languages. */
-export type CardText = Record<Language, string>;
+/**
+ * One line per language. English and Korean are required — the cards were
+ * written for those two — and every other language is optional, reading in
+ * English until its line is written. Read it through `cardText`, never by
+ * indexing, so the fallback is in one place.
+ */
+export type CardText = Record<'en' | 'ko', string> & Partial<Record<Language, string>>;
+
+/** The card line in `language`, or in English when that line is not written yet. */
+export function cardText(text: CardText, language: Language): string {
+  return text[language] ?? text.en;
+}
+
+/** Which language `cardText` actually returned, for the `lang` attribute around it. */
+export function cardTextLanguage(text: CardText, language: Language): Language {
+  return text[language] ? language : 'en';
+}
 
 export interface QuickDemoPrefill {
   movieId?: string;
@@ -73,6 +88,11 @@ export interface QuickDemoCard {
   one that changes nothing shows nothing at all. Every card below lands between
   two and four surviving options.
 */
+/*
+  MACHINE-DRAFTED — the ja, zh-Hans and zh-Hant lines on these cards need native
+  review. Each `opener` is what a visitor SAYS, so it is written as natural
+  speech; the numbers in it (15 miles, 8, 11) are the catalogue's own.
+*/
 export const QUICK_DEMO_CARDS: QuickDemoCard[] = [
   {
     id: 'movie',
@@ -81,16 +101,22 @@ export const QUICK_DEMO_CARDS: QuickDemoCard[] = [
     // Nothing prefilled: this is the stage the demo already opens on, and the
     // card's job is only to supply the sentence.
     prefill: {},
-    title: { en: 'Movies', ko: '영화' },
+    title: { en: 'Movies', ko: '영화', ja: '映画', 'zh-Hans': '电影', 'zh-Hant': '電影' },
     opener: {
       // Wildwood (PG) and The Legend of Aang (PG) survive; Street Fighter and
       // Klara (PG-13) and Clayface (R) do not. 5 -> 2.
       en: "I've got my eight-year-old niece with me, so nothing scary.",
       ko: '여덟 살 조카랑 같이 왔어요. 무서운 건 안 돼요.',
+      ja: '8歳の姪と一緒なので、怖いのはなしでお願いします。',
+      'zh-Hans': '我带着八岁的侄女，所以不要吓人的。',
+      'zh-Hant': '我帶著八歲的姪女，所以不要恐怖的。',
     },
     watch: {
       en: 'Five films become two — and the age ratings appear on the ones that stay.',
       ko: '영화 다섯 편이 두 편으로 줄고, 남은 영화에 연령 등급이 붙습니다.',
+      ja: '5本の映画が2本に減り、残った映画に年齢区分が表示されます。',
+      'zh-Hans': '五部电影减少到两部，留下的电影旁会显示分级。',
+      'zh-Hant': '五部電影減少到兩部，留下的電影旁會顯示分級。',
     },
   },
   {
@@ -100,16 +126,22 @@ export const QUICK_DEMO_CARDS: QuickDemoCard[] = [
     // list starts full and every drop is visible.
     prefill: { movieId: 'm2' },
     badge: '2',
-    title: { en: 'Cinemas', ko: '영화관' },
+    title: { en: 'Cinemas', ko: '영화관', ja: '映画館', 'zh-Hans': '影院', 'zh-Hant': '戲院' },
     opener: {
       // Drops MJR Troy (20.4 mi) on distance and Cinema Detroit (Paid Parking)
       // on the amenity, leaving Bel Air 9, Redford 13.8, Emagine 14.2. 5 -> 3.
       en: "I'm not driving more than 15 miles, and I don't want to pay for parking.",
       ko: '15마일 넘게는 운전 안 할 거고, 주차비도 내기 싫어요.',
+      ja: '15マイル以上は運転したくないし、駐車料金も払いたくないです。',
+      'zh-Hans': '我开车不想超过 15 英里，也不想付停车费。',
+      'zh-Hant': '我開車不想超過 15 英里，也不想付停車費。',
     },
     watch: {
       en: 'Two cinemas drop out, the rest reorder by distance, and the miles appear.',
       ko: '영화관 두 곳이 빠지고, 남은 곳은 거리순으로 재정렬되며 거리가 표시됩니다.',
+      ja: '映画館が2つ外れ、残りは距離順に並び替わって、マイル数が表示されます。',
+      'zh-Hans': '两家影院被排除，其余按距离重新排序，并显示英里数。',
+      'zh-Hant': '兩家戲院被排除，其餘依距離重新排序，並顯示英里數。',
     },
   },
   {
@@ -117,16 +149,22 @@ export const QUICK_DEMO_CARDS: QuickDemoCard[] = [
     stage: 'date',
     prefill: { movieId: 'm2', theaterId: 't4' },
     badge: '3',
-    title: { en: 'Dates', ko: '날짜' },
+    title: { en: 'Dates', ko: '날짜', ja: '日付', 'zh-Hans': '日期', 'zh-Hant': '日期' },
     opener: {
       // The calendar offers Tue 3 Nov through Sun 8 Nov. Sat 7 and Sun 8 stay.
       // 6 -> 2.
       en: 'It has to be the weekend.',
       ko: '주말이어야 해요.',
+      ja: '週末じゃないとだめです。',
+      'zh-Hans': '必须是周末。',
+      'zh-Hant': '一定要是週末。',
     },
     watch: {
       en: 'Six days on the calendar, two left standing.',
       ko: '달력의 여섯 날 중 두 날만 남습니다.',
+      ja: 'カレンダーの6日間のうち、2日だけが残ります。',
+      'zh-Hans': '日历上的六天，只剩下两天。',
+      'zh-Hant': '月曆上的六天，只剩下兩天。',
     },
   },
   {
@@ -137,16 +175,22 @@ export const QUICK_DEMO_CARDS: QuickDemoCard[] = [
     // when there is a lot to filter.
     prefill: { movieId: 'm1', theaterId: 't5', date: '2026-11-07' },
     badge: '4',
-    title: { en: 'Showtimes', ko: '상영 시간' },
+    title: { en: 'Showtimes', ko: '상영 시간', ja: '上映時間', 'zh-Hans': '场次', 'zh-Hant': '場次' },
     opener: {
       // Street Fighter runs 2h 4m, so "out by 11" also rules out the 20:45 at
       // some screens. 8:10, 8:10 and 8:45 survive. 16 -> 3.
       en: 'Nothing before 8, and I need to be out by 11.',
       ko: '8시 전은 안 되고, 11시까지는 나와야 해요.',
+      ja: '8時より前はだめで、11時までには出たいです。',
+      'zh-Hans': '8 点以前的不要，而且我 11 点前得出来。',
+      'zh-Hant': '8 點以前的不要，而且我 11 點前要出來。',
     },
     watch: {
       en: 'Sixteen showtimes narrow to three — and the end times appear beside them.',
       ko: '상영 시간 열여섯 개가 세 개로 줄고, 옆에 종료 시각이 표시됩니다.',
+      ja: '16の上映時間が3つに絞られ、横に終了時刻が表示されます。',
+      'zh-Hans': '十六个场次缩减到三个，旁边会显示结束时间。',
+      'zh-Hant': '十六個場次縮減到三個，旁邊會顯示結束時間。',
     },
   },
   {
@@ -162,14 +206,20 @@ export const QUICK_DEMO_CARDS: QuickDemoCard[] = [
       showingId: 's_m2_t4_20261104_1910_s2',
     },
     badge: '5',
-    title: { en: 'Seats', ko: '좌석' },
+    title: { en: 'Seats', ko: '좌석', ja: '座席', 'zh-Hans': '座位', 'zh-Hant': '座位' },
     opener: {
       en: 'Two seats together, toward the back — not the front rows.',
       ko: '두 자리 붙어서, 뒤쪽으로요. 앞줄은 말고요.',
+      ja: '隣り合った2席で、後ろのほうがいいです。前の列はやめてください。',
+      'zh-Hans': '两个连在一起的座位，靠后一点，不要前排。',
+      'zh-Hant': '兩個連在一起的座位，靠後面一點，不要前排。',
     },
     watch: {
       en: 'The pairs that actually fit light up, in place, on the map you were already looking at.',
       ko: '조건에 맞는 자리 쌍이 보고 있던 좌석표 위에서 그대로 강조됩니다.',
+      ja: '条件に合う2席の組が、今見ている座席表の上でそのまま強調表示されます。',
+      'zh-Hans': '符合条件的连座会直接在您正在看的座位图上高亮显示。',
+      'zh-Hant': '符合條件的相連座位會直接在您正在看的座位圖上醒目標示。',
     },
   },
 ];
@@ -205,11 +255,12 @@ export function buildQuickDemoCardUrl(
    * passes its origin in.
    */
   origin: string,
-  options: { accessCode?: string | null } = {}
+  options: { accessCode?: string | null; language?: Language | null } = {}
 ): string {
   const params = new URLSearchParams({ c: cardId });
   const code = options.accessCode?.trim();
   if (code) params.set('k', code);
+  if (options.language) params.set('lang', options.language);
   return `${origin}${QUICK_DEMO_CARD_PATH}#${params.toString()}`;
 }
 
@@ -219,13 +270,21 @@ export interface QuickDemoCardLink {
   accessCode: string | null;
   /** The id as written in the link, kept so an unknown one can be named. */
   rawCardId: string | null;
+  /**
+   * `lang` in the fragment, for a per-language printed card. LanguageProvider
+   * applies it (and removes it from the address bar); it is parsed here too so
+   * the card link's whole vocabulary lives in one module.
+   */
+  language: Language | null;
 }
 
 export function parseQuickDemoCardFragment(fragment: string): QuickDemoCardLink {
   const raw = fragment.replace(/^#/, '').trim();
-  if (!raw) return { card: null, accessCode: null, rawCardId: null };
+  if (!raw) return { card: null, accessCode: null, rawCardId: null, language: null };
   const params = new URLSearchParams(raw);
   const rawCardId = params.get('c');
   const accessCode = params.get('k')?.trim() || null;
-  return { card: findQuickDemoCard(rawCardId), accessCode, rawCardId };
+  const rawLanguage = params.get('lang');
+  const language = isLanguage(rawLanguage) ? rawLanguage : null;
+  return { card: findQuickDemoCard(rawCardId), accessCode, rawCardId, language };
 }

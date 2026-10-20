@@ -89,6 +89,15 @@ const RULES: Rule[] = [
     re: /\b(?:request failed|failed this turn|please try again|is not ready yet|will retry once|something went wrong|an error occurred|unable to reach)\b/i,
   },
   {
+    // The agent's own notices in German, French and Spanish (agentNotices.ts in
+    // the agent). None of these words is English, so this cannot change what
+    // the measured English rules decide; it only keeps a translated failure
+    // out of a category that could silence it.
+    id: 'system.failure.intl',
+    category: 'system',
+    re: /(?:fehlgeschlagen|schiefgelaufen|noch nicht bereit|nicht verfügbar|abgelehnt|a échoué|un problème est survenu|réessay|pas encore prête|indisponible|refusée|ha fallado|salió mal|inténtelo de nuevo|lo intento de nuevo|todavía no está lista|no está disponible|rechazada)/i,
+  },
+  {
     id: 'nav.transition',
     category: 'nav',
     re: new RegExp(
@@ -179,7 +188,9 @@ const KO_RULES: Rule[] = [
   {
     id: 'system.failure.ko',
     category: 'system',
-    re: /(?:실패했|오류가 (?:발생|생겼)|문제가 발생|다시 시도|준비되지 않았|아직 준비가|연결할 수 없)/,
+    // The tail after `연결할 수 없` covers the agent's own Korean notices
+    // (agentNotices.ts) that carry none of the earlier phrases.
+    re: /(?:실패했|오류가 (?:발생|생겼)|문제가 발생|다시 시도|준비되지 않았|아직 준비가|연결할 수 없|해석하지 못했|확인하지 못했|거부되|맞는 선택지가 없)/,
   },
   {
     id: 'nav.transition.ko',
@@ -250,10 +261,60 @@ function hasKoreanQuestion(text: string): boolean {
   return KO_QUESTION_WORD.test(text) && KO_POLITE_END.test(text);
 }
 
+/** Kana or Han without Hangul: Japanese or Chinese. */
+const KANA_OR_HAN = /[぀-ヿㇰ-ㇿ㐀-䶿一-鿿豈-﫿]/;
+
+/**
+ * Japanese and Chinese ask with a sentence-final particle as often as with a
+ * question mark: か (ですか, ますか, でしょうか, かな) in Japanese, 吗/嗎/呢 in
+ * Chinese. The particle counts when it ends a sentence — followed by sentence
+ * punctuation, a closing quote or bracket, or the end of the text.
+ *
+ * Generous on purpose, for the reason the Korean test is: calling a statement a
+ * question costs a few spoken words; missing a question silences it. UNMEASURED
+ * — there is no Japanese or Chinese corpus to replay.
+ */
+const CJK_QUESTION_ENDING =
+  /(?:か(?:な|ね)?|[吗嗎呢])(?=[。．.！!？?」』"'”’）)\]]|$)/;
+
+/** A sentence that asks something, by its punctuation or a CJK question particle. */
+export function sentenceAsksQuestion(sentence: string): boolean {
+  const trimmed = sentence.trim();
+  // Exactly the English test it replaces, plus the full-width mark.
+  if (trimmed.endsWith('?') || trimmed.endsWith('？')) return true;
+  if (!KANA_OR_HAN.test(trimmed) || HANGUL.test(trimmed)) return false;
+  // A Japanese or Chinese sentence may close a quote or bracket after its mark.
+  return /[?？]["'”’）)\]」』]*$/.test(trimmed) || CJK_QUESTION_ENDING.test(trimmed);
+}
+
+/**
+ * The agent's own failure notices in Japanese and Chinese (agentNotices.ts in
+ * the agent). Messages it sends as failures are tagged `system` already; this
+ * is the fallback for one that arrives untagged.
+ */
+const CJK_FAILURE =
+  /(?:失敗し|失败|失敗|問題が発生|準備ができていません|準備できていません|利用できません|拒否され|処理できません|照合できません|選択肢はありません|出了点问题|出了點問題|尚未就绪|尚未就緒|不可用|無法使用|被拒绝|遭到拒絕|没能解析|沒能解析|无法验证|無法驗證|(?:无法|無法)[^。！？]{0,20}(?:验证|驗證)|没有选项符合|沒有選項符合)/;
+
 export function classifyUtterance(text: string): UtteranceClassification {
   const trimmed = text.trim();
   const isKorean = HANGUL.test(trimmed);
-  const hasQuestion = trimmed.includes('?') || (isKorean && hasKoreanQuestion(trimmed));
+  const isCjk = !isKorean && KANA_OR_HAN.test(trimmed);
+  const hasQuestion =
+    trimmed.includes('?') ||
+    trimmed.includes('？') ||
+    (isKorean && hasKoreanQuestion(trimmed)) ||
+    (isCjk && CJK_QUESTION_ENDING.test(trimmed));
+
+  if (isCjk) {
+    // No Japanese or Chinese narration rules exist: the agent tags its
+    // messages, and an untagged one is spoken in full as conversation. Only a
+    // failure is recognised, because that is the one thing that must never be
+    // routed somewhere it could be silenced.
+    if (CJK_FAILURE.test(trimmed)) {
+      return { category: 'system', matchedRule: 'system.failure.cjk', hasQuestion, verbPrefixLength: 0 };
+    }
+    return { category: 'respond', matchedRule: null, hasQuestion, verbPrefixLength: 0 };
+  }
 
   if (isKorean) {
     for (const rule of KO_RULES) {

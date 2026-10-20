@@ -15,7 +15,7 @@ import { useMemoryViewer } from '../components/memory';
 import { useDevicePresence } from '../hooks/useDevicePresence';
 import { unlockVoiceAudioElement } from '../study/voiceAudioUnlock';
 import type { VoiceOutputTarget } from '../hooks/useVoiceCompanionHost';
-import { useLanguage } from '../i18n';
+import { LANGUAGES, LANGUAGE_LABELS, languagePack, parseLanguage, useLanguage } from '../i18n';
 
 interface ScenarioReviewPageProps {
   studyMode: StudyModeId;
@@ -60,7 +60,7 @@ export function ScenarioReviewPage({
   onSessionCreated,
 }: ScenarioReviewPageProps) {
   const navigate = useNavigate();
-  const { s: ui } = useLanguage();
+  const { language, setLanguage, s: ui } = useLanguage();
   const [loadingScenarios, setLoadingScenarios] = useState(true);
   const [startingSession, setStartingSession] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -217,6 +217,36 @@ export function ScenarioReviewPage({
                 choices rather than a switch that could mute the session.
               */}
               <div className="mt-5 text-left">
+                {/*
+                  The visitor's own language, chosen before anything is said.
+                  This screen is the first one they touch, and the stored choice
+                  is what /booking, the transcription language and the agent's
+                  replies all read when the host joins the relay there — so a
+                  change here needs no further wiring. Demo only: the study
+                  conditions keep their review page as it was. Not logged, as
+                  the settings modal's switch is not either.
+                */}
+                <div className="mb-3 rounded-xl border border-dark-border bg-dark p-3">
+                  <label
+                    htmlFor="pairing-language"
+                    className="mb-1 block text-xs font-semibold uppercase tracking-wide text-fg-muted"
+                  >
+                    {ui.pairingLanguageLabel}
+                  </label>
+                  <p className="mb-2 text-[11px] leading-relaxed text-fg-faint">{ui.pairingLanguageHint}</p>
+                  <select
+                    id="pairing-language"
+                    value={language}
+                    onChange={(event) => setLanguage(parseLanguage(event.target.value))}
+                    className="h-11 w-full rounded-xl border border-dark-border bg-dark px-3 text-sm font-medium text-fg-strong focus:border-primary focus:outline-none sm:h-10"
+                  >
+                    {LANGUAGES.map((candidate) => (
+                      <option key={candidate} value={candidate} lang={languagePack(candidate).htmlLang}>
+                        {LANGUAGE_LABELS[candidate]}
+                      </option>
+                    ))}
+                  </select>
+                </div>
                 {companionToken ? (
                   <CompanionPairingCard
                     companionToken={companionToken}

@@ -20,12 +20,14 @@ import { useNavigate } from 'react-router-dom';
 import { api } from '../api/client';
 import { DEMO_SCENARIO_ID, DEMO_STUDY_MODE } from './studyOptions';
 import {
+  cardText,
+  cardTextLanguage,
   parseQuickDemoCardFragment,
   type QuickDemoCard,
 } from '../study/quickDemoCards';
 import { unlockVoiceAudioElement } from '../study/voiceAudioUnlock';
 import type { StudySessionState } from '../study/sessionStorage';
-import { LANGUAGES, LANGUAGE_LABELS, useLanguage } from '../i18n';
+import { LANGUAGES, LANGUAGE_LABELS, languagePack, useLanguage } from '../i18n';
 
 interface DemoCardPageProps {
   /**
@@ -59,7 +61,7 @@ export function DemoCardPage({ onCardStarted }: DemoCardPageProps) {
   const [starting, setStarting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const opener = useMemo(() => card?.opener[language] ?? '', [card, language]);
+  const opener = useMemo(() => card ? cardText(card.opener, language) : '', [card, language]);
 
   const handleStart = useCallback(async () => {
     if (!card || starting) return;
@@ -132,13 +134,18 @@ export function DemoCardPage({ onCardStarted }: DemoCardPageProps) {
               {card.badge}
             </span>
             <span className="text-sm font-semibold text-fg-strong">
-              {card.title[language]}
+              {cardText(card.title, language)}
             </span>
           </div>
-          {/* A booth runs in two languages and the card face is the first thing
-              a visitor reads, so the switch has to be here and not three screens
-              in — the sentence they are about to say is on this screen. */}
-          <div role="radiogroup" aria-label={s.languageLabel} className="flex gap-1">
+          {/* The card face is the first thing a visitor reads, so the switch has
+              to be here and not three screens in — the sentence they are about
+              to say is on this screen. Eight languages do not fit one row at
+              phone width, so the pills wrap under the title. */}
+          <div
+            role="radiogroup"
+            aria-label={s.languageLabel}
+            className="flex flex-wrap justify-end gap-1"
+          >
             {LANGUAGES.map((candidate) => {
               const selected = candidate === language;
               return (
@@ -147,7 +154,7 @@ export function DemoCardPage({ onCardStarted }: DemoCardPageProps) {
                   type="button"
                   role="radio"
                   aria-checked={selected}
-                  lang={candidate}
+                  lang={languagePack(candidate).htmlLang}
                   onClick={() => setLanguage(candidate)}
                   className={`rounded-lg border px-2.5 py-1 text-xs font-medium transition-colors ${
                     selected
@@ -172,7 +179,7 @@ export function DemoCardPage({ onCardStarted }: DemoCardPageProps) {
             {s.quickCardSayThis}
           </h2>
           <blockquote
-            lang={language}
+            lang={languagePack(card ? cardTextLanguage(card.opener, language) : language).htmlLang}
             className="mt-2 text-2xl font-semibold leading-snug text-fg-strong"
           >
             &ldquo;{opener}&rdquo;
@@ -183,8 +190,8 @@ export function DemoCardPage({ onCardStarted }: DemoCardPageProps) {
           <h2 className="text-[11px] font-semibold uppercase tracking-wide text-fg-muted">
             {s.quickCardWatchFor}
           </h2>
-          <p lang={language} className="mt-1.5 text-sm leading-relaxed text-fg">
-            {card.watch[language]}
+          <p lang={languagePack(cardTextLanguage(card.watch, language)).htmlLang} className="mt-1.5 text-sm leading-relaxed text-fg">
+            {cardText(card.watch, language)}
           </p>
         </section>
 

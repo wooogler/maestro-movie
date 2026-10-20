@@ -672,6 +672,38 @@ export interface PreferenceExtractionContext {
   recentDialogue: Array<{ type: "user" | "agent"; text: string }>;
   existingPreferences: Preference[];
   stageMeta?: Array<{ stage: string; goal: string; fieldGuide: string }>;
+  /** The host-reported conversation language. Absent and 'en' are identical. */
+  language?: string;
+}
+
+/**
+ * Appended for the languages added after the recorded study, so a Japanese
+ * visitor's memory panel reads in Japanese like the rest of the conversation.
+ *
+ * English gets nothing, so its prompt is byte-identical to the one the study
+ * ran. Korean also gets nothing: the study ran in Korean with this prompt as
+ * it stands, and its descriptions came back in whatever language the model
+ * chose — changing that is a decision about Korean sessions, not part of
+ * adding languages.
+ */
+const PREFERENCE_LANGUAGE_NAMES: Readonly<Record<string, string>> = {
+  ja: "Japanese",
+  "zh-Hans": "Chinese, in Simplified characters",
+  "zh-Hant": "Chinese, in Traditional characters",
+  de: "German",
+  fr: "French",
+  es: "Spanish",
+};
+
+export function buildPreferenceLanguageLine(language: string | undefined): string | null {
+  const name = language ? PREFERENCE_LANGUAGE_NAMES[language] : undefined;
+  if (!name) return null;
+  return (
+    "Language:\n" +
+    `- The user is speaking ${name}. Write every new or rewritten description in ${name}.\n` +
+    "- Keep film titles, cinema names, formats, seat ids, dates, times and prices exactly as they appear on screen.\n" +
+    "- An unchanged existing preference keeps its wording as it is, whatever language it is in. id, strength and relevantStages are unaffected by language."
+  );
 }
 
 export async function extractStructuredPreferences(
@@ -725,11 +757,13 @@ export async function extractStructuredPreferences(
     additionalProperties: false,
   };
 
-  const systemPrompt = ctx.stageMeta
+  const basePrompt = ctx.stageMeta
     ? PREFERENCE_SYSTEM_PROMPT +
       "\n\nstageFieldGuides:\n" +
       ctx.stageMeta.map((s) => `- ${s.stage}: ${s.fieldGuide}`).join("\n")
     : PREFERENCE_SYSTEM_PROMPT;
+  const languageLine = buildPreferenceLanguageLine(ctx.language);
+  const systemPrompt = languageLine ? `${basePrompt}\n\n${languageLine}` : basePrompt;
 
   const parsed = await callStructuredExtractor(
     "preferences",

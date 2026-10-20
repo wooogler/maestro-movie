@@ -17,19 +17,49 @@ export const MEMORY_STAGE_LABELS: Record<MemoryStage, string> = {
   confirm: 'Confirm',
 };
 
-/** Short form for the stage dots on a preference chip, where space is scarce. */
-const MEMORY_STAGE_LABELS_KO: Record<MemoryStage, string> = {
-  movie: '영화',
-  theater: '극장',
-  date: '날짜',
-  time: '상영 시간',
-  seat: '좌석',
-  confirm: '확인',
+/**
+ * Short form for the stage dots on a preference chip, where space is scarce,
+ * per session language. A language with no table reads in English.
+ */
+const MEMORY_STAGE_LABELS_BY_LANGUAGE: Readonly<Record<string, Record<MemoryStage, string>>> = {
+  ko: {
+    movie: '영화',
+    theater: '극장',
+    date: '날짜',
+    time: '상영 시간',
+    seat: '좌석',
+    confirm: '확인',
+  },
+  // MACHINE-DRAFTED — ja, zh-Hans and zh-Hant need native review.
+  ja: {
+    movie: '映画',
+    theater: '映画館',
+    date: '日付',
+    time: '上映時間',
+    seat: '座席',
+    confirm: '確認',
+  },
+  'zh-Hans': {
+    movie: '电影',
+    theater: '影院',
+    date: '日期',
+    time: '场次',
+    seat: '座位',
+    confirm: '确认',
+  },
+  'zh-Hant': {
+    movie: '電影',
+    theater: '戲院',
+    date: '日期',
+    time: '場次',
+    seat: '座位',
+    confirm: '確認',
+  },
 };
 
 /** The stage's name in the session language. */
 export function memoryStageLabel(stage: MemoryStage, language: string): string {
-  return language === 'ko' ? MEMORY_STAGE_LABELS_KO[stage] : MEMORY_STAGE_LABELS[stage];
+  return (MEMORY_STAGE_LABELS_BY_LANGUAGE[language] ?? MEMORY_STAGE_LABELS)[stage];
 }
 
 export const MEMORY_STAGE_INITIALS: Record<MemoryStage, string> = {

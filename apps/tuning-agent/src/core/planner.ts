@@ -6,6 +6,7 @@ import {
 } from '../llm/llmPlanner';
 import { resolveOpenAiApiKey } from '../llm/openaiKey';
 import { refreshModelEnvVars } from './envRefresh';
+import { agentNotice } from './agentNotices';
 import type { AgentMemory } from './memory';
 import { isSelectableItem } from './filterSimulation';
 import {
@@ -949,7 +950,7 @@ export async function planNextAction(
     return {
       action: null,
       explainText: hasUserRequest
-        ? 'Planner model is unavailable right now. Please try again in a moment.'
+        ? agentNotice('plannerUnavailable', language)
         : undefined,
       source: 'rule',
       fallbackReason: 'LLM_DISABLED_NO_PROVIDER',
@@ -1003,7 +1004,7 @@ export async function planNextAction(
       return {
         action: null,
         explainText: hasUserRequest
-          ? 'I could not parse a planner output this turn. Please rephrase your request.'
+          ? agentNotice('plannerUnparseable', language)
           : undefined,
         source: 'rule',
         fallbackReason: 'LLM_EMPTY_OR_UNPARSEABLE_OUTPUT',
@@ -1019,7 +1020,7 @@ export async function planNextAction(
       return {
         action: null,
         explainText: hasUserRequest
-          ? 'I could not validate the planner action against the current UI state.'
+          ? agentNotice('plannerInvalid', language)
           : undefined,
         source: 'rule',
         fallbackReason: 'LLM_VALIDATION_REJECTED',
@@ -1037,8 +1038,7 @@ export async function planNextAction(
       );
       return {
         action: null,
-        explainText:
-          'Your OpenAI API key was rejected, so I cannot respond. Please enter a valid key and try again.',
+        explainText: agentNotice('apiKeyRejected', language),
         source: 'rule',
         fallbackReason: `LLM_AUTH_FAILED:${error.status}`,
       };
@@ -1046,7 +1046,7 @@ export async function planNextAction(
     return {
       action: null,
       explainText: hasUserRequest
-        ? 'Planner request failed this turn. Please try again shortly.'
+        ? agentNotice('plannerRequestFailed', language)
         : undefined,
       source: 'rule',
       fallbackReason: `LLM_REQUEST_FAILED:${message}`,

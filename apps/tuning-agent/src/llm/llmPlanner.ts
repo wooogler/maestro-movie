@@ -471,6 +471,25 @@ function buildStageMetaSection(
 }
 
 /**
+ * The Korean section's shape, for the languages added after the study. Korean
+ * keeps its own literal text below: its prompt is pinned by hash in
+ * `plannerPrompt.check.ts`, so it is never rebuilt from this. The one addition
+ * is the catalogue line naming dates and prices: in these languages the screen
+ * still reads "Mar 14 (Sat)" and "$14.00", and the model must say them as
+ * written rather than render them in the visitor's calendar or currency.
+ */
+function buildForeignLanguageSection(words: { speaks: string; write: string; rest: string }): string {
+  return (
+    "Language:\n" +
+    `- The user speaks ${words.speaks}. Write assistantMessage in ${words.write}.\n` +
+    '- Keep film titles, cinema names, formats (IMAX, 3D), seat ids ("C1"), dates ("Mar 14 (Sat)"), times ("7:30 PM") and prices ("$14.00") exactly as they appear on screen, in their original script. Do not translate or transliterate them.\n' +
+    `- Everything else in assistantMessage — verbs, questions, comparisons, counts — is ${words.rest}.\n` +
+    '- "reason" stays in English. It is a trace field, not something the user hears.\n' +
+    "- Tool names and every tool parameter value stay exactly as the schema and the screen define them. They are identifiers, not prose."
+  );
+}
+
+/**
  * Appended only for a non-English session, so the English prompt this study was
  * run against stays byte-identical.
  *
@@ -488,7 +507,47 @@ const LANGUAGE_PROMPTS: Record<string, string> = {
     '- Everything else in assistantMessage — verbs, questions, comparisons, counts — is Korean.\n' +
     '- "reason" stays in English. It is a trace field, not something the user hears.\n' +
     "- Tool names and every tool parameter value stay exactly as the schema and the screen define them. They are identifiers, not prose.",
+  ja: buildForeignLanguageSection({
+    speaks: "Japanese",
+    write: "Japanese, in the polite です・ます register",
+    rest: "Japanese",
+  }),
+  "zh-Hans": buildForeignLanguageSection({
+    speaks: "Mandarin Chinese",
+    write: "Simplified Chinese characters (简体中文), in a polite register that addresses the user as 您",
+    rest: "Chinese, written in Simplified characters. Never use Traditional characters",
+  }),
+  "zh-Hant": buildForeignLanguageSection({
+    speaks: "Mandarin Chinese",
+    write: "Traditional Chinese characters (繁體中文), in a polite register that addresses the user as 您",
+    rest: "Chinese, written in Traditional characters. Never use Simplified characters",
+  }),
+  de: buildForeignLanguageSection({
+    speaks: "German",
+    write: "German, addressing the user formally as Sie",
+    rest: "German",
+  }),
+  fr: buildForeignLanguageSection({
+    speaks: "French",
+    write: "French, addressing the user formally as vous",
+    rest: "French",
+  }),
+  es: buildForeignLanguageSection({
+    speaks: "Spanish",
+    write: "Spanish, addressing the user formally as usted",
+    rest: "Spanish",
+  }),
 };
+
+/**
+ * Every code the host may send that changes what the agent says. English is
+ * the absence of a section, so it is listed explicitly.
+ */
+export const SUPPORTED_CONVERSATION_LANGUAGES: readonly string[] = ["en", ...Object.keys(LANGUAGE_PROMPTS)];
+
+export function isSupportedConversationLanguage(value: unknown): value is string {
+  return typeof value === "string" && SUPPORTED_CONVERSATION_LANGUAGES.includes(value);
+}
 
 /**
  * Appended for a scanned quick-demo card, and nothing else.

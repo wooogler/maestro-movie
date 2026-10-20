@@ -12,10 +12,10 @@
 
 import { useEffect, useMemo, type ReactNode } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { LANGUAGES, LANGUAGE_LABELS, useLanguage } from '../i18n';
+import { LANGUAGES, LANGUAGE_LABELS, languagePack, useLanguage } from '../i18n';
 import { renderMessageText } from '../components/chat/renderMessageText';
-import { QUICK_DEMO_CARDS } from '../study/quickDemoCards';
-import { ABOUT_COPY, PAPER_TITLE, SOURCE_URL, type FigureText } from './about/aboutCopy';
+import { QUICK_DEMO_CARDS, cardText } from '../study/quickDemoCards';
+import { PAPER_TITLE, SOURCE_URL, aboutCopyFor, type FigureText } from './about/aboutCopy';
 import {
   AdaptationFigure,
   BrowserFrame,
@@ -125,7 +125,9 @@ function AdaptationCard({
 function LanguageSwitch({ label }: { label: string }) {
   const { language, setLanguage } = useLanguage();
   return (
-    <div role="radiogroup" aria-label={label} className="flex gap-1">
+    // Eight languages wrap onto a second row at phone width rather than push
+    // the header off the side of the screen.
+    <div role="radiogroup" aria-label={label} className="flex flex-wrap justify-end gap-1">
       {LANGUAGES.map((candidate) => {
         const selected = candidate === language;
         return (
@@ -134,7 +136,7 @@ function LanguageSwitch({ label }: { label: string }) {
             type="button"
             role="radio"
             aria-checked={selected}
-            lang={candidate}
+            lang={languagePack(candidate).htmlLang}
             onClick={() => setLanguage(candidate)}
             className={`rounded-lg border px-2.5 py-1 text-xs font-medium transition-colors ${
               selected
@@ -152,7 +154,7 @@ function LanguageSwitch({ label }: { label: string }) {
 
 export function AboutPage() {
   const { language } = useLanguage();
-  const copy = ABOUT_COPY[language];
+  const { copy, language: copyLanguage } = aboutCopyFor(language);
   const navigate = useNavigate();
 
   useEffect(() => {
@@ -177,7 +179,7 @@ export function AboutPage() {
   const tryDemo = () => navigate('/demo');
 
   return (
-    <main className="h-full overflow-y-auto bg-dark text-fg" lang={language}>
+    <main className="h-full overflow-y-auto bg-dark text-fg" lang={languagePack(copyLanguage).htmlLang}>
       <header className="sticky top-0 z-20 border-b border-dark-border bg-dark/90 backdrop-blur-sm">
         <div className="mx-auto flex w-full max-w-6xl items-center justify-between gap-3 px-4 py-3 sm:px-6">
           <span className="text-sm font-bold tracking-[0.16em] text-fg-strong">MAESTRO</span>
@@ -186,7 +188,7 @@ export function AboutPage() {
             <button
               type="button"
               onClick={tryDemo}
-              className="rounded-lg bg-primary px-3 py-1.5 text-xs font-semibold text-primary-fg transition-colors hover:bg-primary-hover sm:text-sm"
+              className="shrink-0 whitespace-nowrap rounded-lg bg-primary px-3 py-1.5 text-xs font-semibold text-primary-fg transition-colors hover:bg-primary-hover sm:text-sm"
             >
               {copy.ctaTry}
             </button>
@@ -223,7 +225,7 @@ export function AboutPage() {
         <HeroFigure
           steps={hero}
           question={copy.heroQuestion}
-          userLine={heroCard?.opener[language] ?? ''}
+          userLine={heroCard ? cardText(heroCard.opener, language) : ''}
           sentences={copy.heroSentences}
           conversationLabel={copy.conversationLabel}
           replayLabel={copy.replay}
@@ -315,10 +317,10 @@ export function AboutPage() {
                 <span className="flex h-6 w-6 items-center justify-center rounded-full bg-primary text-[11px] font-bold text-primary-fg">
                   {card.badge}
                 </span>
-                <span className="text-sm font-semibold text-fg-strong">{card.title[language]}</span>
+                <span className="text-sm font-semibold text-fg-strong">{cardText(card.title, language)}</span>
               </div>
               <blockquote className="mt-3 text-sm font-medium leading-snug text-fg-strong">
-                &ldquo;{card.opener[language]}&rdquo;
+                &ldquo;{cardText(card.opener, language)}&rdquo;
               </blockquote>
             </li>
           ))}

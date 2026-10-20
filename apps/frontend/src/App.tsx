@@ -537,7 +537,9 @@ function App() {
 
   return (
     <BrowserRouter>
-      <LanguageProvider>
+      {/* Browser-language detection for the booth only; a study condition opens
+          in English unless someone chose otherwise, as it always did. */}
+      <LanguageProvider detectBrowserLanguage={demoMode}>
         <DevToolsProvider>
           <div className="app-viewport flex">
             <div className="flex-1 overflow-hidden bg-dark text-fg">

@@ -13,9 +13,13 @@
  */
 
 import { useEffect, useRef } from 'react';
-import { LANGUAGES, LANGUAGE_LABELS, useLanguage } from '../../i18n';
+import { LANGUAGES, LANGUAGE_LABELS, languagePack, useLanguage } from '../../i18n';
 import { VoiceVerbosityPanel } from '../voice/VoiceVerbosityPanel';
-import { DEFAULT_PLANNER_MODEL, PLANNER_MODEL_OPTIONS } from '../../agent/plannerModels';
+import {
+  DEFAULT_PLANNER_MODEL,
+  PLANNER_MODEL_OPTIONS,
+  plannerModelDescription,
+} from '../../agent/plannerModels';
 import type {
   VoiceCategory,
   VoiceMode,
@@ -110,7 +114,7 @@ export function SettingsModal({
           <div
             role="radiogroup"
             aria-label={s.languageLabel}
-            className="flex gap-2"
+            className="grid grid-cols-4 gap-2"
           >
             {LANGUAGES.map((candidate) => {
               const selected = candidate === language;
@@ -120,9 +124,9 @@ export function SettingsModal({
                   type="button"
                   role="radio"
                   aria-checked={selected}
-                  lang={candidate}
+                  lang={languagePack(candidate).htmlLang}
                   onClick={() => setLanguage(candidate)}
-                  className={`flex-1 rounded-xl border px-4 py-3 text-sm font-medium transition-colors ${
+                  className={`rounded-xl border px-2 py-3 text-sm font-medium transition-colors ${
                     selected
                       ? 'border-primary bg-primary text-primary-fg'
                       : 'border-dark-border bg-dark text-fg hover:border-primary hover:text-fg-strong'
@@ -170,7 +174,7 @@ export function SettingsModal({
                 ? (() => {
                     const option = PLANNER_MODEL_OPTIONS.find((candidate) => candidate.id === plannerModel);
                     if (!option) return '';
-                    return language === 'ko' ? option.descriptionKo : option.description;
+                    return plannerModelDescription(option, language);
                   })()
                 : s.plannerModelDefaultHint}
             </p>

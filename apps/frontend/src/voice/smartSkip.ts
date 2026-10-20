@@ -1,4 +1,4 @@
-import type { UtteranceClassification } from './classifyUtterance';
+import { sentenceAsksQuestion, type UtteranceClassification } from './classifyUtterance';
 import type { VoiceCategory, VoiceMode, VoiceVerbositySettings } from './verbosity';
 
 /**
@@ -59,6 +59,12 @@ const MONOLOGUE_LIMIT = 2;
 const LIST_READBACK_LABELS = 3;
 /** Longest a shortened non-question utterance may be before it is cut. */
 const BRIEF_MAX_CHARS = 110;
+/**
+ * The same limit for Japanese and Chinese, where a character carries roughly a
+ * syllable rather than a letter. About 45 characters is a spoken clause of the
+ * same length. UNMEASURED.
+ */
+const BRIEF_MAX_CHARS_HAN = 45;
 /** A shortening that saves less than this much is not worth calling "brief". */
 const BRIEF_MIN_SAVING = 0.1;
 
@@ -80,8 +86,49 @@ const STOPWORDS = new Set([
 export function normalizeForCompare(text: string): string {
   return text
     .toLowerCase()
-    .replace(/[^a-z0-9\uac00-\ud7a3]+/g, ' ')
+    .replace(/[^\p{L}\p{N}]+/gu, ' ')
     .trim();
+}
+
+/**
+ * Kana or Han: Japanese or Chinese, written without spaces between words. The
+ * same normalisation used to drop both scripts entirely, so every Japanese
+ * sentence of a session normalised to the Latin title inside it, or to ''.
+ */
+const KANA_OR_HAN = /[\u3040-\u30ff\u31f0-\u31ff\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff]/;
+const KANA = /[\u3040-\u30ff\u31f0-\u31ff]/;
+
+function hasKanaOrHan(text: string): boolean {
+  return KANA_OR_HAN.test(text);
+}
+
+type WordSegmenter = { segment(input: string): Iterable<{ segment: string; isWordLike?: boolean }> };
+const segmenters = new Map<string, WordSegmenter | null>();
+
+function getWordSegmenter(locale: string): WordSegmenter | null {
+  if (!segmenters.has(locale)) {
+    const Segmenter = (Intl as unknown as {
+      Segmenter?: new (locale: string, options: { granularity: 'word' }) => WordSegmenter;
+    }).Segmenter;
+    segmenters.set(locale, Segmenter ? new Segmenter(locale, { granularity: 'word' }) : null);
+  }
+  return segmenters.get(locale) ?? null;
+}
+
+/**
+ * Words of a text that may be written without spaces. Text with no kana or Han
+ * is split on whitespace exactly as before; Japanese and Chinese go through
+ * `Intl.Segmenter`, which also splits a Latin title inside them on its spaces.
+ */
+function splitWords(text: string): string[] {
+  if (!hasKanaOrHan(text)) return text.split(/\s+/);
+  const segmenter = getWordSegmenter(KANA.test(text) ? 'ja' : 'zh');
+  if (!segmenter) return text.split(/[\s\p{P}]+/u);
+  const words: string[] = [];
+  for (const part of segmenter.segment(text)) {
+    if (part.isWordLike) words.push(part.segment);
+  }
+  return words;
 }
 
 function trigrams(value: string): Set<string> {
@@ -135,6 +182,31 @@ const VALUE_WORDS = new Set([
   '오늘', '내일', '모레', '오전', '오후', '저녁', '밤', '아침', '낮',
   '월요일', '화요일', '수요일', '목요일', '금요일', '토요일', '일요일',
   '일반', '프리미엄',
+  // Japanese.
+  '今日', '明日', '明後日', '今夜', '今晩', '午前', '午後', '朝', '昼', '夕方', '夜',
+  '月曜日', '火曜日', '水曜日', '木曜日', '金曜日', '土曜日', '日曜日',
+  '月曜', '火曜', '水曜', '木曜', '金曜', '土曜', '日曜', '週末', '平日',
+  'スタンダード', 'プレミアム',
+  // Chinese, Simplified then Traditional where the two differ.
+  '今天', '明天', '后天', '後天', '今晚', '上午', '下午', '中午', '早上', '晚上',
+  '周一', '周二', '周三', '周四', '周五', '周六', '周日', '周末',
+  '週一', '週二', '週三', '週四', '週五', '週六', '週日', '週末',
+  '星期一', '星期二', '星期三', '星期四', '星期五', '星期六', '星期日', '星期天',
+  '普通', '高级', '高級',
+  // German.
+  'montag', 'dienstag', 'mittwoch', 'donnerstag', 'freitag', 'samstag', 'sonntag',
+  'januar', 'februar', 'märz', 'mai', 'juni', 'juli', 'oktober', 'dezember',
+  'heute', 'morgen', 'übermorgen', 'vormittag', 'nachmittag', 'abend', 'nacht',
+  // French.
+  'lundi', 'mardi', 'mercredi', 'jeudi', 'vendredi', 'samedi', 'dimanche',
+  'janvier', 'février', 'mars', 'avril', 'juin', 'juillet', 'août', 'septembre',
+  'octobre', 'novembre', 'décembre',
+  "aujourd'hui", 'aujourd’hui', 'demain', 'matin', 'après-midi', 'soir',
+  // Spanish.
+  'lunes', 'martes', 'miércoles', 'jueves', 'viernes', 'sábado', 'domingo',
+  'enero', 'febrero', 'marzo', 'abril', 'mayo', 'junio', 'julio', 'agosto',
+  'septiembre', 'octubre', 'noviembre', 'diciembre',
+  'hoy', 'mañana', 'tarde', 'noche',
 ]);
 
 /**
@@ -158,16 +230,20 @@ function sentenceStart(tokens: string[], index: number): boolean {
 function distinguishingTokens(text: string): Set<string> {
   const out = new Set<string>();
   for (const sentence of splitSentences(text)) {
-    const tokens = sentence.split(/\s+/);
+    // In a Japanese or Chinese sentence a capitalised Latin word is a name
+    // wherever it stands — those scripts have no case, so nothing is
+    // capitalised merely for opening the sentence.
+    const caseless = hasKanaOrHan(sentence);
+    const tokens = splitWords(sentence);
     tokens.forEach((raw, index) => {
-      const token = raw.replace(/^[^\w\uac00-\ud7a3]+|[^\w\uac00-\ud7a3]+$/g, '');
+      const token = raw.replace(/^[^\w\p{L}\p{N}]+|[^\w\p{L}\p{N}]+$/gu, '');
       if (!token) return;
       const lower = token.toLowerCase();
       if (/\d/.test(token) || VALUE_WORDS.has(lower)) out.add(lower);
       // Capitalisation marks a name in English. Korean has no case, but the
       // catalogue's names stay in Latin script inside a Korean sentence, so the
       // same test still finds them there.
-      else if (!sentenceStart(tokens, index) && /^[A-Z][a-z]/.test(token)) out.add(lower);
+      else if ((caseless || !sentenceStart(tokens, index)) && /^\p{Lu}\p{Ll}/u.test(token)) out.add(lower);
     });
   }
   return out;
@@ -185,12 +261,15 @@ function sameSet(a: Set<string>, b: Set<string>): boolean {
  * discards every content word and leaves nothing to compare.
  */
 function minContentTokenLength(token: string): number {
+  // A single kanji or hanzi is routinely a whole word (席, 日, 场).
+  if (hasKanaOrHan(token)) return 1;
   return /[\uac00-\ud7a3]/.test(token) ? 2 : 4;
 }
 
 function contentTokens(text: string): string[] {
-  return normalizeForCompare(text)
-    .split(' ')
+  const normalized = normalizeForCompare(text);
+  const words = hasKanaOrHan(normalized) ? splitWords(normalized) : normalized.split(' ');
+  return words
     .filter(
       (token) =>
         // A token carrying a digit is content however short it is, and it used
@@ -263,7 +342,9 @@ function countRecitedLabels(text: string, visibleLabels: string[]): number {
  * 3:40 p.m. or the later one?", and a naive split leaves "or the later one?"
  * as the only "question", which is what would get spoken.
  */
-const ABBREVIATION = /\b(?:p\.m|a\.m|e\.g|i\.e|etc|vs|approx|no|mr|mrs|ms|dr|st)\./gi;
+// `no` only before a number ("no. 5"): Spanish ends sentences with "no." all
+// the time, and masking that full stop glued the next sentence onto it.
+const ABBREVIATION = /\b(?:p\.m|a\.m|e\.g|i\.e|etc|vs|approx|no(?=\.\s?\d)|mr|mrs|ms|dr|st)\./gi;
 const DOT_PLACEHOLDER = '\u0000';
 
 function splitSentences(text: string): string[] {
@@ -274,7 +355,11 @@ function splitSentences(text: string): string[] {
     // unlisted abbreviation degrades to "no split" rather than to a fragment.
     // `[A-Z0-9]` alone never fires on Korean — Hangul has no case — so a whole
     // Korean reply was one "sentence" and `brief` could not shorten it at all.
-    .split(/(?<=[.!?])\s+(?=["'\u201c\u2018(\[]?[A-Z0-9\uac00-\ud7a3])/)
+    // Accented capitals ("État", "Él") and the Spanish openers ¿ ¡ start a
+    // sentence too.
+    .split(/(?<=[.!?])\s+(?=["'\u201c\u2018\u00ab(\[\u00bf\u00a1]?[\p{Lu}0-9\uac00-\ud7a3])/u)
+    // Japanese and Chinese end a sentence with 。！？ and put no space after it.
+    .flatMap((part) => part.split(/(?<=[。！？])\s*(?=\S)/u))
     .map((part) => part.split(DOT_PLACEHOLDER).join('.').trim())
     .filter(Boolean);
 }
@@ -284,11 +369,39 @@ function capitalizeFirst(text: string): string {
   return text[0].toUpperCase() + text.slice(1);
 }
 
+/**
+ * Where a cut may fall in text with no spaces: just after the last CJK comma or
+ * clause mark, otherwise at the last word boundary `Intl.Segmenter` reports.
+ * -1 when there is neither.
+ */
+function lastCjkBoundary(cut: string): number {
+  const punctuation = Math.max(
+    ...['、', '，', '；', '：', '。', '！', '？', ','].map((mark) => cut.lastIndexOf(mark))
+  );
+  if (punctuation >= 0) return punctuation + 1;
+  const segmenter = getWordSegmenter(KANA.test(cut) ? 'ja' : 'zh');
+  if (!segmenter) return -1;
+  let boundary = -1;
+  let offset = 0;
+  for (const part of segmenter.segment(cut)) {
+    offset += part.segment.length;
+    // The segment that runs to the very end may be a word the cut split.
+    if (offset < cut.length) boundary = offset;
+  }
+  return boundary;
+}
+
 function truncateAtWord(text: string, limit: number): string {
   if (text.length <= limit) return text;
   const cut = text.slice(0, limit);
   const lastSpace = cut.lastIndexOf(' ');
-  return `${(lastSpace > limit * 0.6 ? cut.slice(0, lastSpace) : cut).replace(/[\s,;:—-]+$/, '')}…`;
+  let boundary = lastSpace;
+  if (!(lastSpace > limit * 0.6) && hasKanaOrHan(cut)) boundary = lastCjkBoundary(cut);
+  return `${(boundary > limit * 0.6 ? cut.slice(0, boundary) : cut).replace(/[\s,;:—\-、，；：]+$/, '')}…`;
+}
+
+function briefMaxChars(text: string): number {
+  return hasKanaOrHan(text) ? BRIEF_MAX_CHARS_HAN : BRIEF_MAX_CHARS;
 }
 
 /**
@@ -312,7 +425,7 @@ export function shortenForBrief(
   const sentences = splitSentences(trimmed);
 
   if (classification.hasQuestion) {
-    const questions = sentences.filter((sentence) => sentence.endsWith('?'));
+    const questions = sentences.filter((sentence) => sentenceAsksQuestion(sentence));
     if (questions.length > 0) {
       const kept = questions.join(' ');
       // Never truncate a question — an over-long one is still better than a
@@ -333,7 +446,7 @@ export function shortenForBrief(
     candidate = sentences[0] ?? trimmed;
   }
 
-  candidate = truncateAtWord(candidate, BRIEF_MAX_CHARS);
+  candidate = truncateAtWord(candidate, briefMaxChars(candidate));
   return isWorthIt(trimmed, candidate) ? candidate : trimmed;
 }
 

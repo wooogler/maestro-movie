@@ -17,7 +17,13 @@
 
 import { useEffect, useState } from 'react';
 import QRCode from 'qrcode';
-import { QUICK_DEMO_CARDS, buildQuickDemoCardUrl } from '../study/quickDemoCards';
+import {
+  QUICK_DEMO_CARDS,
+  buildQuickDemoCardUrl,
+  cardText,
+  cardTextLanguage,
+} from '../study/quickDemoCards';
+import { languagePack } from '../i18n';
 import { getStoredAccessCode, setStoredAccessCode } from '../study/sessionStorage';
 import { useLanguage } from '../i18n';
 
@@ -49,23 +55,23 @@ function CardTile({ cardId, accessCode }: { cardId: string; accessCode: string }
         <span className="flex h-6 w-6 items-center justify-center rounded-full bg-primary text-[11px] font-bold text-primary-fg">
           {card.badge}
         </span>
-        <span className="text-sm font-semibold text-fg-strong">{card.title[language]}</span>
+        <span className="text-sm font-semibold text-fg-strong">{cardText(card.title, language)}</span>
       </div>
       {svg ? (
         <div
           className="mb-3 w-full overflow-hidden rounded-xl bg-white p-2 [&>svg]:h-auto [&>svg]:w-full"
-          aria-label={card.title[language]}
+          aria-label={cardText(card.title, language)}
           // Self-contained markup built from the URL above; no user input reaches it.
           dangerouslySetInnerHTML={{ __html: svg }}
         />
       ) : (
         <div className="mb-3 aspect-square w-full rounded-xl border border-dashed border-dark-border" />
       )}
-      <blockquote lang={language} className="text-sm font-medium leading-snug text-fg-strong">
-        &ldquo;{card.opener[language]}&rdquo;
+      <blockquote lang={languagePack(cardTextLanguage(card.opener, language)).htmlLang} className="text-sm font-medium leading-snug text-fg-strong">
+        &ldquo;{cardText(card.opener, language)}&rdquo;
       </blockquote>
-      <p lang={language} className="mt-2 text-[11px] leading-relaxed text-fg-faint">
-        {card.watch[language]}
+      <p lang={languagePack(cardTextLanguage(card.watch, language)).htmlLang} className="mt-2 text-[11px] leading-relaxed text-fg-faint">
+        {cardText(card.watch, language)}
       </p>
     </div>
   );

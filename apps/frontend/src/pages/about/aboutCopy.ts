@@ -509,4 +509,15 @@ const ko: AboutCopy = {
   footerLine: 'MAESTRO · UIST 2026 · 디트로이트',
 };
 
-export const ABOUT_COPY: Record<Language, AboutCopy> = { en, ko };
+/**
+ * English and Korean only. /about is a long fact-checked page, and every other
+ * language reads it in English until a translation is written and checked the
+ * same way — read it through `aboutCopyFor`, which does that fallback.
+ */
+export const ABOUT_COPY: Readonly<Partial<Record<Language, AboutCopy>>> & { en: AboutCopy } = { en, ko };
+
+/** The copy in `language`, or English, plus which of the two it is (for `lang=`). */
+export function aboutCopyFor(language: Language): { copy: AboutCopy; language: Language } {
+  const translated = ABOUT_COPY[language];
+  return translated ? { copy: translated, language } : { copy: ABOUT_COPY.en, language: 'en' };
+}

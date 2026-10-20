@@ -1,5 +1,6 @@
 import type { AgentPreference, PreferenceProfilePayload } from '../agent/protocol';
 import { MEMORY_STAGE_ORDER, type MemoryStage } from '../components/memory/memoryFormat';
+import type { Language } from '../i18n/language';
 
 /**
  * Preference memory the booth can hand the agent before anyone says a word.
@@ -151,12 +152,19 @@ export const PREFERENCE_PRESETS: PreferencePreset[] = [
 ];
 
 /**
- * Korean copy for every preset, keyed by id so the English data above stays the
+ * Translated copy for every preset, keyed by id so the English data above stays the
  * single source for ids, strengths and stages. A preset or preference missing
  * here falls back to English rather than disappearing; the check script keeps
  * the two in step.
  */
-const PRESET_KO: Record<string, { label: string; blurb: string; preferences: Record<string, string> }> = {
+/** A preset's words in one language. Any id left out reads in English. */
+interface PresetTranslation {
+  label: string;
+  blurb: string;
+  preferences: Record<string, string>;
+}
+
+const PRESET_KO: Record<string, PresetTranslation> = {
   family_matinee: {
     label: '가족 낮 상영',
     blurb: '아이들과 함께 보려는 부모, 이른 시간대.',
@@ -209,23 +217,199 @@ const PRESET_KO: Record<string, { label: string; blurb: string; preferences: Rec
   },
 };
 
-export type PresetLanguage = 'en' | 'ko';
+/*
+  MACHINE-DRAFTED — the Japanese, Simplified Chinese and Traditional Chinese
+  preset copy below needs native review. Modelled on the Korean entries, and
+  like them it keeps US units (miles, dollars) and US ratings (G, PG), because
+  the Detroit catalogue the agent filters on is in miles, USD and MPAA ratings.
+*/
+const PRESET_JA: Record<string, PresetTranslation> = {
+  family_matinee: {
+    label: '家族で昼の上映',
+    blurb: '子ども連れの親が、早い時間帯に予約。',
+    preferences: {
+      prf_family_rating: 'G または PG 指定の映画のみ。',
+      prf_family_early: '上映開始が午後5時より前である必要があります。',
+      prf_family_close: 'より近い映画館を希望します。',
+    },
+  },
+  date_night: {
+    label: 'デートの夜',
+    blurb: '二人で、隣り合った2席、夜の時間帯。',
+    preferences: {
+      prf_date_couple: '隣り合った2席が必要です。',
+      prf_date_evening: '上映開始が午後6時以降である必要があります。',
+      prf_date_recliner: 'リクライニングシートを希望します。',
+    },
+  },
+  big_screen: {
+    label: '大きなスクリーン',
+    blurb: 'IMAX で見たいけれど、遠くまでは運転しない。最初から条件が競合しています。',
+    preferences: {
+      prf_big_imax: '上映は IMAX である必要があります。',
+      prf_big_distance: '15マイルを超えて運転しません。',
+    },
+  },
+  late_show: {
+    label: 'レイトショー',
+    blurb: '仕事帰りに、家の近くで。',
+    preferences: {
+      prf_late_evening: '上映開始が午後9時以降である必要があります。',
+      prf_late_distance: '15マイルを超えて運転しません。',
+    },
+  },
+  budget: {
+    label: '節約',
+    blurb: '価格が最優先。映画館は自然と絞られます。',
+    preferences: {
+      prf_budget_price: '1席12ドルを超えては払いません。',
+      prf_budget_short: '短めの映画を希望します。',
+    },
+  },
+  easy_trip: {
+    label: '気軽なお出かけ',
+    blurb: '条件はゆるめ。でも一番近い映画館は外れます。',
+    preferences: {
+      prf_easy_amenities: '映画館に無料駐車場と座席指定制が必要です。',
+      prf_easy_rows: '前の2列は避けます。',
+    },
+  },
+};
+
+const PRESET_ZH_HANS: Record<string, PresetTranslation> = {
+  family_matinee: {
+    label: '家庭日场',
+    blurb: '家长带孩子，选较早的时段。',
+    preferences: {
+      prf_family_rating: '只看 G 或 PG 级电影。',
+      prf_family_early: '场次必须在下午 5 点前开始。',
+      prf_family_close: '倾向于离得近的影院。',
+    },
+  },
+  date_night: {
+    label: '约会之夜',
+    blurb: '两个人，两个相邻座位，晚上。',
+    preferences: {
+      prf_date_couple: '需要两个相邻的座位。',
+      prf_date_evening: '场次必须在晚上 6 点或之后开始。',
+      prf_date_recliner: '倾向于可躺式座椅。',
+    },
+  },
+  big_screen: {
+    label: '大银幕',
+    blurb: '想看 IMAX，但不愿为此开远路。一开始就存在冲突。',
+    preferences: {
+      prf_big_imax: '场次必须是 IMAX。',
+      prf_big_distance: '开车不超过 15 英里。',
+    },
+  },
+  late_show: {
+    label: '晚场',
+    blurb: '下班以后，离家近。',
+    preferences: {
+      prf_late_evening: '场次必须在晚上 9 点或之后开始。',
+      prf_late_distance: '开车不超过 15 英里。',
+    },
+  },
+  budget: {
+    label: '省钱',
+    blurb: '价格优先，影院也随之被悄悄选定。',
+    preferences: {
+      prf_budget_price: '每个座位不超过 12 美元。',
+      prf_budget_short: '倾向于片长较短的电影。',
+    },
+  },
+  easy_trip: {
+    label: '轻松出行',
+    blurb: '条件宽松，但会错过最近的影院。',
+    preferences: {
+      prf_easy_amenities: '影院必须有免费停车和对号入座。',
+      prf_easy_rows: '避开前两排。',
+    },
+  },
+};
+
+const PRESET_ZH_HANT: Record<string, PresetTranslation> = {
+  family_matinee: {
+    label: '親子早場',
+    blurb: '家長帶小孩，選較早的時段。',
+    preferences: {
+      prf_family_rating: '只看 G 或 PG 級的電影。',
+      prf_family_early: '場次必須在下午 5 點前開始。',
+      prf_family_close: '偏好較近的戲院。',
+    },
+  },
+  date_night: {
+    label: '約會夜',
+    blurb: '兩個人、兩個相連座位、晚上。',
+    preferences: {
+      prf_date_couple: '需要兩個相連的座位。',
+      prf_date_evening: '場次必須在晚上 6 點或之後開始。',
+      prf_date_recliner: '偏好可躺式座椅。',
+    },
+  },
+  big_screen: {
+    label: '大銀幕',
+    blurb: '想看 IMAX，但不想為此開遠路。一開始就有衝突。',
+    preferences: {
+      prf_big_imax: '場次必須是 IMAX。',
+      prf_big_distance: '開車不超過 15 英里。',
+    },
+  },
+  late_show: {
+    label: '晚場',
+    blurb: '下班後，離家近。',
+    preferences: {
+      prf_late_evening: '場次必須在晚上 9 點或之後開始。',
+      prf_late_distance: '開車不超過 15 英里。',
+    },
+  },
+  budget: {
+    label: '省錢',
+    blurb: '價格優先，戲院也會跟著悄悄決定。',
+    preferences: {
+      prf_budget_price: '每個座位不超過 12 美元。',
+      prf_budget_short: '偏好片長較短的電影。',
+    },
+  },
+  easy_trip: {
+    label: '輕鬆出門',
+    blurb: '條件寬鬆，但會錯過最近的戲院。',
+    preferences: {
+      prf_easy_amenities: '戲院必須提供免費停車和劃位座位。',
+      prf_easy_rows: '避開前兩排。',
+    },
+  },
+};
+
+/**
+ * Per language, per preset id. English is the presets themselves, so it has no
+ * entry; a language with no entry, or a preset or preference id missing from
+ * one, reads in English.
+ */
+const PRESET_TRANSLATIONS: Partial<Record<Language, Record<string, PresetTranslation>>> = {
+  ko: PRESET_KO,
+  ja: PRESET_JA,
+  'zh-Hans': PRESET_ZH_HANS,
+  'zh-Hant': PRESET_ZH_HANT,
+};
 
 /**
  * The preset as the visitor should read it. Ids, strengths and stages are
- * untouched, so a Korean session loads exactly the same memory -- the agent
+ * untouched, so a translated session loads exactly the same memory -- the agent
  * replaces entries by id -- with the words the visitor can read on the rail.
  */
-export function localizePreset(preset: PreferencePreset, language: PresetLanguage): PreferencePreset {
-  if (language !== 'ko') return preset;
-  const ko = PRESET_KO[preset.id];
-  if (!ko) return preset;
+export function localizePreset(preset: PreferencePreset, language: Language): PreferencePreset {
+  const translation = PRESET_TRANSLATIONS[language]?.[preset.id];
+  if (!translation) return preset;
   return {
     ...preset,
-    label: ko.label,
-    blurb: ko.blurb,
+    label: translation.label,
+    blurb: translation.blurb,
     preferences: preset.preferences.map((entry) =>
-      ko.preferences[entry.id] ? { ...entry, description: ko.preferences[entry.id] } : entry
+      translation.preferences[entry.id]
+        ? { ...entry, description: translation.preferences[entry.id] }
+        : entry
     ),
   };
 }
@@ -238,9 +422,9 @@ export function localizePreset(preset: PreferencePreset, language: PresetLanguag
  */
 export function localizeProfile(
   profile: PreferenceProfile | null,
-  language: PresetLanguage
+  language: Language
 ): PreferenceProfile | null {
-  if (!profile || language !== 'ko') return profile;
+  if (!profile || !PRESET_TRANSLATIONS[language]) return profile;
   const preset = PREFERENCE_PRESETS.find((candidate) => candidate.id === profile.presetId);
   if (!preset) return profile;
   const words = new Map(localizePreset(preset, language).preferences.map((entry) => [entry.id, entry.description]));
@@ -252,12 +436,20 @@ export function localizeProfile(
   };
 }
 
-/** For the check script: which preset ids and preference ids carry Korean copy. */
-export function listPresetKoreanCoverage(): Array<{ presetId: string; preferenceIds: string[] }> {
-  return Object.entries(PRESET_KO).map(([presetId, entry]) => ({
-    presetId,
-    preferenceIds: Object.keys(entry.preferences),
-  }));
+/** For the check script: which preset ids and preference ids carry copy in each translated language. */
+export function listPresetTranslationCoverage(): Array<{
+  language: Language;
+  presetId: string;
+  preferenceIds: string[];
+}> {
+  return (Object.entries(PRESET_TRANSLATIONS) as Array<[Language, Record<string, PresetTranslation>]>).flatMap(
+    ([language, presets]) =>
+      Object.entries(presets).map(([presetId, entry]) => ({
+        language,
+        presetId,
+        preferenceIds: Object.keys(entry.preferences),
+      }))
+  );
 }
 
 export function findPreferencePreset(presetId: string): PreferencePreset | null {
@@ -297,7 +489,7 @@ export function normalizeProfilePreferences(preferences: AgentPreference[]): Age
 export function createProfileFromPreset(
   preset: PreferencePreset,
   revision: number,
-  language: PresetLanguage = 'en'
+  language: Language = 'en'
 ): PreferenceProfile {
   return {
     presetId: preset.id,

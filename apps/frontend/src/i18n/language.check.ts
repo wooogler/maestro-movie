@@ -10,8 +10,21 @@
  *
  * Exit code 0 means every case passed.
  */
-import { DEFAULT_LANGUAGE, LANGUAGES, parseLanguage, STT_LOCALE } from './language';
-import { UI_STRINGS, stringsFor, type UiStrings } from './strings';
+import {
+  DEFAULT_LANGUAGE,
+  LANGUAGES,
+  LANGUAGE_LABELS,
+  LANGUAGE_PACKS,
+  detectLanguage,
+  languagePack,
+  matchLanguageTag,
+  parseLanguage,
+  readLanguageFromUrl,
+  stripLanguageFromUrl,
+  STT_LOCALE,
+  type Language,
+} from './language';
+import { UI_STRINGS, UI_STRING_OVERRIDES, stringsFor, type UiStrings } from './strings';
 import {
   buildTranscriptionPrompt,
   collectStageHintLabels,
@@ -36,7 +49,7 @@ function section(name: string): void {
 function gate(
   text: string,
   durationMs: number,
-  language: 'en' | 'ko',
+  language: Language,
   hintLabels: string[] = []
 ) {
   return getIgnoredVoiceTranscriptReason(text, durationMs, {
@@ -182,8 +195,8 @@ section('3. the string table is complete and distinct');
     UI_STRINGS.en.locale === 'en-US' && UI_STRINGS.ko.locale === 'ko-KR'
   );
   check('both weekday rows have seven days', UI_STRINGS.en.weekdayShort.length === 7 && UI_STRINGS.ko.weekdayShort.length === 7);
-  check('an unknown language falls back to English', stringsFor('de' as 'en') === UI_STRINGS.en);
-  check('parseLanguage rejects anything unexpected', parseLanguage('de') === 'en' && parseLanguage('ko') === 'ko');
+  check('an unknown language falls back to English', stringsFor('xx' as Language) === UI_STRINGS.en);
+  check('parseLanguage rejects anything unexpected', parseLanguage('xx') === 'en' && parseLanguage('ko') === 'ko');
   check('every language has an STT locale', LANGUAGES.every((language) => Boolean(STT_LOCALE[language])));
 }
 
@@ -336,6 +349,213 @@ section('6. the seat stage names its rows');
     'other stages are untouched by the row rule',
     collectStageHintLabels('en', 'movie', ['Street Fighter', 'Clayface'], limits).join(', ') ===
       'Street Fighter, Clayface'
+  );
+}
+
+// -----------------------------------------------------------------------------
+section('7. the overlay languages: what is translated is in its own script');
+// -----------------------------------------------------------------------------
+{
+  // Values that are legitimately the same as English in another language —
+  // brand and format names, initialisms. A translated value equal to English
+  // and NOT on this list is a placeholder that was copied rather than written.
+  const COGNATES = new Set(['IMAX', 'OK', 'QR', 'MAESTRO', '3D', 'API']);
+  const SCRIPT: Partial<Record<Language, { test: RegExp; name: string }>> = {
+    ko: { test: /[가-힣]/, name: 'Hangul' },
+    ja: { test: /[぀-ヿ一-鿿]/, name: 'kana or kanji' },
+    'zh-Hans': { test: /[一-鿿]/, name: 'Han' },
+    'zh-Hant': { test: /[一-鿿]/, name: 'Han' },
+  };
+  // Asserted through the override tables, never the merged ones: the merged
+  // table is English wherever a translation has not been written yet, and that
+  // fallback is intended — it is not a translation to grade.
+  for (const language of LANGUAGES) {
+    if (language === 'en' || language === 'ko') continue;
+    const overrides = UI_STRING_OVERRIDES[language];
+    check(`${language} has an override table`, overrides !== undefined);
+    if (!overrides) continue;
+    const prose = Object.entries(overrides).filter(
+      (entry): entry is [string, string] => typeof entry[1] === 'string' && entry[0] !== 'locale'
+    );
+    const copied = prose.filter(
+      ([key, text]) => text === (UI_STRINGS.en as unknown as Record<string, unknown>)[key] && !COGNATES.has(text)
+    );
+    check(`no ${language} override is a copy of the English`, copied.length === 0, copied.map(([key]) => key).join(', '));
+    const script = SCRIPT[language];
+    if (script) {
+      const wrong = prose.filter(([, text]) => !COGNATES.has(text) && !script.test.test(text));
+      check(`every ${language} override is written in ${script.name}`, wrong.length === 0, wrong.map(([key]) => key).join(', '));
+      check(`${language} translates the first screen's start button`, typeof overrides.startDemo === 'string');
+    }
+    const merged = stringsFor(language);
+    check(
+      `${language} falls back to English for everything it has not translated`,
+      (Object.keys(UI_STRINGS.en) as Array<keyof UiStrings>).every(
+        (key) => key in overrides || key === 'agentStepLabels' || merged[key] === UI_STRINGS.en[key]
+      )
+    );
+    if (overrides.weekdayShort) check(`${language} has seven weekdays`, overrides.weekdayShort.length === 7);
+  }
+  // Japanese and both Chinese packs are fully translated: every visible string,
+  // every agent-step phrase. A key added to `UiStrings` later reads in English
+  // there until it is written, and this is what says so.
+  for (const language of ['ja', 'zh-Hans', 'zh-Hant'] as const) {
+    const overrides = UI_STRING_OVERRIDES[language] ?? {};
+    const missing = (Object.keys(UI_STRINGS.en) as Array<keyof UiStrings>).filter((key) => !(key in overrides));
+    const missingSteps = Object.keys(UI_STRINGS.en.agentStepLabels).filter(
+      (step) => !(step in (overrides.agentStepLabels ?? {}))
+    );
+    check(`${language} translates every UI string`, missing.length === 0, missing.join(', '));
+    check(`${language} translates every agent-step phrase`, missingSteps.length === 0, missingSteps.join(', '));
+    const steps = Object.entries(overrides.agentStepLabels ?? {});
+    check(
+      `${language} agent-step phrases are not English copies`,
+      steps.every(([step, text]) => text !== UI_STRINGS.en.agentStepLabels[step as keyof UiStrings['agentStepLabels']])
+    );
+    // Every placeholder the English carries must survive translation, or the
+    // number it stands for silently disappears from the screen.
+    const placeholders = (text: string) => (text.match(/\{[a-z]+\}/g) ?? []).sort().join(',');
+    const broken = (Object.keys(UI_STRINGS.en) as Array<keyof UiStrings>).filter((key) => {
+      const en = UI_STRINGS.en[key];
+      const translated = overrides[key];
+      return typeof en === 'string' && typeof translated === 'string' && placeholders(en) !== placeholders(translated);
+    });
+    check(`${language} keeps every interpolation placeholder`, broken.length === 0, broken.join(', '));
+  }
+  check(
+    'the voice-only packs translate nothing on screen yet, by design',
+    ['de', 'fr', 'es'].every((language) => Object.keys(UI_STRING_OVERRIDES[language as Language] ?? {}).length === 0)
+  );
+  check(
+    'each pack names its switch label in its own language',
+    LANGUAGE_LABELS.ja === '日本語' &&
+      LANGUAGE_LABELS['zh-Hans'] === '简体中文' &&
+      LANGUAGE_LABELS['zh-Hant'] === '繁體中文' &&
+      LANGUAGE_LABELS.de === 'Deutsch' &&
+      LANGUAGE_LABELS.fr === 'Français' &&
+      LANGUAGE_LABELS.es === 'Español'
+  );
+  check('every language has a pack', LANGUAGES.every((language) => LANGUAGE_PACKS[language]?.code === language));
+  check(
+    'both Chinese packs transcribe as zh; the others by their own code',
+    STT_LOCALE['zh-Hans'] === 'zh' && STT_LOCALE['zh-Hant'] === 'zh' && STT_LOCALE.ja === 'ja' && STT_LOCALE.de === 'de'
+  );
+  check(
+    'only Japanese and Chinese are written without spaces',
+    LANGUAGES.filter((language) => !languagePack(language).usesSpaces).join(',') === 'ja,zh-Hans,zh-Hant'
+  );
+  check('an unknown code reads as the English pack', languagePack('xx').code === 'en');
+}
+
+// -----------------------------------------------------------------------------
+section('8. the transcript gate in the new languages');
+// -----------------------------------------------------------------------------
+{
+  check(
+    'a Japanese answer with no spaces is several tokens, not one too-short word',
+    gate('はい、お願いします', 250, 'ja') === null
+  );
+  check('a one-word Japanese yes survives the too-short rule', gate('はい', 200, 'ja') === null);
+  check('a Japanese hesitation is a filler', gate('えーと', 600, 'ja') === 'filler_only');
+  check('うん is a yes in Japanese, not a filler', gate('うん', 200, 'ja') === null);
+  check('a one-character Chinese yes survives', gate('好', 200, 'zh-Hans') === null && gate('對', 200, 'zh-Hant') === null);
+  check('a Chinese hesitation is a filler', gate('呃', 400, 'zh-Hans') === 'filler_only');
+  check(
+    'the classic Japanese silence hallucination is rejected',
+    gate('ご視聴ありがとうございました', 1500, 'ja') === 'known_hallucination'
+  );
+  check(
+    'the subtitling credit is rejected in both Chinese packs',
+    gate('字幕由Amara.org社区提供', 1500, 'zh-Hans') === 'known_hallucination' &&
+      gate('字幕由Amara.org社区提供', 1500, 'zh-Hant') === 'known_hallucination'
+  );
+  check(
+    'an English film title still passes in a Japanese session',
+    gate('Street Fighter', 900, 'ja') === null
+  );
+  check(
+    'a Japanese sentence naming a film passes over the movie list',
+    gate('Street Fighterをお願いします', 2400, 'ja', MOVIE_HINTS) === null
+  );
+  check(
+    'the movie list read back is still an echo in Japanese',
+    gate(
+      'The Legend of Aang: The Last Airbender、Street Fighter、Clayface、Wildwood、Klara and the Sun。',
+      1388,
+      'ja',
+      MOVIE_HINTS
+    ) === 'prompt_echo'
+  );
+  check(
+    'Japanese gets a tighter rate ceiling than Korean',
+    gate('土曜日の夜に三人で見られる映画を探しています', 1200, 'ja') === 'implausible_rate' &&
+      gate('土曜日の夜に三人で見られる映画を探しています', 4000, 'ja') === null
+  );
+  check('German yes survives, German hesitation does not', gate('ja', 200, 'de') === null && gate('äh', 400, 'de') === 'filler_only');
+  check('French yes survives, French hesitation does not', gate('oui', 200, 'fr') === null && gate('euh', 400, 'fr') === 'filler_only');
+  check('Spanish yes survives, Spanish hesitation does not', gate('sí', 200, 'es') === null && gate('eh', 400, 'es') === 'filler_only');
+  check('an accented French word is a word', gate('Ça marche, merci.', 1500, 'fr') === null);
+  check(
+    'English still rejects Hangul and still empties kana to too_short, as in the study',
+    gate('네 좋아요', 900, 'en') === 'non_english' && gate('ご視聴ありがとうございました', 1500, 'en') === 'too_short'
+  );
+}
+
+// -----------------------------------------------------------------------------
+section('9. the transcription prompt in the new languages');
+// -----------------------------------------------------------------------------
+{
+  const zhHans = buildTranscriptionPrompt('zh-Hans', 'movie', 'Street Fighter');
+  const zhHant = buildTranscriptionPrompt('zh-Hant', 'movie', 'Street Fighter');
+  check('Simplified Chinese asks for Simplified characters', zhHans.includes('Simplified Chinese characters') && !zhHans.includes('Traditional'));
+  check('Traditional Chinese asks for Traditional characters', zhHant.includes('Traditional Chinese characters') && !zhHant.includes('Simplified'));
+  check('the Japanese prompt says Japanese', buildTranscriptionPrompt('ja', 'movie', 'x').includes('speaking Japanese'));
+  check(
+    'every prompt ends with the options it was given',
+    LANGUAGES.every((language) => buildTranscriptionPrompt(language, 'theater', 'A, B').endsWith('Possible options on screen: A, B.'))
+  );
+  check(
+    'every seat prompt asks for the row letter in Latin capitals',
+    LANGUAGES.every((language) => buildTranscriptionPrompt(language, 'seat', 'E9').includes('Latin capital letter'))
+  );
+  const seatValues = ['E9 - Standard - $14.00', 'F9 - Standard - $14.00'];
+  const limits = { maxOptions: 15, maxTextLength: 300 };
+  check('the Japanese row hint is E列', collectStageHintLabels('ja', 'seat', seatValues, limits)[0] === 'E列');
+  check('the Chinese row hint is E排', collectStageHintLabels('zh-Hant', 'seat', seatValues, limits)[0] === 'E排');
+  check('the Spanish row hint is fila E', collectStageHintLabels('es', 'seat', seatValues, limits)[0] === 'fila E');
+}
+
+// -----------------------------------------------------------------------------
+section('10. picking a language from the browser and the URL');
+// -----------------------------------------------------------------------------
+{
+  check('ja-JP is Japanese', detectLanguage(['ja-JP', 'en-US']) === 'ja');
+  check('zh-TW is Traditional', detectLanguage(['zh-TW']) === 'zh-Hant');
+  check('zh-HK is Traditional', detectLanguage(['zh-HK']) === 'zh-Hant');
+  check('zh-Hant-US is Traditional', detectLanguage(['zh-Hant-US']) === 'zh-Hant');
+  check('zh-CN is Simplified', detectLanguage(['zh-CN']) === 'zh-Hans');
+  check('bare zh is Simplified', detectLanguage(['zh']) === 'zh-Hans');
+  check('ko-KR is Korean', detectLanguage(['ko-KR']) === 'ko');
+  check('de-AT, fr-CA, es-MX map to their packs', detectLanguage(['de-AT']) === 'de' && detectLanguage(['fr-CA']) === 'fr' && detectLanguage(['es-MX']) === 'es');
+  check('the first supported preference wins', detectLanguage(['pt-BR', 'en-GB', 'ja']) === 'en');
+  check('nothing supported is English', detectLanguage(['pt-BR', 'it']) === 'en' && detectLanguage([]) === 'en');
+  check('a garbage tag matches nothing', matchLanguageTag('xx') === null && matchLanguageTag('') === null && matchLanguageTag(null) === null);
+
+  check('?lang=ja is read', readLanguageFromUrl('?lang=ja', '') === 'ja');
+  check('?lang=zh-Hant is read', readLanguageFromUrl('?foo=1&lang=zh-Hant', '') === 'zh-Hant');
+  check('a card fragment carries lang next to its code', readLanguageFromUrl('', '#c=seat&k=ABC123&lang=ja') === 'ja');
+  check('an unknown lang is ignored', readLanguageFromUrl('?lang=xx', '') === null);
+  check('a fragment with no lang is ignored', readLanguageFromUrl('', '#c=seat&k=ABC123') === null);
+  check(
+    'stripping lang keeps every other parameter',
+    stripLanguageFromUrl('/demo/card', '', '#c=seat&k=ABC123&lang=ja') === '/demo/card#c=seat&k=ABC123' &&
+      stripLanguageFromUrl('/', '?lang=ja&x=1', '') === '/?x=1' &&
+      stripLanguageFromUrl('/', '?lang=ja', '') === '/'
+  );
+  check('a URL with no lang is left alone', stripLanguageFromUrl('/demo', '?x=1', '#a') === null);
+  check(
+    '<html lang> is a BCP-47 tag',
+    languagePack('zh-Hant').htmlLang === 'zh-Hant' && languagePack('en').htmlLang === 'en' && languagePack('ko').htmlLang === 'ko'
   );
 }
 

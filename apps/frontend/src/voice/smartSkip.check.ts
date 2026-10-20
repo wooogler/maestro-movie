@@ -26,6 +26,9 @@ import {
   type VoiceCategory,
   type VoiceVerbositySettings,
 } from './verbosity';
+// The agent's own notices, read from the agent workspace so a reworded notice
+// is checked against the classifier rather than against a copy of itself.
+import * as agentNoticesModule from '../../../tuning-agent/src/core/agentNotices';
 
 let failures = 0;
 
@@ -863,6 +866,189 @@ section('11. Korean — the gate must not silence a language it cannot read');
     !classifyUtterance('Selecting Saturday, March 14.').hasQuestion &&
       !classifyUtterance('Moving on to showtimes.').hasQuestion
   );
+}
+
+// -----------------------------------------------------------------------------
+section('12. Japanese and Chinese — scripts with no spaces and no case');
+// -----------------------------------------------------------------------------
+{
+  // The agent tags its messages, so a Japanese question arrives labelled with
+  // the tool it came from. `select` is silenced by `balanced`; the question
+  // floor must still catch it, and the question carries no "?".
+  const jaQuestion = 'どの上映時間がよろしいですか';
+  const tagged = resolveUtterance('select', jaQuestion);
+  check('a Japanese question without "?" reads as a question', tagged.hasQuestion);
+  for (const preset of ['balanced', 'minimal'] as const) {
+    const decision = decideVoiceOutput({
+      text: jaQuestion,
+      classification: tagged,
+      settings: settings(preset),
+      visibleLabels: [],
+      screenTitle: null,
+      recentSpoken: [],
+      consecutiveCount: 0,
+    });
+    check(`a Japanese question tagged select is not silenced on ${preset}`, decision.mode !== 'silent');
+  }
+  check(
+    'a full-width question mark is a question',
+    classifyUtterance('Street Fighterでよろしいですか？').hasQuestion &&
+      classifyUtterance('您想看哪一场？').hasQuestion
+  );
+  check(
+    'Chinese sentence-final 吗 / 呢 / 嗎 read as questions',
+    classifyUtterance('您要选这个场次吗').hasQuestion &&
+      classifyUtterance('您觉得哪家影院好呢').hasQuestion &&
+      classifyUtterance('您要選這個場次嗎').hasQuestion
+  );
+  check(
+    'a Japanese statement is not a question',
+    !classifyUtterance('Street Fighterを選びました。').hasQuestion &&
+      !classifyUtterance('上映時間に移ります。').hasQuestion
+  );
+
+  // Normalisation used to strip kana and Han, leaving the Latin title — so two
+  // different sentences about the same film normalised to "street fighter".
+  const first = 'Street Fighterを選びます。';
+  const second = 'Street Fighterの上映時間に移ります。';
+  check(
+    'two Japanese sentences sharing a Latin title normalise differently',
+    normalizeForCompare(first) !== normalizeForCompare(second)
+  );
+  check(
+    '...so the second is not an exact repeat of the first',
+    decide(second, settings('full', { smartSkip: true }), { recentSpoken: [first] }).rule !== 'exact-repeat'
+  );
+  check(
+    'a genuinely repeated Japanese sentence is still caught',
+    decide(first, settings('full', { smartSkip: true }), { recentSpoken: [first] }).rule === 'exact-repeat'
+  );
+
+  // `。` ends a sentence with no space after it.
+  const twoStatements = '11月5日の土曜日に決めました。次は劇場を選びます。';
+  check(
+    '。 splits Japanese sentences',
+    shortenForBrief(twoStatements, classifyUtterance(twoStatements)) === '11月5日の土曜日に決めました。'
+  );
+  const zhTwo = '已经选好了周六。接下来选择影院。';
+  check(
+    '。 splits Chinese sentences',
+    shortenForBrief(zhTwo, classifyUtterance(zhTwo)) === '已经选好了周六。'
+  );
+
+  const longReply =
+    '条件に合う劇場は三つあり、どれも駐車場が無料で、指定席制です。距離が一番近いのはEmagine Royal Oakで、約十二マイルです。どの劇場にしますか？';
+  const briefed = shortenForBrief(longReply, classifyUtterance(longReply));
+  check(
+    'a long Japanese reply briefed keeps its closing question, and only that',
+    briefed === 'どの劇場にしますか？',
+    briefed
+  );
+  const noMark =
+    '条件に合う劇場は三つあり、どれも駐車場が無料です。どの劇場にしますか';
+  check(
+    '...and a closing question with no question mark survives as well',
+    shortenForBrief(noMark, classifyUtterance(noMark)) === 'どの劇場にしますか'
+  );
+
+  const longNarration =
+    '駐車場が無料で指定席制の劇場だけを残し、距離が近い順に並べ替えて、それぞれの距離も表示しました';
+  const cut = shortenForBrief(longNarration, { ...classifyUtterance(longNarration), hasQuestion: false });
+  check(
+    'a long Japanese statement is cut at a clause or word boundary, near 45 characters',
+    cut.endsWith('…') && cut.length <= 47 && !cut.includes('、…'),
+    cut
+  );
+
+  check(
+    'a Japanese failure notice is recognised as system',
+    classifyUtterance('問題が発生しました。もう一度試します。').category === 'system' &&
+      classifyUtterance('出了点问题，我再试一次。').category === 'system'
+  );
+  check(
+    'an untagged Japanese narration falls through to respond, never to a silenceable category',
+    classifyUtterance('上映時間に移ります。').category === 'respond'
+  );
+
+  // Different weekdays are different options, with or without digits.
+  check(
+    'Japanese weekdays distinguish otherwise-identical sentences',
+    decide('土曜日に決めました。', settings('full', { smartSkip: true }), {
+      recentSpoken: ['日曜日に決めました。'],
+    }).rule === null
+  );
+}
+
+// -----------------------------------------------------------------------------
+section('13. German, French and Spanish — Latin script with accents');
+// -----------------------------------------------------------------------------
+{
+  check(
+    'accented letters survive normalisation',
+    normalizeForCompare('Été, ça marche') === 'été ça marche'
+  );
+  const es = 'Elegí el sábado. ¿Qué cine prefiere?';
+  check(
+    'a Spanish ¿ opener starts a new sentence, and brief keeps the question',
+    shortenForBrief(es, classifyUtterance(es)) === '¿Qué cine prefiere?'
+  );
+  const esNo = 'Ese horario no. Él prefiere otro. ¿Le parece bien?';
+  check(
+    'Spanish "no." at a sentence end is a sentence end',
+    shortenForBrief(esNo, classifyUtterance(esNo)) === '¿Le parece bien?'
+  );
+  check(
+    '"No. 5" is still an abbreviation',
+    shortenForBrief('Seat No. 5 is free. Want it?', classifyUtterance('Seat No. 5 is free. Want it?')) ===
+      'Want it?'
+  );
+  const fr = 'J’ai choisi samedi. Étape suivante : le cinéma.';
+  check(
+    'an accented capital starts a new sentence',
+    shortenForBrief(fr, { ...classifyUtterance(fr), hasQuestion: false }) === 'J’ai choisi samedi.'
+  );
+  check(
+    'German weekdays distinguish otherwise-identical sentences',
+    decide('Ich habe Samstag gewählt.', settings('full', { smartSkip: true }), {
+      recentSpoken: ['Ich habe Sonntag gewählt.'],
+    }).rule === null
+  );
+  check(
+    'a German failure notice is recognised as system',
+    classifyUtterance('Die Planeranfrage ist diesmal fehlgeschlagen. Bitte versuchen Sie es gleich noch einmal.')
+      .category === 'system'
+  );
+}
+
+// -----------------------------------------------------------------------------
+section('14. every translated agent notice is a system failure');
+// -----------------------------------------------------------------------------
+{
+  // The agent package is CommonJS and the frontend is ESM, so under tsx the
+  // namespace may arrive wrapped in `default`.
+  type Notices = typeof agentNoticesModule;
+  const notices: Notices =
+    (agentNoticesModule as Notices).agentNotice
+      ? (agentNoticesModule as Notices)
+      : ((agentNoticesModule as unknown as { default: Notices }).default);
+  const KEYS = [
+    'hostNotReady', 'filterEmpty', 'genericFailure', 'plannerUnavailable',
+    'plannerUnparseable', 'plannerInvalid', 'apiKeyRejected', 'plannerRequestFailed',
+  ] as const;
+  // Korean, Japanese and both Chinese packs: every notice the agent can send
+  // must reach `system`, the one category outside every silencing rule. (The
+  // English set predates this and is pinned by the measured corpus instead;
+  // German, French and Spanish are recognised only where their wording allows.)
+  for (const language of ['ko', 'ja', 'zh-Hans', 'zh-Hant']) {
+    check(`the agent has ${language} notices`, notices.translatedNoticeLanguages().includes(language));
+    const missed = KEYS.filter((key) => classifyUtterance(notices.agentNotice(key, language)).category !== 'system');
+    check(`every ${language} notice is recognised as system`, missed.length === 0, missed.join(', '));
+    const repeated = notices.agentNotice('plannerRequestFailed', language);
+    check(
+      `a repeated ${language} failure notice stays fully audible on minimal`,
+      decide(repeated, settings('minimal'), { recentSpoken: [repeated, repeated] }).mode === 'speak'
+    );
+  }
 }
 
 console.log(

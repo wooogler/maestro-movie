@@ -39,7 +39,7 @@ import {
   DEFAULT_VOICE_VERBOSITY,
   type VoiceVerbositySettings,
 } from '../../../frontend/src/voice/verbosity';
-import { planActionWithOpenAI } from './llmPlanner';
+import { isSupportedConversationLanguage, planActionWithOpenAI } from './llmPlanner';
 import {
   TRACE_DIR,
   loadTurn,
@@ -81,7 +81,8 @@ const WIDE = (() => {
 const LANGUAGE = (() => {
   const index = process.argv.indexOf('--language');
   if (index < 0) return 'en';
-  return process.argv[index + 1] === 'ko' ? 'ko' : 'en';
+  const requested = process.argv[index + 1];
+  return isSupportedConversationLanguage(requested) ? requested : 'en';
 })();
 
 /** What the demo actually runs with, so `heard` is the real comparison. */

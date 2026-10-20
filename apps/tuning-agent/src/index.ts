@@ -4,6 +4,7 @@ import { executePlannedAction } from './core/executor';
 import { AgentMemory } from './core/memory';
 import { applyStateUpdated, applyUserMessage, fromSnapshot } from './core/perception';
 import { planNextAction } from './core/planner';
+import { agentNotice } from './core/agentNotices';
 import {
   buildViewFingerprint,
   createTurnRepeatGuard,
@@ -11,6 +12,7 @@ import {
 } from './core/repeatGuard';
 import {
   getPlannerSystemPrompt,
+  isSupportedConversationLanguage,
   subscribeLlmTrace as subscribePlannerLlmTrace,
 } from './llm/llmPlanner';
 import {
@@ -1053,6 +1055,7 @@ async function runPreferenceExtractionFromUserMessage(
     ...extractionView,
     existingPreferences,
     stageMeta: context.stageMeta,
+    language: conversationLanguage,
   };
 
   try {
@@ -1217,8 +1220,23 @@ const TTS_SPEED = (() => {
 const MIN_READING_DELAY_MS = 600;
 const TTS_PLAYBACK_TIMEOUT_MS = 15_000;
 
+/**
+ * Kana and Han. Japanese and Chinese have no spaces, so a whitespace word count
+ * reads a whole sentence as one word and the delay collapses to the floor.
+ */
+const NO_SPACE_SCRIPT = /[\u3040-\u30ff\u31f0-\u31ff\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff]/g;
+/** Characters per English word, for speech: about 310 characters a minute against 155 words. */
+const NO_SPACE_CHARS_PER_WORD = 2;
+
 function computeReadingDelay(text: string): number {
-  const wordCount = text.trim().split(/\s+/).filter(Boolean).length;
+  // Text with no kana or Han counts exactly as it always did; Japanese or
+  // Chinese counts its characters, plus any Latin words (titles) between them.
+  const noSpaceChars = text.match(NO_SPACE_SCRIPT)?.length ?? 0;
+  const wordCount =
+    noSpaceChars === 0
+      ? text.trim().split(/\s+/).filter(Boolean).length
+      : noSpaceChars / NO_SPACE_CHARS_PER_WORD +
+        text.replace(NO_SPACE_SCRIPT, ' ').trim().split(/\s+/).filter((word) => /[\p{L}\p{N}]/u.test(word)).length;
   const durationMs = (wordCount / (BASE_WPM * TTS_SPEED)) * 60_000;
   return Math.max(durationMs, MIN_READING_DELAY_MS);
 }
@@ -1668,7 +1686,7 @@ async function maybePlanAndExecute(trigger: string): Promise<void> {
       monitor.updateState({ sessionReady: false, waitingForHost: true, phase: 'waiting-host' });
       await maybeSendAssistantMessage(
         planningContext,
-        'The host connection is not ready yet. I will retry once the host is available.',
+        agentNotice('hostNotReady', conversationLanguage),
         'system'
       );
       await ensureSessionReady('runtime-action');
@@ -1827,9 +1845,9 @@ async function maybePlanAndExecute(trigger: string): Promise<void> {
       const friendly = (() => {
         const msg = outcome.message ?? '';
         if (msg.includes('filter would leave no visible items')) {
-          return "None of the options match that filter. Let me try a different approach.";
+          return agentNotice('filterEmpty', conversationLanguage);
         }
-        return `Something went wrong — let me try again.`;
+        return agentNotice('genericFailure', conversationLanguage);
       })();
       await maybeSendAssistantMessage(planningContext, friendly, 'system');
     }
@@ -2341,7 +2359,7 @@ async function handleInbound(envelope: RelayEnvelope): Promise<void> {
       // Unknown values fall back to English rather than reaching the planner:
       // an unrecognised language yields no prompt section, so the agent would
       // silently keep speaking English anyway. Better that it be explicit.
-      conversationLanguage = next === 'ko' ? 'ko' : 'en';
+      conversationLanguage = isSupportedConversationLanguage(next) ? next : 'en';
       monitor.pushEvent('conversation.language', { language: conversationLanguage });
       return;
     }

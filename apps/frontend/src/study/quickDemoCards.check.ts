@@ -20,7 +20,13 @@
  */
 import fs from 'fs';
 import path from 'path';
-import { QUICK_DEMO_CARDS, buildQuickDemoCardUrl, parseQuickDemoCardFragment } from './quickDemoCards';
+import {
+  QUICK_DEMO_CARDS,
+  buildQuickDemoCardUrl,
+  cardText,
+  parseQuickDemoCardFragment,
+} from './quickDemoCards';
+import { LANGUAGES } from '../i18n/language';
 import type { Stage } from '../spec/types';
 
 let failures = 0;
@@ -140,10 +146,22 @@ section('1. STRUCTURE — a card prefills exactly the stages before its own');
       `${card.id}: prefills exactly ${required.length} step(s), as its stage needs`,
       present.length === required.length && required.every((key) => present.includes(key))
     );
-    check(
-      `${card.id}: has a line to say and a thing to watch, in both languages`,
-      Boolean(card.opener.en && card.opener.ko && card.watch.en && card.watch.ko)
-    );
+    // English and Korean are the languages the cards were written in, so they
+    // must be complete; every other language may still read in English.
+    for (const language of LANGUAGES) {
+      const fields = [card.title, card.opener, card.watch];
+      if (language === 'en' || language === 'ko') {
+        check(
+          `${card.id}: has a title, a line to say and a thing to watch, in ${language}`,
+          fields.every((field) => Boolean(field[language]))
+        );
+      } else {
+        check(
+          `${card.id}: reads in ${language}, falling back to English where unwritten`,
+          fields.every((field) => cardText(field, language) === (field[language] ?? field.en) && Boolean(cardText(field, language)))
+        );
+      }
+    }
   }
 }
 
@@ -311,6 +329,13 @@ section('4. THE LINK — what a QR carries, and what it survives');
   check('an id this build does not know resolves to no card...', stale.card === null);
   check('...but is kept, so the dead end can name itself', stale.rawCardId === 'intermission');
   check('an empty fragment is not a crash', parseQuickDemoCardFragment('').card === null);
+
+  const japanese = buildQuickDemoCardUrl('seat', 'https://maestro.example', { accessCode: 'AB12CD', language: 'ja' });
+  check('a per-language card carries lang in the fragment too', japanese.endsWith('#c=seat&k=AB12CD&lang=ja'));
+  const parsed = parseQuickDemoCardFragment(`#${japanese.split('#')[1]}`);
+  check('and it parses back, card, code and language', parsed.card?.id === 'seat' && parsed.accessCode === 'AB12CD' && parsed.language === 'ja');
+  check('an unknown lang in a card link is ignored', parseQuickDemoCardFragment('#c=seat&lang=xx').language === null);
+  check('a card link with no lang leaves the language alone', round.language === null);
 }
 
 console.log(

@@ -17,7 +17,7 @@
  */
 import { createHash } from 'node:crypto';
 
-import { buildSystemPrompt } from './llmPlanner';
+import { buildLanguageSection, buildSystemPrompt } from './llmPlanner';
 import type { PlannerWorkflow } from './llmPlanner';
 
 let failures = 0;
@@ -289,6 +289,29 @@ console.log('\n9. a booth demo session gets the demo section, before brevity and
   const withAgain = buildSystemPrompt(workflow(true), STAGE_META, 'en', false, false, false, true);
   check('the memo keys on the flag: off after on is off', !withoutAfter.includes(DEMO_MARKER));
   check('and on after off is on again', withAgain.includes(DEMO_MARKER) && withFirst === withAgain);
+}
+
+console.log('\nL. the post-study languages add a section and leave en/ko alone');
+{
+  const NEW_LANGUAGES = ['ja', 'zh-Hans', 'zh-Hant', 'de', 'fr', 'es'];
+  for (const language of NEW_LANGUAGES) {
+    const section = buildLanguageSection(language);
+    check(`${language}: a language section exists`, section !== null);
+    check(`${language}: it starts with "Language:"`, Boolean(section?.startsWith('Language:')));
+    const prompt = buildSystemPrompt(workflow(true, true), STAGE_META, language);
+    check(`${language}: the system prompt carries it`, Boolean(section && prompt.includes(section)));
+    check(
+      `${language}: and is the English study prompt plus that section`,
+      Boolean(section) &&
+        prompt.replace(`\n${section}`, '') === buildSystemPrompt(workflow(true, true), STAGE_META, 'en')
+    );
+  }
+  // Building the new languages must not disturb the pinned ones: rebuild en and
+  // ko after them (the prompt is memoized in one slot) and compare to the pins.
+  for (const config of STUDY_CONFIGS) {
+    const key = `gui:${config.gui ? 1 : 0} cp:${config.cp ? 1 : 0} ${config.language}`;
+    check(`${key} is still byte-identical after the new languages`, digest(studyPrompt(config)) === PINNED_STUDY_PROMPTS[key]);
+  }
 }
 
 console.log(

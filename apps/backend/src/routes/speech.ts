@@ -84,7 +84,7 @@ const REALTIME_TOKEN_TTL_SECONDS = readEnvNumber('REALTIME_TOKEN_TTL_SECONDS', 6
 // own; it only speaks text handed to it via response.create.
 /**
  * The realtime model is an output device here, not a speaker with opinions, so
- * the instruction is the same in both languages apart from what "verbatim"
+ * the instruction is the same in every language apart from what "verbatim"
  * means: the planner already wrote the message in the session's language, and
  * the one thing that must not happen is this layer deciding to translate it
  * either way.
@@ -106,12 +106,57 @@ const REALTIME_VOICE_INSTRUCTIONS: Record<SessionLanguage, string> = {
     'in English. Preserve seat ids ("C1"), times ("7:30 PM") and prices exactly as written.',
     'If you are not given a message to repeat, stay silent.',
   ].join(' '),
+  ja: foreignVoiceInstruction('Japanese'),
+  'zh-Hans': foreignVoiceInstruction('Mandarin Chinese, written in Simplified Chinese characters'),
+  'zh-Hant': foreignVoiceInstruction('Mandarin Chinese, written in Traditional Chinese characters'),
+  de: foreignVoiceInstruction('German'),
+  fr: foreignVoiceInstruction('French'),
+  es: foreignVoiceInstruction('Spanish'),
 };
 
-type SessionLanguage = 'en' | 'ko';
+/**
+ * The Korean instruction's shape for every other non-English language. Korean
+ * keeps its own literal text above, unchanged from the recorded study.
+ */
+function foreignVoiceInstruction(languageName: string): string {
+  // "Mandarin Chinese, written in …" is spoken Mandarin; the instruction reads
+  // more naturally with just the spoken language in the second sentence.
+  const spoken = languageName.split(',')[0];
+  return [
+    'You are the voice channel of a movie-booking assistant. You never decide what to say.',
+    'You only speak when you are explicitly given a message to repeat, and then you repeat it',
+    'verbatim: no additions, no omissions, no rephrasing, no translation.',
+    `The message is written in ${languageName} and may contain English film titles, cinema names,`,
+    'formats, seat ids, dates, times and prices. Read the',
+    `${spoken} as ${spoken} and read those labels as they are written, in English.`,
+    'Preserve seat ids ("C1"), dates ("Mar 14 (Sat)"), times ("7:30 PM") and prices ("$14.00") exactly as written.',
+    'If you are not given a message to repeat, stay silent.',
+  ].join(' ');
+}
+
+/** The frontend's `Language` codes. The backend cannot import the frontend, so the list is repeated here. */
+const SESSION_LANGUAGES = ['en', 'ko', 'ja', 'zh-Hans', 'zh-Hant', 'de', 'fr', 'es'] as const;
+type SessionLanguage = (typeof SESSION_LANGUAGES)[number];
+
+/**
+ * ISO-639-1 for the transcription model. Both Chinese packs transcribe as `zh`;
+ * the frontend's per-screen transcription prompt is what asks for one script.
+ */
+const STT_LOCALE: Record<SessionLanguage, string> = {
+  en: 'en',
+  ko: 'ko',
+  ja: 'ja',
+  'zh-Hans': 'zh',
+  'zh-Hant': 'zh',
+  de: 'de',
+  fr: 'fr',
+  es: 'es',
+};
 
 function parseSessionLanguage(value: unknown): SessionLanguage {
-  return value === 'ko' ? 'ko' : 'en';
+  return typeof value === 'string' && (SESSION_LANGUAGES as readonly string[]).includes(value)
+    ? (value as SessionLanguage)
+    : 'en';
 }
 
 const STUDY_SESSION_TOKEN_HEADER = 'x-study-session-token';
@@ -504,7 +549,12 @@ interface RealtimeMintSuccess {
     expiresAt: number | null;
     model: string;
     transcriptionModel: string;
-    language: SessionLanguage;
+    /**
+     * The transcription language (ISO-639-1), which is what the client re-sends
+     * on every `session.update`. Equal to the session language for en and ko;
+     * `zh` for both Chinese packs.
+     */
+    language: string;
   };
 }
 
@@ -544,7 +594,7 @@ async function mintRealtimeClientSecret(
           output_modalities: ['audio'],
           audio: {
             input: {
-              transcription: { model: REALTIME_STT_MODEL, language },
+              transcription: { model: REALTIME_STT_MODEL, language: STT_LOCALE[language] },
               // Suppresses room noise before VAD and transcription see the
               // stream, so a loud booth does not keep opening turns the user
               // never started.
@@ -600,7 +650,7 @@ async function mintRealtimeClientSecret(
         // the on-screen options as a prompt, so it needs the model name we minted
         // with -- a partial block would otherwise drop it.
         transcriptionModel: REALTIME_STT_MODEL,
-        language,
+        language: STT_LOCALE[language],
       },
     };
 }

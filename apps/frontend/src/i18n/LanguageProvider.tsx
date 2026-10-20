@@ -13,18 +13,30 @@ import {
   useContext,
   useEffect,
   useMemo,
+  useRef,
   useState,
   type ReactNode,
 } from 'react';
-import { DEFAULT_LANGUAGE, LANGUAGE_STORAGE_KEY, parseLanguage, type Language } from './language';
+import {
+  DEFAULT_LANGUAGE,
+  LANGUAGE_STORAGE_KEY,
+  detectLanguage,
+  isLanguage,
+  languagePack,
+  readLanguageFromUrl,
+  stripLanguageFromUrl,
+  type Language,
+} from './language';
 import { stringsFor, type UiStrings } from './strings';
 
-function readStoredLanguage(): Language {
-  if (typeof window === 'undefined') return DEFAULT_LANGUAGE;
+/** Null when nothing valid is stored, so the caller can tell "chose English" from "never chose". */
+function readStoredLanguage(): Language | null {
+  if (typeof window === 'undefined') return null;
   try {
-    return parseLanguage(window.localStorage.getItem(LANGUAGE_STORAGE_KEY));
+    const stored = window.localStorage.getItem(LANGUAGE_STORAGE_KEY);
+    return isLanguage(stored) ? stored : null;
   } catch {
-    return DEFAULT_LANGUAGE;
+    return null;
   }
 }
 
@@ -36,6 +48,32 @@ function writeStoredLanguage(language: Language): void {
     // A booth browser with storage disabled still gets the language for this
     // session; only the persistence is lost.
   }
+}
+
+/**
+ * A per-language QR code carries `?lang=ja` (or `lang=ja` in a card's
+ * fragment). It overrides whatever is stored and is persisted, so the visitor
+ * who scanned the Japanese code stays in Japanese after a reload — the
+ * parameter itself is removed from the address bar once read.
+ */
+function readUrlLanguage(): Language | null {
+  if (typeof window === 'undefined') return null;
+  return readLanguageFromUrl(window.location.search, window.location.hash);
+}
+
+function readExplicitLanguage(): Language | null {
+  const fromUrl = readUrlLanguage();
+  if (fromUrl) {
+    writeStoredLanguage(fromUrl);
+    return fromUrl;
+  }
+  return readStoredLanguage();
+}
+
+function readBrowserLanguage(): Language {
+  if (typeof navigator === 'undefined') return DEFAULT_LANGUAGE;
+  const preferred = navigator.languages?.length ? navigator.languages : [navigator.language];
+  return detectLanguage(preferred);
 }
 
 interface LanguageContextValue {
@@ -54,6 +92,7 @@ const LanguageContext = createContext<LanguageContextValue>({
 export function LanguageProvider({
   children,
   initialLanguage,
+  detectBrowserLanguage = false,
   onChange,
 }: {
   children: ReactNode;
@@ -64,30 +103,64 @@ export function LanguageProvider({
    * storage first to get it.
    */
   initialLanguage?: Language;
+  /**
+   * When nothing was chosen (no URL parameter, nothing stored), start in the
+   * browser's own language instead of English.
+   *
+   * Opt-in, and App turns it on for demo mode only: a study machine whose
+   * browser happens to prefer Korean must still open in English, exactly as it
+   * did before this option existed. The detected language is not persisted —
+   * only an explicit choice is — so switching demo mode off falls back to
+   * English again.
+   */
+  detectBrowserLanguage?: boolean;
   /** Fires on a real change only, so callers can log it without debouncing. */
   onChange?: (language: Language) => void;
 }) {
-  const [language, setLanguageState] = useState<Language>(
-    () => initialLanguage ?? readStoredLanguage()
+  const [explicitLanguage, setExplicitLanguage] = useState<Language | null>(
+    () => initialLanguage ?? readExplicitLanguage()
   );
+  const [browserLanguage] = useState<Language>(readBrowserLanguage);
+  const language: Language =
+    explicitLanguage ?? (detectBrowserLanguage ? browserLanguage : DEFAULT_LANGUAGE);
+
+  const languageRef = useRef(language);
+  languageRef.current = language;
 
   const setLanguage = useCallback(
     (next: Language) => {
-      setLanguageState((current) => {
-        if (current === next) return current;
+      if (languageRef.current === next) {
+        // Still pin it: "English, chosen" must survive a later browser-language
+        // detection, and costs nothing when it was already explicit.
+        setExplicitLanguage(next);
         writeStoredLanguage(next);
-        onChange?.(next);
-        return next;
-      });
+        return;
+      }
+      languageRef.current = next;
+      setExplicitLanguage(next);
+      writeStoredLanguage(next);
+      onChange?.(next);
     },
     [onChange]
   );
 
+  // Once read, the parameter leaves the address bar: a reload then keeps the
+  // persisted choice, and a link copied from this tab does not carry it on.
+  // `history.state` is passed through untouched because the router keeps its
+  // own bookkeeping there.
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const { pathname, search, hash } = window.location;
+    const stripped = stripLanguageFromUrl(pathname, search, hash);
+    if (stripped !== null) window.history.replaceState(window.history.state, '', stripped);
+  }, []);
+
   // The <html lang> attribute drives font fallback and the browser's own
-  // hyphenation and text selection, which visibly differ between the two.
+  // hyphenation and text selection, which visibly differ between languages —
+  // the same Han code point is drawn differently for Japanese and Chinese.
   useEffect(() => {
     if (typeof document === 'undefined') return;
-    document.documentElement.lang = language;
+    document.documentElement.lang = languagePack(language).htmlLang;
   }, [language]);
 
   const value = useMemo<LanguageContextValue>(
