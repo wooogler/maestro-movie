@@ -1,6 +1,6 @@
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
-import type { AnimationEvent as ReactAnimationEvent } from 'react';
-import { StageRenderer } from '../../renderer';
+import type { AnimationEvent as ReactAnimationEvent, CSSProperties } from 'react';
+import { StageRenderer, GUI_LIST_SETTLED_EVENT, LIST_MOTION } from '../../renderer';
 import { isBookingCompleteMeta, type UISpec, type Stage } from '../../spec';
 import type {
   AgentMessage as AgentMessageType,
@@ -425,7 +425,9 @@ export function FullTuningSplitView({
   const { s } = useLanguage();
   const guiViewportRef = useRef<HTMLDivElement>(null);
   const guiContentRef = useRef<HTMLDivElement>(null);
-  const [guiScale, setGuiScale] = useState(1);
+  /** The fit-to-height pass of the current snapshot, for `GUI_LIST_SETTLED_EVENT`. */
+  const guiFitRecalcRef = useRef<((eased?: boolean) => void) | null>(null);
+  const guiFitFrameRef = useRef<number | null>(null);
   // A phone opens on the booking UI, not on the transcript. Expanded is still
   // the right default on a desktop, where the conversation is a column beside
   // the GUI rather than a sheet on top of it — but on a phone that same default
@@ -1077,16 +1079,71 @@ export function FullTuningSplitView({
       return viewport.clientHeight - padding;
     };
 
-    const recalc = () => {
-      setGuiScale(guiStageFitScale(availableHeight(), content.scrollHeight));
+    // `eased`: only the re-read after a list settles glides to its new scale
+    // (see below); a new snapshot or a resized pane takes its scale at once,
+    // as it always has.
+    //
+    // The scale and the class are written to the node, not kept in state. As
+    // state, every change of scale re-rendered the entire split view — the
+    // transcript and every row in it — synchronously from this layout effect,
+    // before paint; with the list now settling *after* its snapshot, that was
+    // a second full re-render per filter, inside the animation.
+    const recalc = (eased = false) => {
+      content.classList.toggle('gui-fit-scale-eased', eased);
+      const transform = `scale(${guiStageFitScale(availableHeight(), content.scrollHeight)})`;
+      if (content.style.transform !== transform) content.style.transform = transform;
     };
 
     recalc();
-    if (typeof ResizeObserver === 'undefined') return;
-    const ro = new ResizeObserver(recalc);
+    guiFitRecalcRef.current = recalc;
+    if (typeof ResizeObserver === 'undefined') {
+      return () => {
+        guiFitRecalcRef.current = null;
+      };
+    }
+    const ro = new ResizeObserver(() => recalc());
     ro.observe(viewport);
-    return () => ro.disconnect();
+    return () => {
+      guiFitRecalcRef.current = null;
+      ro.disconnect();
+    };
   }, [activeSnapshot?.id, guiTransitionActive]);
+
+  /*
+    ...and re-read once more when an option list has finished changing height.
+
+    The incoming panel persists across a stage's snapshots, so the snapshot
+    that carries a filter commits *before* its exits have collapsed (and a
+    "Show all" is no snapshot at all): the pass above measures the old height.
+    ButtonGroup announces the commit that drops its exited items or settles its
+    entering ones (`GUI_LIST_SETTLED_EVENT`, bubbling), and that is re-read
+    here, coalesced to one frame — one layout read per change, not the 60Hz
+    stream that observing `content` would be. That re-read eases the scale
+    over `LIST_MOTION.fitScaleMs` (a transform transition, on the compositor)
+    instead of snapping it: the list has just finished animating, and a card
+    that then jumps to a new size reads as a glitch.
+  */
+  const hasActiveSnapshot = Boolean(activeSnapshot);
+
+  useEffect(() => {
+    const content = guiContentRef.current;
+    if (!content) return;
+    const onSettled = () => {
+      if (guiTransitionActiveRef.current || guiFitFrameRef.current !== null) return;
+      guiFitFrameRef.current = window.requestAnimationFrame(() => {
+        guiFitFrameRef.current = null;
+        if (!guiTransitionActiveRef.current) guiFitRecalcRef.current?.(true);
+      });
+    };
+    content.addEventListener(GUI_LIST_SETTLED_EVENT, onSettled);
+    return () => {
+      content.removeEventListener(GUI_LIST_SETTLED_EVENT, onSettled);
+      if (guiFitFrameRef.current !== null) {
+        window.cancelAnimationFrame(guiFitFrameRef.current);
+        guiFitFrameRef.current = null;
+      }
+    };
+  }, [hasActiveSnapshot]);
 
   return (
     <div className="min-h-0 flex-1 overflow-hidden px-2 py-2 sm:px-4 sm:py-4">
@@ -1114,15 +1171,36 @@ export function FullTuningSplitView({
               {activeSnapshot ? (
                 <div
                   ref={guiContentRef}
+                  // The fit pass owns this node's `transform` and its
+                  // `gui-fit-scale-eased` class, writing both directly; neither
+                  // appears here, so a re-render never touches them.
                   className="relative mx-auto flex w-full max-w-2xl items-start justify-center"
-                  style={{ transform: `scale(${guiScale})`, transformOrigin: 'center center' }}
+                  style={
+                    {
+                      transformOrigin: 'center center',
+                      '--gui-fit-scale-ms': `${LIST_MOTION.fitScaleMs}ms`,
+                    } as CSSProperties
+                  }
                 >
                   {/*
-                    Both panels are keyed by the snapshot they show. Without a
-                    key React reconciles them positionally, so moving to a new
-                    stage was a mount *and* an unmount *and* another mount of a
-                    full stage tree rather than one of each — three trees' worth
-                    of commit work landing on the frame the slide starts on.
+                    Both panels are keyed. Without a key React reconciles them
+                    positionally, so moving to a new stage was a mount *and* an
+                    unmount *and* another mount of a full stage tree rather than
+                    one of each — three trees' worth of commit work landing on
+                    the frame the slide starts on.
+
+                    The incoming panel is keyed by its *stage*, not by the
+                    snapshot. Every agent step is a snapshot of its own — an
+                    augment, a filter, a sort, and the sentence narrating each —
+                    so keying it by snapshot id remounted the whole stage tree on
+                    every one of them, and a freshly mounted ButtonGroup has no
+                    previous list to animate from: labels swapped, filtered
+                    items vanished and a sort reordered, each in a single frame.
+                    Measured over the theater quick card: every item node torn
+                    down and rebuilt per step, zero exits, zero moves. A stage
+                    change is exactly when a slide starts (the transition effect
+                    above), so this key still changes on every slide and never
+                    otherwise.
                   */}
                   {transitionState?.outgoing ? (
                     <div
@@ -1145,7 +1223,7 @@ export function FullTuningSplitView({
                   ) : null}
 
                   <div
-                    key={`incoming-${activeSnapshot.id}`}
+                    key={`incoming-${activeSnapshot.stage}`}
                     onAnimationEnd={transitionState ? handleIncomingAnimationEnd : undefined}
                     className={`relative flex w-full items-center justify-center py-1 gui-stage-panel ${
                       transitionState
