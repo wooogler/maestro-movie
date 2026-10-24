@@ -671,6 +671,10 @@ function liveRelaxRequests(): ExtractorRequest[] {
       const lastAgent = [...dialogue].reverse().find((entry) => entry.type === 'agent');
       if (!lastAgent || !IMAX.test(String(lastAgent.text)) || !/아니면/.test(String(lastAgent.text))) continue;
       if (!/첫 번째/.test(String(input.userMessage ?? ''))) continue;
+      // Only an answer given while both requirements were still in memory: a
+      // later re-ask after one was already (wrongly) retracted scores nothing.
+      const existing = Array.isArray(input.existingPreferences) ? (input.existingPreferences as Json[]) : [];
+      if (!existing.some((p) => IMAX.test(String(p.description))) || !existing.some((p) => DISTANCE.test(String(p.description)))) continue;
       found.push({ requestId: String(payload.requestId ?? ''), systemPrompt: String(messages[0]?.content ?? ''), input });
     }
   }
