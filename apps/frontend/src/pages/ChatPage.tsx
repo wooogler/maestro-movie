@@ -792,13 +792,29 @@ export function ChatPage({
     Each clause is load-bearing. Voice, because with voice off `assistantMessage`
     is the only channel there is and shortening it would take information from a
     text-condition participant. Demo, because a study session's prompt must stay
-    byte-identical — `npm run check:planner-prompt` pins it. Not a quick card,
-    because a card asks for the opposite and `buildSystemPrompt` drops this
-    anyway.
+    byte-identical — `npm run check:planner-prompt` pins it.
+
+    A quick card is included since 2026-10-24. It used to be excluded because a
+    card asks the planner to narrate every adaptation (`narrateAdaptations`), and
+    in the KSEA Korean simulation that narration took 17–35 s and 4–7 sentences
+    for one visitor line, on a card made for a 90-second visit. Under brevity the
+    GUI steps are silent and the closing respond carries the one sentence worth
+    hearing: the demo rules make it state what the filter hid ("PG 조건 때문에
+    다른 영화 3편은 숨겨져 있어요. 어떤 영화를 볼까요?"), which is the card's
+    "watch" line. Capping narration on this side instead (silencing `nav`,
+    `select` and `view` in QUICK_CARD_VOICE_VERBOSITY) was the other option and
+    the worse one: the gate silences by the tool a sentence rides on, and under
+    narration the question often rides on a GUI step. Quick card 3 ends on a
+    highlight that says "주말 조건에 맞는 날짜 2개를 강조했어요. 어느 날로
+    할까요?" with no respond after it, so the cap would make that card silent,
+    and with smartSkip off nothing protects a question. Brevity moves what must
+    be heard onto the turn's last message by prompt rule instead of cutting it.
+    The two planner flags contradict each other (`buildSystemPrompt` drops
+    brevity when narration is on), so a card sends narration only when this is
+    off, i.e. with voice off.
   */
   const plannerWritesForTheEar =
     voiceModeEnabled &&
-    !quickStartCard &&
     normalizeStudyMode(studyModePreset) === DEMO_STUDY_MODE;
   const [voiceGateStats, setVoiceGateStats] = useState({ silenced: 0, shortened: 0 });
   /** Verbatim text of what was actually spoken, for the repeat rules. */
@@ -2218,7 +2234,8 @@ export function ChatPage({
       visitor is minutes into a booking and narration is the noise the rule
       exists to prevent.
     */
-    narrateAdaptations: Boolean(quickStartCard),
+    // With voice on a card writes for the ear instead; see plannerWritesForTheEar.
+    narrateAdaptations: Boolean(quickStartCard) && !plannerWritesForTheEar,
     /*
       And the mirror image of it, for a voice session that is NOT a card.
 
@@ -2231,8 +2248,8 @@ export function ChatPage({
       off `assistantMessage` is the only channel there is and shortening it
       would take information away from a text-condition participant. Demo,
       because a study session's prompt must stay byte-identical —
-      `npm run check:planner-prompt` pins it. Not a card, because a card asks
-      for the opposite and `buildSystemPrompt` would drop this anyway.
+      `npm run check:planner-prompt` pins it. A quick card too, with voice on:
+      see plannerWritesForTheEar for why and what it costs.
     */
     spokenBrevity: plannerWritesForTheEar,
     preferenceProfile: showMemoryPanel ? preferenceProfilePayload : null,
