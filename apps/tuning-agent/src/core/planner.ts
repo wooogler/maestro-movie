@@ -383,6 +383,21 @@ function buildSeatLayoutMeta(items: unknown[]): Record<string, unknown> | null {
 const DEMO_SESSION = process.env.AGENT_STUDY_MODE === 'demo';
 
 /**
+ * One entry of `workflow.priorStageAlternativeCounts`. The count is taken with
+ * the stage's hard-bound filters re-applied, and nothing else: a hard
+ * preference that never became a filter there (Thursday, selected by name) is
+ * not in it. A study session gets `{ stage, count }` exactly as before; the
+ * booth also gets `uncheckedHardPreferenceIds`, so the planner can see that
+ * "date: 5" means five days exist, not five the visitor would accept. That is
+ * what sent card B back to change a day the visitor had named (2026-10-24).
+ */
+interface PriorStageAlternativeCount {
+  stage: WorkflowStage;
+  count: number;
+  uncheckedHardPreferenceIds?: string[];
+}
+
+/**
  * The confirm stage has no items: what the visitor sees is a summary card,
  * and the host ships its content in `spec.meta` (ConfirmMeta in the frontend's
  * spec/generators.ts). `buildCurrentView` never read it, so the planner was
@@ -625,7 +640,7 @@ function buildWorkflowContext(
   cpMemoryEnabled: boolean,
   workflowState: Record<string, unknown> | null,
   deadEnds: DeadEnd[],
-  priorStageAlternativeCounts: Array<{ stage: WorkflowStage; count: number }>,
+  priorStageAlternativeCounts: PriorStageAlternativeCount[],
   backtrackContinuation: BacktrackContinuation | null
 ): PlannerWorkflow {
   const selectedId = getSelectedId(spec);
@@ -971,9 +986,26 @@ export async function planNextAction(
 
             const count = memory.getStageAlternativeCount(priorStage, parentContextKey, excludeIds);
             if (count === null) return null;
+            // Booth only (see uncheckedHardPreferenceIds in the demo conflict
+            // section): name the hard requirements the count could not apply.
+            if (DEMO_SESSION) {
+              const applied = new Set(memory.getStageHardFilterPreferenceIds(priorStage, parentContextKey));
+              const unchecked = memory
+                .getPreferences()
+                .filter(
+                  (preference) =>
+                    preference.strength === 'hard' &&
+                    preference.relevantStages.includes(priorStage) &&
+                    !applied.has(preference.id)
+                )
+                .map((preference) => preference.id);
+              if (unchecked.length > 0) {
+                return { stage: priorStage, count, uncheckedHardPreferenceIds: unchecked };
+              }
+            }
             return { stage: priorStage, count };
           })
-          .filter((entry): entry is { stage: WorkflowStage; count: number } => entry !== null);
+          .filter((entry): entry is PriorStageAlternativeCount => entry !== null);
 
   const userRequest = context.lastUserMessage?.text ?? '';
   const hasUserRequest = Boolean(userRequest.trim());
@@ -1033,7 +1065,7 @@ export async function planNextAction(
       // Profile-seeded preferences exist only in the demo; see
       // PRELOADED_MEMORY_RULES for why the planner is told about them.
       ...(memory.hasProfilePreferences() ? { preloadedMemory: true } : {}),
-      ...(DEMO_SESSION ? { demoSession: true, decisiveSelection: true } : {}),
+      ...(DEMO_SESSION ? { demoSession: true, decisiveSelection: true, requirementConflicts: true } : {}),
     };
 
     const llm = await planActionWithOpenAI(plannerInput);

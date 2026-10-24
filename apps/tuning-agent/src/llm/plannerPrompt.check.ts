@@ -16,7 +16,15 @@
  * Exit code 0 means every case passed.
  */
 import { createHash } from 'node:crypto';
+import fs from 'node:fs';
+import path from 'node:path';
 
+import {
+  STUDY_THEATER_FORMAT_NOTE,
+  STUDY_TIME_FORMAT_NOTE,
+  buildPreferenceSystemPrompt,
+  getExtractorSystemPrompt,
+} from './llmExtractor';
 import { buildLanguageSection, buildSystemPrompt } from './llmPlanner';
 import type { PlannerWorkflow } from './llmPlanner';
 
@@ -72,6 +80,7 @@ const BREVITY_MARKER = 'Writing for the ear';
 const PRELOAD_MARKER = 'Remembered preferences (this session)';
 const DEMO_MARKER = 'Booth demo (this session)';
 const DECISIVE_MARKER = 'Deciding for the visitor (booth demo)';
+const CONFLICT_MARKER = 'Two requirements that rule each other out (booth demo)';
 
 /*
   The prompt the recorded study ran against, pinned by content.
@@ -143,6 +152,14 @@ for (const config of STUDY_CONFIGS) {
   check(`${key}: ...and neither does leaving it undefined`, before === decisiveUndefined);
   check(`${key}: ...nor asking for it outside a demo session`, before === decisiveWithoutDemo);
   check(`${key}: no decisive-selection section appears`, !before.includes(DECISIVE_MARKER));
+
+  const conflictsOff = buildSystemPrompt(wf, STAGE_META, config.language, false, false, false, false, false, false);
+  const conflictsUndefined = buildSystemPrompt(wf, STAGE_META, config.language, false, false, false, false, false, undefined);
+  const conflictsWithoutDemo = buildSystemPrompt(wf, STAGE_META, config.language, false, false, false, false, false, true);
+  check(`${key}: the requirement-conflict flag off changes nothing`, before === conflictsOff);
+  check(`${key}: ...and neither does leaving it undefined`, before === conflictsUndefined);
+  check(`${key}: ...nor asking for it outside a demo session`, before === conflictsWithoutDemo);
+  check(`${key}: no requirement-conflict section appears`, !before.includes(CONFLICT_MARKER));
 }
 check(
   'the style rule the narration section would override is still there, untouched',
@@ -321,6 +338,7 @@ console.log('\n10. a booth demo session that asks for decisive selection gets th
   );
   const tail = on.slice(on.indexOf(DECISIVE_MARKER));
   check('it keeps the final booking confirmation', /\[confirm-booking\]/.test(tail) && /always stays/.test(tail));
+  check('a position in the visible list names an option', /A position names an option too/.test(tail));
   check('it keeps the fuzzy-match clarification', /\[ask-fuzzy\]/.test(tail) && /Never select a near miss/.test(tail));
   check('it keeps the remembered-preference question', /\[ask-remembered\]/.test(tail) && /prf_/.test(tail));
   check('a direct answer ends with the answer', /\[answer\]/.test(tail) && /nothing after it/.test(tail));
@@ -336,6 +354,86 @@ console.log('\n10. a booth demo session that asks for decisive selection gets th
   check('and on after off is on again', withAgain.includes(DECISIVE_MARKER) && withFirst === withAgain);
   const demoOnly = buildSystemPrompt(workflow(true), STAGE_META, 'en', false, false, false, true, false);
   check('without the flag a demo session reads exactly as before', demoOnly === withoutAfter && !demoOnly.includes(DECISIVE_MARKER));
+}
+
+console.log('\n11. a booth demo session with CP memory gets the requirement-conflict section, last before language');
+{
+  const off = buildSystemPrompt(workflow(true, true), STAGE_META, 'ko', false, true, false, true, true, false);
+  const on = buildSystemPrompt(workflow(true, true), STAGE_META, 'ko', false, true, false, true, true, true);
+  check('the section is appended', on.includes(CONFLICT_MARKER));
+  check('it only adds — every line of the off prompt is still there', off.split('\n').every((line) => on.includes(line)));
+  const tail = on.slice(on.indexOf(CONFLICT_MARKER), on.indexOf('Language:'));
+  check(
+    'it sits after the decisive-selection and brevity sections it overrides, and before the language section',
+    on.indexOf(CONFLICT_MARKER) > on.indexOf(DECISIVE_MARKER) &&
+      on.indexOf(CONFLICT_MARKER) > on.indexOf(BREVITY_MARKER) &&
+      on.indexOf(CONFLICT_MARKER) < on.indexOf('Language:')
+  );
+  check('it says which side wins on conflict', /this section wins/i.test(tail));
+  check('it names the dead-end and backtracking rules among what it overrides', /Dead-end handling, Backtracking/.test(tail));
+  check('it forbids selecting an option that breaks one of the two', /never select an option that breaks one of the two/.test(tail));
+  check('it judges a format at the theater stage from amenities', /amenities list it/.test(tail));
+  check('it asks for both requirements to be named in one either-or question', /either-or question/.test(tail));
+  check('it carries the booking on after one is given up', /that one is relaxed and the other still holds/.test(tail));
+  check('it explains uncheckedHardPreferenceIds', /uncheckedHardPreferenceIds/.test(tail));
+  check('it never proposes a change that breaks a stated requirement', /Never propose a change that breaks a requirement the visitor stated/.test(tail));
+  check('it asks for its own reason tag', /\[conflict\]/.test(tail));
+  check('its examples are English, left to the language section to translate', !/[가-힣]/.test(tail));
+  const noCp = buildSystemPrompt(workflow(true, false), STAGE_META, 'en', false, false, false, true, true, false);
+  const noCpAsked = buildSystemPrompt(workflow(true, false), STAGE_META, 'en', false, false, false, true, true, true);
+  check('without CP memory (no conflictMemory, no counts) nothing is added', noCp === noCpAsked);
+  const withFirst = buildSystemPrompt(workflow(true, true), STAGE_META, 'en', false, false, false, true, true, true);
+  const withoutAfter = buildSystemPrompt(workflow(true, true), STAGE_META, 'en', false, false, false, true, true, false);
+  const withAgain = buildSystemPrompt(workflow(true, true), STAGE_META, 'en', false, false, false, true, true, true);
+  check('the memo keys on the flag: off after on is off', !withoutAfter.includes(CONFLICT_MARKER));
+  check('and on after off is on again', withAgain.includes(CONFLICT_MARKER) && withFirst === withAgain);
+}
+
+console.log('\n12. the extractor: a study session is unchanged, the booth rewrites only the format notes');
+{
+  /*
+    The frontend sends STAGE_META to study sessions too, so the booth rewrite
+    lives on the agent. Two things to hold: without the flag the extractor
+    prompt is exactly the old construction, and the study sentences the booth
+    replaces are still what generators.ts sends (if someone rewords them there,
+    the booth would append its note next to the old one instead).
+  */
+  const generators = fs.readFileSync(
+    path.resolve(__dirname, '../../../frontend/src/spec/generators.ts'),
+    'utf8'
+  );
+  check('generators.ts still sends the theater format note the booth replaces', generators.includes(STUDY_THEATER_FORMAT_NOTE));
+  check('generators.ts still sends the time format note the booth replaces', generators.includes(STUDY_TIME_FORMAT_NOTE));
+  const meta = [
+    { stage: 'movie', goal: 'g', fieldGuide: 'Film selection.' },
+    { stage: 'theater', goal: 'g', fieldGuide: `Cinema location selection. ${STUDY_THEATER_FORMAT_NOTE}` },
+    { stage: 'time', goal: 'g', fieldGuide: `Showtime selection. ${STUDY_TIME_FORMAT_NOTE}` },
+  ];
+  const core = getExtractorSystemPrompt().replace(/^Preference Extraction Prompt:\n/, '');
+  const oldConstruction =
+    core + '\n\nstageFieldGuides:\n' + meta.map((s) => `- ${s.stage}: ${s.fieldGuide}`).join('\n');
+  for (const language of ['en', 'ko', undefined]) {
+    check(
+      `study extractor prompt (${language ?? 'no language'}) is the old construction`,
+      buildPreferenceSystemPrompt(meta, language) === oldConstruction &&
+        buildPreferenceSystemPrompt(meta, language, false) === oldConstruction
+    );
+  }
+  check('no stage meta, no flag: the bare prompt', buildPreferenceSystemPrompt(undefined, 'en') === core);
+  const booth = buildPreferenceSystemPrompt(meta, 'ko', true);
+  check('the booth drops the study theater note', !booth.includes(STUDY_THEATER_FORMAT_NOTE));
+  check('the booth drops the study time note', !booth.includes(STUDY_TIME_FORMAT_NOTE));
+  check('the booth assigns a format requirement to theater and time', /assign it to both theater and time/.test(booth));
+  check('the booth reads a positional answer to a two-way-out question', /a positional answer counts in the order/.test(booth) && /the one that way out goes WITHOUT/.test(booth));
+  check('the booth leaves the movie guide alone', booth.includes('- movie: Film selection.'));
+  check(
+    'the booth only rewrites: the study prompt minus its two notes is still all there',
+    oldConstruction
+      .replace(` ${STUDY_THEATER_FORMAT_NOTE}`, '')
+      .replace(` ${STUDY_TIME_FORMAT_NOTE}`, '')
+      .split('\n')
+      .every((line) => booth.includes(line.replace(/^- (theater|time): /, '')))
+  );
 }
 
 console.log('\nL. the post-study languages add a section and leave en/ko alone');
