@@ -8,7 +8,7 @@ What happens when a Korean visitor reads the printed MAESTRO cards aloud to the 
 |---|---|
 | **A 오늘 밤** | **Mostly.** All 3 stage-paced runs land on a valid showing: Cinema Detroit 9:30 PM, ends 11:28 PM, the only one that fits at the nearest cinema. "자정" was read correctly as an end time every time, and 15 miles was never violated. 2 of 3 reached a confirmed booking. The weak spot is the seat line: in 1 of 3 runs the agent marked nothing and asked "어느 좌석을 말씀하신 건가요?" four times in a row. |
 | **B IMAX 밤** | **No (0 of 3).** The agent never tells the visitor that IMAX exists only 20.4 miles out. It filters to ≤15 mi without checking IMAX, books its way to a non-IMAX cinema, finds the dead end only at the showtime screen, and then offers **"날짜를 바꿔볼까요?"** That fallback contradicts the visitor's own "목요일" and cannot fix anything, because the cinema has no IMAX on any day. It never offers to drop IMAX or relax the distance. |
-| **C 가족 낮 상영** | **Yes, with friction.** 2 of 3 runs reached a correct confirm read-back (Wildwood, Thu 1:15 PM, ends 3:01 PM, three adjacent seats). The runtime re-sort happened 3/3. The PG filter happened 1/3; the other 2 runs only highlighted. One run went **silent for 90 s** after "첫 번째 걸로 할게요". |
+| **C 가족 낮 상영** | **Yes, with friction.** 3 of 4 runs reached a correct booking or confirm read-back (Wildwood, Thu 1:15 PM, ends 3:01 PM, three adjacent seats); C4v confirmed it. The runtime re-sort happened 4/4. The PG filter happened 2/4; the other 2 runs only highlighted. One run went **silent for 90 s** after "첫 번째 걸로 할게요". |
 | **Quick 1 영화** | ✅ 5 → 2 films, ratings shown. The settle took 19.7 s of narration. |
 | **Quick 2 영화관** | ⚠️ 5 → 3 cinemas with miles shown, but **no reorder by distance** (2 of 2 runs), and 23 s of narration. |
 | **Quick 3 날짜** | ⚠️ The two weekend days are **highlighted, not left standing alone**: all 6 stay on the calendar (2 of 2 runs). |
@@ -18,7 +18,7 @@ What happens when a Korean visitor reads the printed MAESTRO cards aloud to the 
 Three findings go beyond the cards:
 
 - **Typing does not work.** Switching voice off leaves the composer read-only ("마이크를 눌러 말하세요"), so the quick card's own line "주변이 시끄러우면 타이핑으로 하셔도 됩니다" is false.
-- **Every full card gets an extra date-confirmation turn.** At the date stage the agent asks to confirm a day the visitor already said ("오늘 날짜로 할까요?", "Nov 5 (Thu)로 할까요?"). This happened in 9 of 9 runs that reached the date stage.
+- **Every full card gets an extra date-confirmation turn.** At the date stage the agent asks to confirm a day the visitor already said ("오늘 날짜로 할까요?", "Nov 5 (Thu)로 할까요?"). This happened in 10 of 10 runs that reached the date stage.
 - **Delegating does not work.** "첫 번째 걸로 할게요" and "추천해 주세요" are handled inconsistently: sometimes the agent selects, sometimes it asks to confirm, sometimes it refuses three times, and once it went silent.
 
 ## How these runs were made
@@ -120,11 +120,12 @@ Rows 7–9 are the driver's agreeable answers to the agent's own fallback. A pre
 | C1v | voice | `demo-st_3a7e79b6…-20261024-102843` | ✅ PG filter (5 → 2) and duration sort. Then "첫 번째 걸로 할게요." got **nothing: 90 s of silence.** The planner chose `respond` with an empty message, and under spoken brevity that is no speech, no tool, and no retry. |
 | C2v | voice | `demo-st_7c0018369…-20261024-103106` | Reached confirm: Wildwood, Emagine Royal Oak, Thu 1:15 PM (ends 3:01 PM), E1–E3, $63. At the movie stage it highlighted PG films instead of filtering. At the seat stage it **highlighted E1–E4 (four seats) for a party of three**, then selected E1–E3. Stopped one "네" short because the driver's follow-up cap was then 6. |
 | C3t | text | `demo-st_43257afd…-20261024-103328` | Reached confirm: Wildwood, Emagine, Thu 1:15 PM, **B1–B3** (second row of six), $45. The time stage filtered `endTime ≤ 17:00`. It stopped at the confirm question for the same cap reason. |
+| C4v | voice | `demo-st_ba3b0c5d…-20261024-104309` | ✅ **Booked:** Wildwood, Emagine Royal Oak, Thu 5 Nov 1:15 PM (ends 3:01 PM), E1–E3, $63. It filtered to PG *and* highlighted both survivors, sorted by runtime, and filtered `endTime ≤ 17:00` before selecting 1:15 PM itself ("1:15 PM 상영만 오후 5시 전에 끝나서 선택했어요."). Seats: "어느 줄이 좋으세요?" to the card line. After "추천해 주시는 자리로 할게요" it marked E1–E3 (right size) and then asked "어느 줄로 할까요?" in the same turn. This was the run made with the committed driver to check that it reproduces. |
 
-- **Runtime sort:** 3/3. **PG filter:** 1/3; the other two highlighted Aang and Wildwood but left all five films on screen. Either way, the card's "PG 이하로 걸러진다" is only half true as shown.
+- **Runtime sort:** 4/4. **PG filter:** 2/4; the other two highlighted Aang and Wildwood but left all five films on screen. Either way, the card's "PG 이하로 걸러진다" is only half true as shown.
 - After "짧을수록 좋아요" the planner asks which film rather than selecting the shorter one. That is by design: a soft preference does not decide. Only C3t suggested Wildwood ("Wildwood가 더 짧은 상영 시간 선호에 맞아요. Wildwood로 할까요?").
-- **5 PM end time:** correct whenever it was applied (C2v, C3t). Only 1:15 PM survives at Emagine.
-- **Seats:** "세 자리 붙어서요. 앞줄은 말고요." never produced a highlight on its own (3/3), because there are too many qualifying blocks. A highlight came only after the driver said "추천해 주시는 자리로 할게요". Once it was the wrong size (4 seats), and once it was row B of A–F, which a visitor may not count as "앞줄 말고".
+- **5 PM end time:** correct whenever it was applied (C2v, C3t, C4v). Only 1:15 PM survives at Emagine.
+- **Seats:** "세 자리 붙어서요. 앞줄은 말고요." never produced a highlight on its own (4/4), because there are too many qualifying blocks. A highlight came only after the driver said "추천해 주시는 자리로 할게요". Once it was the wrong size (4 seats), once it was row B of A–F (which a visitor may not count as "앞줄 말고"), and once it was right (E1–E3) but was followed straight away by "어느 줄로 할까요?".
 - The memory panel was in **Korean** in all C runs ("목요일 오후에 영화를 보고 싶습니다." …) and in English in all A/B runs.
 
 ### Representative transcript: C2v (voice on)
@@ -175,9 +176,9 @@ The card pages render in Korean with the right line and watch text. Each card pa
 |---|---|---|---|
 | 1 | **Card B's dead end is handled wrong.** The conflict is not detected at the theater stage. The fallback is "change the date", which contradicts 목요일 and cannot help. Dropping IMAX or widening the distance is never offered. | B2t, B3v, B4v (3/3) | **Critical.** B is the card that shows conflict handling, and it currently shows the opposite. |
 | 2 | **No typing fallback.** The composer is read-only with voice on or off; the quick card promises "타이핑으로 하셔도 됩니다". | verified on `/demo/card` with voice off | **High.** A poster hall is loud. If the mic fails or is denied, there is no way in. |
-| 3 | **Seat highlights blocked by the Highlight-economy ceiling (≤3).** Quick card 5 lights nothing. Card A/C seat lines usually get a question instead of marks; when a mark appears it is the wrong size (E1–E4 for three) or is announced as "선택했어요". | Q5 2/2, A3v, C1–3 | **High.** Card 5's whole "watch" claim fails, and A/C end in "좌석 번호를 말씀해 주세요" loops. |
-| 4 | **Silent `respond`.** An empty message under spoken brevity produces no speech, no action and no retry. | C1v (90 s) | **High** when it happens: the visitor stands in silence. Seen in 1 of 6 voice full-card runs. |
-| 5 | **Redundant date confirmation (`[ask-remembered]`).** The visitor's opening line has scrolled out of the 8–12-entry history by the date stage, so a `pref_…` preference the visitor stated is treated as "remembered". | every full run that reached the date stage (9/9) | **Medium.** One extra yes per card, and the visitor wonders "I just said 오늘". |
+| 3 | **Seat highlights blocked by the Highlight-economy ceiling (≤3).** Quick card 5 lights nothing. Card A/C seat lines usually get a question instead of marks; when a mark appears it is the wrong size (E1–E4 for three) or is announced as "선택했어요". | Q5 2/2, A3v, C1v–C4v | **High.** Card 5's whole "watch" claim fails, and A/C end in "좌석 번호를 말씀해 주세요" loops. |
+| 4 | **Silent `respond`.** An empty message under spoken brevity produces no speech, no action and no retry. | C1v (90 s) | **High** when it happens: the visitor stands in silence. Seen in 1 of 7 voice full-card runs. |
+| 5 | **Redundant date confirmation (`[ask-remembered]`).** The visitor's opening line has scrolled out of the 8–12-entry history by the date stage, so a `pref_…` preference the visitor stated is treated as "remembered". | every full run that reached the date stage (10/10) | **Medium.** One extra yes per card, and the visitor wonders "I just said 오늘". |
 | 6 | **Ordinal or delegating answers handled inconsistently.** "첫 번째 걸로" is sometimes selected, sometimes confirmed ("…을 말씀하신 건가요?"), refused 3×, or met with silence. "추천해 주세요" sometimes recommends and sometimes asks again. | A3v, B2t, B3v, B4v, C1v | **Medium.** These are the most natural Korean shortcuts at a booth. |
 | 7 | **Quick cards narrate every step:** 19–42 s to settle, 3–5 sentences each. | Q1, Q2, Q4 | **Medium.** The quick cards exist for 90-second visitors. |
 | 8 | **Quick cards 2 and 3 only partly match their "watch" lines:** no distance sort (2), and highlight instead of 6 → 2 (3). Quick card 4 shows two identical "8:10 PM" rows. | Q2 2/2, Q3 2/2, Q4 | **Medium.** The presenter says one thing and the screen does another. |
@@ -226,6 +227,7 @@ The trace files are in the main checkout's `logs/demo/trace/` (gitignored), one 
 | C1v | `logs/demo/trace/demo-st_3a7e79b6d89d4010a310cb5b336fcfe9-20261024-102843.llm-trace.jsonl` |
 | C2v | `logs/demo/trace/demo-st_7c0018369e9e47ee9b141421be6676a8-20261024-103106.llm-trace.jsonl` |
 | C3t | `logs/demo/trace/demo-st_43257afd1c2b4ce5a8bc39a20d14f4c4-20261024-103328.llm-trace.jsonl` |
+| C4v | `logs/demo/trace/demo-st_ba3b0c5d8b2842298273bda2f09d6dec-20261024-104309.llm-trace.jsonl` |
 
 The quick cards have no trace, because `/demo/card` never records. Each run's relay frames, per-turn tool calls and final screen text were written to a JSON file next to the driver output (`--json=`); those files were scratch and are not committed. Rerun a card with the command in Method to regenerate them.
 
