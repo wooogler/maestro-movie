@@ -338,6 +338,7 @@ console.log('\n10. a booth demo session that asks for decisive selection gets th
   );
   const tail = on.slice(on.indexOf(DECISIVE_MARKER));
   check('it keeps the final booking confirmation', /\[confirm-booking\]/.test(tail) && /always stays/.test(tail));
+  check('a position in the visible list names an option', /A position names an option too/.test(tail));
   check('it keeps the fuzzy-match clarification', /\[ask-fuzzy\]/.test(tail) && /Never select a near miss/.test(tail));
   check('it keeps the remembered-preference question', /\[ask-remembered\]/.test(tail) && /prf_/.test(tail));
   check('a direct answer ends with the answer', /\[answer\]/.test(tail) && /nothing after it/.test(tail));
