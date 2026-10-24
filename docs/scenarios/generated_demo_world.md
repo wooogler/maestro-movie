@@ -111,13 +111,14 @@ whoever is presenting.
 
 Card B is the one that cannot be booked as printed. That is the point of it.
 
-The card's title comes from the catalog and the film list from the generated
-dataset. The spoken line and the condition fragments are written in
+The film list comes from the generated dataset. The title, the spoken line and
+the condition fragments are written in
 `scripts/build-demo-cards.py`, because a compression of the scenario's step
-briefs is an editorial act, not a transformation. They can therefore drift from
-the catalog: the build only guarantees that every printed card has a scenario and
-every `demo_*` scenario has a card, so re-read the fragments after changing a
-scenario's constraints.
+briefs is an editorial act, not a transformation. They can therefore drift: the
+build only guarantees that every printed card has copy in the language being
+printed (cards A-C are no longer catalog scenarios, and their constraints are
+checked against the world by `cardFeasibility.ts` under the same ids), so re-read
+the lines after changing a card's constraints, in English and in Korean.
 
 Requires `reportlab` (`pip install reportlab`); it is the only dependency outside
 the Node workspaces.
