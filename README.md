@@ -375,6 +375,17 @@ is required and a sheet is good for one code:
 python3 scripts/build-demo-cards.py --set quick --code AB12CD --base-url https://maestro.cs.vt.edu
 ```
 
+`--lang ko` prints the Korean edition of either set (for the KSEA Southern Chapter
+Poster Symposium) to `docs/scenarios/ksea2026-*.ko.pdf`, never over the UIST
+sheets. It embeds Noto Sans KR from `scripts/fonts/` (SIL OFL, licence beside the
+fonts), and a Korean quick card's QR also carries `lang=ko`, so the phone that
+scans it opens in Korean:
+
+```bash
+python3 scripts/build-demo-cards.py --lang ko
+python3 scripts/build-demo-cards.py --lang ko --set quick --code AB12CD --base-url https://maestro.cs.vt.edu
+```
+
 `/demo/cards` shows the same five as QR codes on screen, for the presenter's own
 tablet or a booth that has run out of paper; the code is typed there rather than
 baked in.
