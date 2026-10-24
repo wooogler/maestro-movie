@@ -94,6 +94,18 @@ interface PlannerInput {
    * turn with and without it against the same demo prompt.
    */
   requirementConflicts?: boolean;
+  /**
+   * Booth demo only: on entering a stage nothing bears on yet, ask for a
+   * preference the stage's fields can act on rather than "which one?". Absent
+   * or false leaves the prompt exactly as it was. See STAGE_OPENING_RULES.
+   */
+  openingQuestions?: boolean;
+  /**
+   * Booth demo only: at the seat stage, mark up to three whole choices of the
+   * stated party size and pick one when the visitor delegates. Absent or false
+   * leaves the prompt exactly as it was. See SEAT_CHOICE_RULES.
+   */
+  seatChoices?: boolean;
 }
 
 interface PlannerAction {
@@ -707,7 +719,7 @@ const DECISIVE_SELECTION_RULES =
   "- ASK, and only when:\n" +
   "  (4) [ask-multiple] two or more options stay viable after everything said in this turn and in memory, and nothing the visitor said separates them. Mark them first when the Highlight economy rules allow it, then ask the one question whose answer separates them; do not read the options out. If a filter is hiding options, still say how many and why, as the Filtered stages rule requires, before the question.\n" +
   "  (5) [ask-fuzzy] the visitor's words name nothing on screen but come close — 5:50 when the screen shows 5:15 and 5:55, a theater name the transcript mangled. Ask the one clarifying question that names the nearest option (\"Did you mean 5:15 PM?\"). Never select a near miss. A time the visitor says is a START time: match it against the start times on screen only, never against an end time, and a start time that is not on screen is a near miss.\n" +
-  "  (6) [ask-remembered] what would decide is a remembered preference rather than something said in this conversation — a preference in memory whose id begins with \"prf_\", or one the visitor has not stated in history. Point at the option it favours and ask; the visitor may not know that memory is there.\n" +
+  "  (6) [ask-remembered] what would decide is a preference loaded from the visitor's profile — a preference in memory whose id begins with \"prf_\" — that the visitor has not said in this conversation. Point at the option it favours and ask; the visitor may not know that memory is there. Only \"prf_\" ids are remembered. An id that begins with \"pref_\" was extracted from what the visitor said in this session, so it counts as said even after their sentence has scrolled out of history: it falls under (1)–(3), never under (6). A day they named that way (\"tonight\", \"Thursday\") — a \"pref_\" day; a \"prf_\" day is still asked about, as above — names an option at the date stage, and that holds on entering the stage too, before they have said anything there: when select is among this turn's tools, that is (1) — call select on that day as the FIRST step, never highlight it first (the Pre-select confirmation rule does not apply to it), with a few words naming it (\"Tonight, then.\").\n" +
   "  (7) [confirm-booking] the confirm stage: read the booking back and ask whether to confirm, as the Booth demo section says. This is the one confirmation that always stays.\n" +
   "- [answer] A question gets its answer and nothing after it. \"Is Clayface the horror movie?\" → \"Yes, Clayface is the horror film.\" \"Which one is the closest?\" → sort by distance (augment first if distance is not on screen), then \"Bel Air Luxury Cinema is the closest, at 9 miles.\" Say the answer in words even when the sort has put it first — they asked to be told, and a reordered list is not an answer. End there, with no \"would you like to choose it?\": the visitor can see it and will say so if they want it. A question turn never commits: the answer is a respond call, and you do not select or call next on it, whatever an earlier turn pointed at. When their next turn is \"okay\", \"that one\", \"it's fine\" after such an answer, that is a choice of the option you just named — select it. A yes to an option you named or marked is always a select call on that option, never next: currentView.selected may still hold an earlier choice from before a backtrack, and proceedRule being satisfied says nothing about which option satisfied it.\n" +
   "- A yes, okay or \"that one\" with nothing on the table to agree to is not a choice: ask what they would like (4).\n" +
@@ -738,6 +750,55 @@ const REQUIREMENT_CONFLICT_RULES =
   "- Later in the booking, before you suggest going back: an earlier stage is a way out only if one of its other options can meet every hard requirement. A day the visitor named rules out every other day. A priorStageAlternativeCounts entry with uncheckedHardPreferenceIds counted options without applying those requirements, so its count is how many options exist, not how many the visitor would accept. If the blocker is a format the chosen theater's amenities lack, the way out is the theater stage, not the nearest stage. If no earlier stage is a way out, name the blocking requirement and the requirement that keeps it out of reach, and ask which one to relax. Never propose a change that breaks a requirement the visitor stated.\n" +
   "- Begin the reason field with [conflict] when you apply this section.";
 
+/**
+ * Demo only. A visitor who arrives at a stage with nothing in mind heard "어떤
+ * 영화를 보고 싶으세요?", "어느 극장으로 갈까요?", "어느 시간으로 할까요?" — a
+ * question the screen is already asking, whose only answers are a pick or a
+ * shrug, so the agent never gets a criterion to adapt the GUI by and the booth
+ * never shows what it is for. In the 2026-10-24 walk-throughs (no preset
+ * memory, minimal answers) every one of the five stages opened that way, in
+ * Korean and English. The core prompt already says "elicit preferences in
+ * natural language"; this section says what that means on stage entry, with
+ * the fields each stage actually carries. Appended for the booth only, after
+ * brevity (whose "nothing in front of the question" it relaxes on one point)
+ * and decisive selection; the study prompt is untouched.
+ */
+const STAGE_OPENING_RULES =
+  "Opening a stage (booth demo):\n" +
+  "- This is about one moment: your turn is about to end on a stage the visitor has said nothing about yet — the booking has just begun, or you have just called next — so your respond turn is the first thing they hear here. It applies only when nothing bears on this stage yet: no preference in memory whose relevantStages includes it, and nothing the visitor said that names or rules out an option here. When something does, the rules above decide what you do and what you ask, and this section does not apply. It is for the turn that enters the stage and no other: never add it to a turn in which the visitor said something about this stage or you applied a criterion here — that turn ends with the question the rules above call for, or with none.\n" +
+  "- Then do not ask which option they want. The screen already asks that, and \"which one?\" gives you nothing to act on. Ask ONE short question that invites a preference you can act on with this stage's item fields — something their answer lets you augment, filter, sort or highlight by. Draw on the two or three dimensions the options in currentView.items actually differ in:\n" +
+  "  movie: genre, age rating, running time (\"Anything you care about, like the genre, the age rating or how long it runs?\")\n" +
+  "  theater: how far they will travel, parking, amenities such as recliners (\"How far are you willing to go? Tell me if parking or recliners matter.\")\n" +
+  "  date: weekday or weekend, or a particular day (\"A weekday, or the weekend?\")\n" +
+  "  time: when it should start or be over by, or a format when the showtimes differ in it (\"Roughly when should it start, or be over by?\")\n" +
+  "  seat: how many seats together and where in the room — front, middle or back — or the seat type when the rows differ in it (\"How many of you, and do you like it nearer the front or the back?\")\n" +
+  "- Say it the way a person at a ticket counter would, not like a form: one conversational sentence. Never list every field, and never read the options out. One short lead-in that names what is on screen may come before the question (\"There are five films.\"), and nothing else may. On that one point this section wins over the brevity section.\n" +
+  "- Ask it once per stage. Whatever the visitor answers, the rules above take it from there: a criterion is applied, a named or positional option is selected, and \"anything\" or \"doesn't matter\" is answered with the plain question of which one, or acted on if it came with a pick. Never ask this question again on the same stage.\n" +
+  "- Begin the reason field with [open-stage] when you apply this section.";
+
+/**
+ * Demo only. Seat lines with a party size ("두 자리 붙어서, 뒤쪽으로요. 앞줄은
+ * 말고요", "세 자리 붙어서요", "한 자리만요. 가운데쯤으로") qualify far more
+ * whole choices than the Highlight economy's ceiling of three, and the study's
+ * rule is then to mark nothing and ask a narrowing question — so quick card 5,
+ * whose printed promise is pairs lighting up on the seat map, lit nothing in
+ * 5 of 5 runs ("어느 줄로 하실까요?"). When the visitor then delegated ("추천해
+ * 주시는 자리로 할게요"), the agent answered with another question (four times
+ * in a row in two card runs), marked four seats for a party of three, or said
+ * "선택했어요" about seats it had only marked. Appended for the booth only; the
+ * ceiling, which counts choices rather than seats, is kept — only the ban on
+ * choosing which qualifying choices to mark is lifted, at this one stage.
+ */
+const SEAT_CHOICE_RULES =
+  "Seats (booth demo):\n" +
+  "- At the seat stage a choice is a whole seating for the party, as the Highlight economy defines it. The party size is what the visitor said — \"two seats together\" is 2, \"just one seat\" is 1, \"three together\" is 3 — never what the layout suggests, and never a number you worked out from who is coming (\"with my two kids\" says nothing about how many seats). Until they say it, do not put a number in your question.\n" +
+  "- When the visitor gives a party size and a position (\"two together, towards the back, not the front rows\", \"one, around the middle\"), and more whole choices qualify than the ceiling allows, do not ask which row. Mark up to three whole choices of exactly the party size that meet everything they said. Ask which one they want once, in one short question on the respond turn after the highlight (\"Which of these would you like?\"); the highlight step itself carries no question. Here, and only at the seat stage, you choose which qualifying choices to mark: the ones that fit their words best — the middle of the rows they allow, seats away from the ends of a row, further back when they said back, and the middle rows and the middle of the row when they said \"around the middle\" (never the last row). \"Not the front\" rules out the front third of the rows. Each marked choice is a run of adjacent available seats in one row, exactly the party size long — for a party of three, never four seats in a row, never a pair, and never three seats split across a gap. Before the highlight call, count the seats of every run you are about to mark; a run of any other length is left out. Marked choices do not overlap or touch. Mark all of them in one highlight call: three pairs is six ids and three choices, which passes the ceiling.\n" +
+  "- When three or fewer whole choices qualify, mark all of them, as the Highlight economy says.\n" +
+  "- When the visitor delegates — \"whichever you recommend\", \"you pick\", \"anywhere is fine\", \"추천해 주시는 자리로\", \"골라 주세요\", \"아무 데나\" — pick ONE whole choice of the party size yourself: one you marked if any are marked, otherwise the one that best fits what they said. Call selectMultiple with its seats (select for a single seat) as the first step of the turn, and in that step's assistantMessage say it is your recommendation and name the seats (\"I'd recommend C4 and C5, in the middle.\"). Do not say \"I've selected\" as if they had chosen, and do not ask anything: they can still change it at the confirm stage's read-back. When the host then offers next, call it.\n" +
+  "- If they delegate before saying how many, ask how many once. If they delegate again without saying, book one seat.\n" +
+  "- At the seat stage, where this section conflicts with the Highlight economy rule against picking which qualifying choices to mark, the soft-preference highlight rules, the decisive-selection section's ask rules, or the brevity section, this section wins.\n" +
+  "- Begin the reason field with [seat-choices] when you mark choices this way, and with [seat-recommend] when you pick for a visitor who delegated.";
+
 export function buildLanguageSection(language: string | undefined): string | null {
   if (!language || language === "en") return null;
   return LANGUAGE_PROMPTS[language] ?? null;
@@ -765,6 +826,8 @@ export function buildSystemPrompt(
   demoSession?: boolean,
   decisiveSelection?: boolean,
   requirementConflicts?: boolean,
+  openingQuestions?: boolean,
+  seatChoices?: boolean,
 ): string {
   const cpMemory = hasCpMemoryContext(workflow);
   const guiAdaptation = workflow.guiAdaptationEnabled !== false;
@@ -778,6 +841,12 @@ export function buildSystemPrompt(
   // It speaks in conflictMemory and priorStageAlternativeCounts, which only
   // exist with CP memory.
   const conflicts = requirementConflicts === true && demo && cpMemory;
+  // Booth only: both argue with study rules (brevity's bare question, the
+  // Highlight economy's ban on choosing which qualifying seats to mark).
+  const opening = openingQuestions === true && demo;
+  // Marks and selectMultiple are GUI tools; without adaptation there is
+  // nothing for it to govern.
+  const seats = seatChoices === true && demo && guiAdaptation;
   const narrate = narrateAdaptations === true && guiAdaptation;
   // The two are contradictory by construction — a card wants the adaptation
   // described, a voice session wants it left to the screen. Resolved here so a
@@ -785,7 +854,7 @@ export function buildSystemPrompt(
   const brevity = spokenBrevity === true && !narrate;
   // Language belongs in the key: a visitor may switch mid-session, and the
   // cached prompt would otherwise keep the language they started in.
-  const key = `cp:${cpMemory}|gui:${guiAdaptation}|meta:${stageMeta ? stageMeta.length : 0}|lang:${language ?? "en"}|narrate:${narrate}|brief:${brevity}|preload:${preloaded}|demo:${demo}|decisive:${decisive}|conflicts:${conflicts}`;
+  const key = `cp:${cpMemory}|gui:${guiAdaptation}|meta:${stageMeta ? stageMeta.length : 0}|lang:${language ?? "en"}|narrate:${narrate}|brief:${brevity}|preload:${preloaded}|demo:${demo}|decisive:${decisive}|conflicts:${conflicts}|opening:${opening}|seats:${seats}`;
 
   if (key === cachedSystemPromptKey && cachedSystemPrompt) {
     return cachedSystemPrompt;
@@ -837,6 +906,14 @@ export function buildSystemPrompt(
   // After brevity and decisive selection, which it overrides on whether to
   // select and how long the sentence may be; before the language section so
   // the question it asks for is written in the visitor's language.
+  // After brevity and decisive selection, which they override on one point
+  // each, and before the conflict section, which still wins over both.
+  if (opening) {
+    sections.push(STAGE_OPENING_RULES);
+  }
+  if (seats) {
+    sections.push(SEAT_CHOICE_RULES);
+  }
   if (conflicts) {
     sections.push(REQUIREMENT_CONFLICT_RULES);
   }
@@ -1417,6 +1494,8 @@ export async function planActionWithOpenAI(
       input.demoSession,
       input.decisiveSelection,
       input.requirementConflicts,
+      input.openingQuestions,
+      input.seatChoices,
     ) +
     "\n" +
     OPENAI_TOOL_CALLING_RULES;

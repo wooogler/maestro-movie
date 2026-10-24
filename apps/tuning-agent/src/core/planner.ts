@@ -9,6 +9,7 @@ import { refreshModelEnvVars } from './envRefresh';
 import { agentNotice } from './agentNotices';
 import type { AgentMemory } from './memory';
 import { isSelectableItem } from './filterSimulation';
+import { isProfilePreferenceId } from './cpMemory';
 import {
   getEnabledVisibleItems,
   getHighlightedIds,
@@ -241,7 +242,8 @@ function getPlannerToolSchema(
   toolSchema: ToolSchemaItem[],
   lastAgentToolName?: string | null,
   suppressNavigationTools?: boolean,
-  keepSelectAfterGuiStep?: boolean
+  keepSelectAfterGuiStep?: boolean,
+  keepSelectAtStageEntry?: boolean
 ): ToolSchemaItem[] {
   // Treat conversational text as assistant response (agent.message), not as a UI tool.
   const plannerTools = toolSchema.filter((tool) => tool.name !== 'postMessage');
@@ -259,8 +261,13 @@ function getPlannerToolSchema(
   // next — stage entry stays a consent boundary, the visitor has not spoken
   // there yet — and never after highlight, which is the step that points
   // rather than commits.
-  const guiThenCommitTools = keepSelectAfterGuiStep
+  const guiThenCommitTools = keepSelectAfterGuiStep || keepSelectAtStageEntry
     ? new Set([...guiFollowUpTools, 'select', 'selectMultiple'])
+    : guiFollowUpTools;
+  // Booth demo only (see keepSelectAtDateEntry): the one stage entry where the
+  // visitor's consent was given earlier, by naming the day.
+  const stageEntryTools = keepSelectAtStageEntry
+    ? new Set([...guiFollowUpTools, 'select'])
     : guiFollowUpTools;
 
   switch (lastAction) {
@@ -268,7 +275,7 @@ function getPlannerToolSchema(
     case 'selectMultiple':
       return restrictNavigation(plannerTools.filter((tool) => tool.name === 'next'));
     case 'next':
-      return restrictNavigation(plannerTools.filter((tool) => guiFollowUpTools.has(tool.name)));
+      return restrictNavigation(plannerTools.filter((tool) => stageEntryTools.has(tool.name)));
     case 'highlight':
       return restrictNavigation([]);
     case 'augment':
@@ -713,6 +720,31 @@ function collapseRedundantSystemEntries(entries: CompactedHistoryEntry[]): Compa
   return collapsed;
 }
 
+/**
+ * Booth demo only: may the planner select at the date stage's entry, before
+ * the visitor has said anything there? Yes when memory holds a hard date
+ * preference the visitor stated in this session (a `pref_` id, from the
+ * extractor) — "오늘 밤에", "목요일 밤에" in the opener. Without it the stage
+ * entry stays a consent boundary, and the 2026-10-24 simulation asked "목요일로
+ * 할까요?" about a day the visitor had named in 10 of 10 runs. Only the date
+ * stage: a day is the one thing an opener reliably names for a later stage,
+ * and widening the theater or time entry would let a preference like "close
+ * to downtown" pick a cinema before the visitor's own distance limit arrives.
+ * A profile-seeded (`prf_`) preference never counts: it was never said, and
+ * DECISIVE_SELECTION_RULES (6) asks about it instead.
+ */
+export function keepSelectAtDateEntry(stage: string | null, preferences: Preference[]): boolean {
+  return (
+    stage === 'date' &&
+    preferences.some(
+      (preference) =>
+        preference.strength === 'hard' &&
+        preference.relevantStages.includes('date') &&
+        !isProfilePreferenceId(preference.id)
+    )
+  );
+}
+
 function buildPlannerHistory(
   context: PerceivedContext,
   cpMemoryEnabled: boolean,
@@ -1031,7 +1063,8 @@ export async function planNextAction(
       context.toolSchema,
       lastAgentToolName,
       suppressNavigationTools,
-      DEMO_SESSION && chainOpenedByUserUtterance(context.messageHistoryTail, stage)
+      DEMO_SESSION && chainOpenedByUserUtterance(context.messageHistoryTail, stage),
+      DEMO_SESSION && keepSelectAtDateEntry(stage, memory.getPreferences())
     );
     const plannerCpMemoryLimit = Math.max(0, Math.floor(context.plannerCpMemoryLimit ?? 0));
     const cpMemoryEnabled = plannerCpMemoryLimit > 0;
@@ -1065,7 +1098,15 @@ export async function planNextAction(
       // Profile-seeded preferences exist only in the demo; see
       // PRELOADED_MEMORY_RULES for why the planner is told about them.
       ...(memory.hasProfilePreferences() ? { preloadedMemory: true } : {}),
-      ...(DEMO_SESSION ? { demoSession: true, decisiveSelection: true, requirementConflicts: true } : {}),
+      ...(DEMO_SESSION
+        ? {
+            demoSession: true,
+            decisiveSelection: true,
+            requirementConflicts: true,
+            openingQuestions: true,
+            seatChoices: true,
+          }
+        : {}),
     };
 
     const llm = await planActionWithOpenAI(plannerInput);
