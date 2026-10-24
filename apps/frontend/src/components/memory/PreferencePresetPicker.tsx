@@ -20,7 +20,7 @@ interface PreferencePresetPickerProps {
  *
  * The preview is not a summary and it is not a separate box: the chosen card
  * opens to show its preferences with the very chip the memory rail uses --
- * hard ones first, then soft, stage dots and all -- so what the visitor agrees
+ * hard ones first, then soft, stage words and all -- so what the visitor agrees
  * to here is literally what they will see on the rail thirty seconds later.
  * Only the preferences: the rail's workflow graph has nothing to say before a
  * session exists.

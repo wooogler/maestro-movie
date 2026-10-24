@@ -3047,10 +3047,23 @@ export function ChatPage({
     ui,
   });
   const voiceError = voiceModeEnabled ? voiceSessionError : null;
+  /*
+    Voice is switched on but nothing is listening: the permission was denied,
+    there is no device, or the session dropped. The composer takes typing in
+    that state (see ChatInput), and the placeholder says so instead of showing
+    an error with nowhere to go. Not while the phone holds voice — the kiosk's
+    own hook is deliberately off then, and the phone is listening.
+  */
+  const voiceInputFailed =
+    voiceModeEnabled &&
+    voiceOutputTarget !== 'companion' &&
+    (!voiceInputSupported || voiceInputStatus === 'error' || voiceInputStatus === 'unsupported');
   const voiceModeButtonDisabled = !voiceInputSupported || isFinishTaskStep;
   const effectiveChatInputPlaceholder =
     isFinishTaskStep
       ? 'Voice off on finish step'
+      : voiceInputFailed
+      ? ui.micUnavailableTypeHere
       : voiceModeEnabled && (voiceError || voiceStatusLabel)
       ? (voiceError ?? voiceStatusLabel)!
       : interactionLocked
@@ -3445,6 +3458,7 @@ export function ChatPage({
               voiceOutputStatus={voiceOutputStatus}
               voiceInputStatus={voiceInputStatus}
               voiceError={voiceError}
+              voiceInputFailed={voiceInputFailed}
               compactLayoutEnabled={normalizedStudyModePreset === 'demo'}
               memoryPreferences={showMemoryPanel ? adaptationMemoryPreferences : null}
               highlightVoiceToggle={highlightVoiceToggle}
@@ -3609,6 +3623,7 @@ export function ChatPage({
             voiceStatusLabel={voiceStatusLabel}
             highlightVoiceToggle={highlightVoiceToggle}
             voiceToggleDisabled={voiceModeButtonDisabled}
+            voiceInputFailed={voiceInputFailed}
             onToggleVoiceMode={handleVoiceModeToggle}
             voiceVerbosityLabel={voiceVerbosityLabel}
             onOpenVoiceSettings={handleOpenVoiceSettings}

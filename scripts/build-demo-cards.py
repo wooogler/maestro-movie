@@ -291,8 +291,8 @@ QUICK_CARDS = [
         "badge": "2",
         "title": {"en": "Cinemas", "ko": "영화관"},
         "opener": {
-            "en": "I'm not driving more than 15 miles, and I don't want to pay for parking.",
-            "ko": "15마일 넘게는 운전 안 할 거고, 주차비도 내기 싫어요.",
+            "en": "I'm not driving more than 15 miles, and I don't want to pay for parking. Closest first.",
+            "ko": "15마일 넘게는 운전 안 할 거고, 주차비도 내기 싫어요. 가까운 순으로 보여 주세요.",
         },
         "watch": {
             "en": "Two cinemas drop out, the rest reorder by distance, and the miles appear.",
@@ -308,8 +308,8 @@ QUICK_CARDS = [
             "ko": "주말이어야 해요.",
         },
         "watch": {
-            "en": "Six days on the calendar, two left standing.",
-            "ko": "달력의 여섯 날 중 두 날만 남습니다.",
+            "en": "Six days on the calendar — the two weekend days light up.",
+            "ko": "달력의 여섯 날 중 주말 두 날이 강조됩니다.",
         },
     },
     {
@@ -334,8 +334,8 @@ QUICK_CARDS = [
             "ko": "두 자리 붙어서, 뒤쪽으로요. 앞줄은 말고요.",
         },
         "watch": {
-            "en": "The pairs that actually fit light up, in place, on the map you were already looking at.",
-            "ko": "조건에 맞는 자리 쌍이 보고 있던 좌석표 위에서 그대로 강조됩니다.",
+            "en": "A few of the best-fitting pairs light up, in place, on the map you were already looking at.",
+            "ko": "조건에 가장 잘 맞는 자리 몇 쌍이 보고 있던 좌석표 위에서 그대로 강조됩니다.",
         },
     },
 ]

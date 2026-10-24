@@ -12,7 +12,8 @@
  * Five cards, one per selection stage, so the set as a whole shows that the
  * adaptation is a property of the whole workflow and not a trick that works on
  * one screen. Between them they cover all four adaptation operations: filter
- * and augment on movies, sort on theaters, filter on dates and showtimes,
+ * and augment on movies, filter and sort on theaters (the line asks for the
+ * sort out loud), highlight on dates, filter and augment on showtimes, and
  * highlight on the seat map.
  *
  * `prefill` holds IDS ONLY, never resolved objects. The Detroit world is
@@ -130,11 +131,14 @@ export const QUICK_DEMO_CARDS: QuickDemoCard[] = [
     opener: {
       // Drops MJR Troy (20.4 mi) on distance and Cinema Detroit (Paid Parking)
       // on the amenity, leaving Bel Air 9, Redford 13.8, Emagine 14.2. 5 -> 3.
-      en: "I'm not driving more than 15 miles, and I don't want to pay for parking.",
-      ko: '15마일 넘게는 운전 안 할 거고, 주차비도 내기 싫어요.',
-      ja: '15マイル以上は運転したくないし、駐車料金も払いたくないです。',
-      'zh-Hans': '我开车不想超过 15 英里，也不想付停车费。',
-      'zh-Hant': '我開車不想超過 15 英里，也不想付停車費。',
+      // "Closest first" is said out loud because, unasked, the planner filtered
+      // and showed the miles but never sorted (KSEA simulation, 2/2 runs), and
+      // the sort is this card's share of the four operations.
+      en: "I'm not driving more than 15 miles, and I don't want to pay for parking. Closest first.",
+      ko: '15마일 넘게는 운전 안 할 거고, 주차비도 내기 싫어요. 가까운 순으로 보여 주세요.',
+      ja: '15マイル以上は運転したくないし、駐車料金も払いたくないです。近い順にお願いします。',
+      'zh-Hans': '我开车不想超过 15 英里，也不想付停车费。按距离从近到远排。',
+      'zh-Hant': '我開車不想超過 15 英里，也不想付停車費。依距離由近到遠排。',
     },
     watch: {
       en: 'Two cinemas drop out, the rest reorder by distance, and the miles appear.',
@@ -151,8 +155,10 @@ export const QUICK_DEMO_CARDS: QuickDemoCard[] = [
     badge: '3',
     title: { en: 'Dates', ko: '날짜', ja: '日付', 'zh-Hans': '日期', 'zh-Hant': '日期' },
     opener: {
-      // The calendar offers Tue 3 Nov through Sun 8 Nov. Sat 7 and Sun 8 stay.
-      // 6 -> 2.
+      // The calendar offers Tue 3 Nov through Sun 8 Nov; Sat 7 and Sun 8 are
+      // the weekend. The planner highlights those two rather than filtering
+      // the calendar 6 -> 2 (KSEA simulation, 2/2 runs), so `watch` promises
+      // the highlight.
       en: 'It has to be the weekend.',
       ko: '주말이어야 해요.',
       ja: '週末じゃないとだめです。',
@@ -160,11 +166,11 @@ export const QUICK_DEMO_CARDS: QuickDemoCard[] = [
       'zh-Hant': '一定要是週末。',
     },
     watch: {
-      en: 'Six days on the calendar, two left standing.',
-      ko: '달력의 여섯 날 중 두 날만 남습니다.',
-      ja: 'カレンダーの6日間のうち、2日だけが残ります。',
-      'zh-Hans': '日历上的六天，只剩下两天。',
-      'zh-Hant': '月曆上的六天，只剩下兩天。',
+      en: 'Six days on the calendar — the two weekend days light up.',
+      ko: '달력의 여섯 날 중 주말 두 날이 강조됩니다.',
+      ja: 'カレンダーの6日間のうち、週末の2日が強調表示されます。',
+      'zh-Hans': '日历上的六天中，周末两天会高亮显示。',
+      'zh-Hant': '月曆上的六天中，週末兩天會醒目標示。',
     },
   },
   {
@@ -197,8 +203,13 @@ export const QUICK_DEMO_CARDS: QuickDemoCard[] = [
     id: 'seat',
     stage: 'seat',
     // Klara at Emagine Royal Oak, Wed 4 Nov 7:10 PM: 37% sold, so the map looks
-    // used rather than empty, and seven adjacent pairs survive "middle, not the
-    // front" — enough that the highlight reads as a set and not a single guess.
+    // used rather than empty, and seven adjacent pairs survive "toward the
+    // back, not the front". The planner marks at most three choices (Highlight
+    // economy), so `watch` promises "a few of the best-fitting pairs", not
+    // every pair: three pairs in row E in a 24 Oct run, none in the two KSEA
+    // simulation runs, which asked which row instead. If an agent-side change
+    // marks the qualifying pairs as a set again, the old line ("the pairs that
+    // actually fit light up") can come back.
     prefill: {
       movieId: 'm2',
       theaterId: 't4',
@@ -215,11 +226,11 @@ export const QUICK_DEMO_CARDS: QuickDemoCard[] = [
       'zh-Hant': '兩個連在一起的座位，靠後面一點，不要前排。',
     },
     watch: {
-      en: 'The pairs that actually fit light up, in place, on the map you were already looking at.',
-      ko: '조건에 맞는 자리 쌍이 보고 있던 좌석표 위에서 그대로 강조됩니다.',
-      ja: '条件に合う2席の組が、今見ている座席表の上でそのまま強調表示されます。',
-      'zh-Hans': '符合条件的连座会直接在您正在看的座位图上高亮显示。',
-      'zh-Hant': '符合條件的相連座位會直接在您正在看的座位圖上醒目標示。',
+      en: 'A few of the best-fitting pairs light up, in place, on the map you were already looking at.',
+      ko: '조건에 가장 잘 맞는 자리 몇 쌍이 보고 있던 좌석표 위에서 그대로 강조됩니다.',
+      ja: '条件に最も合う2席の組がいくつか、今見ている座席表の上でそのまま強調表示されます。',
+      'zh-Hans': '最符合条件的几组连座会直接在您正在看的座位图上高亮显示。',
+      'zh-Hant': '最符合條件的幾組相連座位會直接在您正在看的座位圖上醒目標示。',
     },
   },
 ];

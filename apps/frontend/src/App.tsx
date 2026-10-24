@@ -216,6 +216,8 @@ function App() {
     which is the right failure: the session is still theirs and still works.
   */
   const [quickDemoCard, setQuickDemoCard] = useState<QuickDemoCard | null>(null);
+  /** Whether that card visitor pressed "start and talk" rather than "start and type". */
+  const [quickDemoCardVoice, setQuickDemoCardVoice] = useState(true);
 
   const [preferencePresetId, setPreferencePresetId] = useState<string | null>(null);
   const [preferenceProfileRevision, setPreferenceProfileRevision] = useState(0);
@@ -463,8 +465,13 @@ function App() {
     one — and only adds the card, which is the single thing that differs: where
     ChatPage opens.
   */
-  const handleQuickCardStarted = (session: StudySessionState, card: QuickDemoCard) => {
+  const handleQuickCardStarted = (
+    session: StudySessionState,
+    card: QuickDemoCard,
+    { voice }: { voice: boolean }
+  ) => {
     setQuickDemoCard(card);
+    setQuickDemoCardVoice(voice);
     handleStudySessionCreated(session);
   };
 
@@ -641,7 +648,10 @@ function App() {
                       // where the audio element is unlocked — a booth visit
                       // should begin listening and speaking, not with a hunt
                       // for the mic button. Study conditions keep the toggle.
-                      startWithVoice={Boolean(quickDemoCard) || demoMode}
+                      // A card visitor who pressed "start and type" instead
+                      // asked for the opposite, so that one starts with voice
+                      // off and the composer ready to type.
+                      startWithVoice={quickDemoCard ? quickDemoCardVoice : demoMode}
                     />
                   ) : (
                     <Navigate to="/" replace />

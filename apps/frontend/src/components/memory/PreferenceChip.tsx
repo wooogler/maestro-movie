@@ -1,10 +1,5 @@
 import type { AgentPreference } from '../../agent/protocol';
-import {
-  MEMORY_STAGE_INITIALS,
-  MEMORY_STAGE_ORDER,
-  isMemoryStage,
-  memoryStageLabel,
-} from './memoryFormat';
+import { MEMORY_STAGE_ORDER, isMemoryStage, memoryStageLabel } from './memoryFormat';
 import { useLanguage } from '../../i18n';
 
 /**
@@ -17,27 +12,54 @@ import { useLanguage } from '../../i18n';
  * them, and it should be impossible to change that in one place only.
  */
 
-export function StageDots({ stages }: { stages: string[] }) {
+/**
+ * Which booking steps a preference applies to, as the steps' own names.
+ *
+ * Every step is shown, in booking order, so the row has the same shape on
+ * every chip and the lit words stand out by position as well as by fill. It
+ * used to be one letter per step (M T D S St C); visitors at the booth could
+ * not tell what the letters meant, and the letters were English on a Korean
+ * screen. The words are `memoryStageLabel`, the same per-language names the
+ * workflow graph uses.
+ *
+ * Applied steps are filled; the others are an outline with muted text, kept
+ * legible rather than faded out, because "not this step" is information too.
+ * The row wraps rather than shrinking: English needs about 300px for all six
+ * words, which the phone sheet does not have.
+ *
+ * The pills are hidden from assistive tech and the row carries one label
+ * ("Applies to: Seat"), so a screen reader hears the applied steps rather
+ * than all six words with no way to tell which are lit.
+ */
+export function StageWords({ stages }: { stages: string[] }) {
   const { s, language } = useLanguage();
   const active = new Set(stages);
   const names = stages
     .map((stage) => (isMemoryStage(stage) ? memoryStageLabel(stage, language) : stage))
     .join(', ');
   return (
-    <span className="flex items-center gap-0.5" aria-label={s.memoryAppliesTo.replace('{stages}', names)}>
-      {MEMORY_STAGE_ORDER.map((stage) => (
-        <span
-          key={stage}
-          title={memoryStageLabel(stage, language)}
-          className={`inline-flex h-4 min-w-4 items-center justify-center rounded px-1 text-[9px] font-semibold leading-none ${
-            active.has(stage)
-              ? 'bg-fg-strong/85 text-dark'
-              : 'bg-dark-lighter text-fg-muted'
-          }`}
-        >
-          {MEMORY_STAGE_INITIALS[stage]}
-        </span>
-      ))}
+    <span
+      role="img"
+      className="flex min-w-0 flex-wrap items-center gap-1"
+      aria-label={s.memoryAppliesTo.replace('{stages}', names)}
+    >
+      {MEMORY_STAGE_ORDER.map((stage) => {
+        const applies = active.has(stage);
+        return (
+          <span
+            key={stage}
+            aria-hidden="true"
+            data-active={applies ? 'true' : 'false'}
+            className={`inline-flex items-center whitespace-nowrap rounded-full px-1.5 text-[11px] leading-4 ${
+              applies
+                ? 'bg-fg-strong/85 font-semibold text-dark'
+                : 'font-medium text-fg-muted ring-1 ring-inset ring-dark-border'
+            }`}
+          >
+            {memoryStageLabel(stage, language)}
+          </span>
+        );
+      })}
     </span>
   );
 }
@@ -79,11 +101,11 @@ export function PreferenceChip({
           {hard ? s.memoryHard : s.memorySoft}
         </span>
       </div>
-      {/* The control sits on the stage-dot row, not beside the description:
-          that row is short and fixed-width, while the description above it
-          wraps to whatever length the agent wrote. */}
-      <div className="mt-1.5 flex items-center justify-between gap-2">
-        <StageDots stages={preference.relevantStages} />
+      {/* The control sits on the stage-word row, not beside the description:
+          the description wraps to whatever length the agent wrote. The words
+          wrap too on a narrow chip, so the control is pinned to the row's top. */}
+      <div className="mt-1.5 flex items-start justify-between gap-2">
+        <StageWords stages={preference.relevantStages} />
         {onDelete && (
           /*
             Two presses, not one.

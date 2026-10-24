@@ -19,7 +19,8 @@ import { AgentMemoryPanel } from './AgentMemoryPanel';
 import { PreferencePresetPicker } from './PreferencePresetPicker';
 import { PreferenceChip } from './PreferenceChip';
 import { PreferenceBriefingCard } from './PreferenceBriefingCard';
-import { LanguageProvider } from '../../i18n';
+import { LanguageProvider, type Language } from '../../i18n';
+import { MEMORY_STAGE_ORDER, memoryStageLabel } from './memoryFormat';
 import { createProfileFromPreset, findPreferencePreset } from '../../study/preferenceProfile';
 import { CompanionPairingCard } from '../companion/CompanionPairingCard';
 import type { AgentMemorySnapshot } from '../../agent/protocol';
@@ -50,7 +51,7 @@ section('1. PRESET PICKER — the preview is the rail\'s own vocabulary');
   // teach the same thing or it is teaching the wrong thing.
   check('a hard preference renders solid', picked.includes('border-solid'));
   check('a soft preference renders dashed', picked.includes('border-dashed'));
-  check('stage dots carry their label', picked.includes('Applies to: Seat'));
+  check('stage words carry their label', picked.includes('Applies to: Seat'));
   check('nothing is removable before a session exists', !picked.includes('>Forget<'));
 
   const empty = renderToStaticMarkup(
@@ -353,6 +354,92 @@ section('4. BRIEFING CARD — what the agent remembers, before it may act on it'
   check('in Korean the title is Korean', korean.includes('에이전트가 기억하고 있는 것'));
   check('and so is every preference', korean.includes('G 또는 PG 등급 영화만.'));
   check('and the confirm button', korean.includes('이대로 시작'));
+}
+
+section('5. STAGE WORDS — each step by name, in the session language');
+{
+  /*
+    The row under a chip used to be one letter per step (M T D S St C), and
+    visitors could not read it. It is now the steps' names, lit where the
+    preference applies. Checked per language because the failure that matters
+    is a Korean screen still showing English, or letters, and that is exactly
+    what a screenshot cannot show: headless Chromium has no CJK font.
+  */
+  const preference = {
+    id: 'prf_late',
+    description: 'Wants a late showing at a nearby cinema.',
+    strength: 'hard' as const,
+    relevantStages: ['theater', 'time'],
+  };
+  const chipIn = (language: Language) =>
+    renderToStaticMarkup(
+      createElement(LanguageProvider, {
+        initialLanguage: language,
+        children: createElement(PreferenceChip, { preference, isNew: false, isBlocked: false }),
+      })
+    );
+  const pill = (markup: string, word: string, active: boolean) =>
+    new RegExp(`data-active="${active}" class="[^"]*">${word}<`).test(markup);
+
+  const expected: Array<[Language, string[], string]> = [
+    ['en', ['Movie', 'Theater', 'Date', 'Showtime', 'Seat', 'Confirm'], 'Applies to: Theater, Showtime'],
+    ['ko', ['영화', '극장', '날짜', '시간', '좌석', '확인'], '적용 단계: 극장, 시간'],
+    ['ja', ['映画', '映画館', '日付', '上映時間', '座席', '確認'], '対象: 映画館, 上映時間'],
+    ['zh-Hans', ['电影', '影院', '日期', '场次', '座位', '确认'], '适用于：影院, 场次'],
+    ['zh-Hant', ['電影', '戲院', '日期', '場次', '座位', '確認'], '適用於：戲院, 場次'],
+    // Voice-only packs: their UI is still English, so the words are too.
+    ['de', ['Movie', 'Theater', 'Date', 'Showtime', 'Seat', 'Confirm'], 'Applies to: Theater, Showtime'],
+  ];
+  for (const [language, words, label] of expected) {
+    const markup = chipIn(language);
+    check(
+      `${language}: the table is what the chip renders`,
+      MEMORY_STAGE_ORDER.every((stage, index) => memoryStageLabel(stage, language) === words[index])
+    );
+    check(
+      `${language}: all six steps are named, in booking order`,
+      words.every((word) => markup.includes(`>${word}<`)) &&
+        words.map((word) => markup.indexOf(`>${word}<`)).every((at, i, all) => i === 0 || at > all[i - 1])
+    );
+    check(
+      `${language}: the two it applies to are lit, the other four are not`,
+      pill(markup, words[1], true) &&
+        pill(markup, words[3], true) &&
+        [0, 2, 4, 5].every((index) => pill(markup, words[index], false))
+    );
+    check(`${language}: the row keeps its spoken label`, markup.includes(`aria-label="${label}"`));
+  }
+
+  const english = chipIn('en');
+  check('no initials are left', !/>(M|T|D|S|St|C)</.test(english));
+  check('the pills are hidden from a screen reader, the row is not', (english.match(/aria-hidden="true"/g) ?? []).length === 6 && english.includes('role="img"'));
+  check('the row wraps rather than shrinking the words', english.includes('flex-wrap') && english.includes('whitespace-nowrap'));
+
+  // The same words on the projected mirror, which renders the panel read-only.
+  const mirror = renderToStaticMarkup(
+    createElement(LanguageProvider, {
+      initialLanguage: 'ko',
+      children: createElement(AgentMemoryPanel, {
+        snapshot: {
+          updatedAt: '2026-11-03T19:20:00.000Z',
+          reason: 'preference-added',
+          stage: 'time',
+          preferences: [preference],
+          deadEnds: [],
+          attemptedBranches: [],
+          committedWorkflow: null,
+          pendingConflict: null,
+          backtrackContinuation: null,
+          stageBindings: [],
+          forgottenPreferences: [],
+          revokedAdaptations: [],
+        },
+        currentStage: 'time',
+        variant: 'mirror',
+      }),
+    })
+  );
+  check('the Korean mirror names the lit steps in Korean', pill(mirror, '극장', true) && pill(mirror, '시간', true));
 }
 
 if (failures > 0) {

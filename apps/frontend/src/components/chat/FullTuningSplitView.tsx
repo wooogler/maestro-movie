@@ -46,6 +46,8 @@ interface FullTuningSplitViewProps {
   voiceOutputStatus?: string | null;
   voiceInputStatus?: string | null;
   voiceError?: string | null;
+  /** Voice is on but the mic never opened; the composer then takes typing. */
+  voiceInputFailed?: boolean;
   highlightVoiceToggle?: boolean;
   voiceToggleDisabled?: boolean;
   onToggleVoiceMode?: () => void;
@@ -349,11 +351,13 @@ function getCollapsedConversationStatus(params: {
     };
   }
 
+  // Voice is off, so the composer inside takes typing (see ChatInput); the
+  // mic button beside this one is the way back to talking.
   if (voiceModeAvailable) {
     return {
-      badge: 'Mic',
-      text: 'Expand the conversation to turn on voice mode.',
-      compactText: 'Mic off',
+      badge: 'Type',
+      text: 'Expand the conversation to type, or turn on voice mode.',
+      compactText: 'Open to type',
       badgeClass: 'border-dark-border bg-dark-light text-fg',
     };
   }
@@ -382,6 +386,7 @@ export function FullTuningSplitView({
   voiceOutputStatus = null,
   voiceInputStatus = null,
   voiceError = null,
+  voiceInputFailed = false,
   highlightVoiceToggle = false,
   voiceToggleDisabled = false,
   onToggleVoiceMode,
@@ -1354,6 +1359,7 @@ export function FullTuningSplitView({
                     voiceStatusLabel={voiceStatusLabel}
                     highlightVoiceToggle={highlightVoiceToggle}
                     voiceToggleDisabled={voiceToggleDisabled}
+                    voiceInputFailed={voiceInputFailed}
                     onToggleVoiceMode={onToggleVoiceMode}
                     voiceVerbosityLabel={voiceVerbosityLabel}
                     onOpenVoiceSettings={onOpenVoiceSettings}

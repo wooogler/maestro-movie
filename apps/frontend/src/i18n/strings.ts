@@ -110,7 +110,12 @@ export interface UiStrings {
   voiceReady: string;
   voiceError: string;
   voiceUnavailable: string;
+  /** Voice is available but off: the box takes typing, the mic sits beside it. */
   tapMicForVoice: string;
+  /** Voice is on but the microphone failed, so typing is the way in. */
+  micUnavailableTypeHere: string;
+  /** Accessible name of the composer's send button. */
+  sendMessage: string;
   waitingForAgent: string;
   waitingForSession: string;
   waitingForRelay: string;
@@ -265,6 +270,8 @@ export interface UiStrings {
   quickCardSayThis: string;
   quickCardWatchFor: string;
   quickCardStart: string;
+  /** The card's second way in: the same session, with voice off and the box ready to type. */
+  quickCardStartTyping: string;
   quickCardPreparing: string;
   quickCardMicNote: string;
   quickCardNoRecording: string;
@@ -357,7 +364,9 @@ const EN: UiStrings = {
   voiceReady: 'Voice ready',
   voiceError: 'Voice error',
   voiceUnavailable: 'Voice unavailable',
-  tapMicForVoice: 'Tap mic for voice',
+  tapMicForVoice: 'Type here, or tap the mic to talk',
+  micUnavailableTypeHere: 'Mic unavailable. Type here instead',
+  sendMessage: 'Send',
   waitingForAgent: 'Waiting for agent...',
   waitingForSession: 'Waiting for session...',
   waitingForRelay: 'Waiting for agent relay connection...',
@@ -500,6 +509,7 @@ const EN: UiStrings = {
   quickCardSayThis: 'Say this',
   quickCardWatchFor: 'Watch for',
   quickCardStart: 'Start and talk',
+  quickCardStartTyping: 'Start and type',
   quickCardPreparing: 'Setting the scene...',
   quickCardMicNote: 'Your phone will ask for the microphone. You can type instead if the room is loud.',
   quickCardNoRecording: 'Nothing from this demo is recorded.',
@@ -587,7 +597,9 @@ const KO: UiStrings = {
   voiceReady: '음성 준비됨',
   voiceError: '음성 오류',
   voiceUnavailable: '음성을 쓸 수 없음',
-  tapMicForVoice: '마이크를 눌러 말하세요',
+  tapMicForVoice: '입력하거나 마이크를 눌러 말하세요',
+  micUnavailableTypeHere: '마이크를 쓸 수 없어요. 여기에 입력하세요',
+  sendMessage: '보내기',
   waitingForAgent: '에이전트를 기다리는 중...',
   waitingForSession: '세션을 기다리는 중...',
   waitingForRelay: '에이전트 릴레이 연결을 기다리는 중...',
@@ -729,6 +741,7 @@ const KO: UiStrings = {
   quickCardSayThis: '이렇게 말해보세요',
   quickCardWatchFor: '이걸 지켜보세요',
   quickCardStart: '시작하고 말하기',
+  quickCardStartTyping: '시작하고 입력하기',
   quickCardPreparing: '화면을 준비하는 중...',
   quickCardMicNote: '휴대폰이 마이크 권한을 물어봅니다. 주변이 시끄러우면 타이핑으로 하셔도 됩니다.',
   quickCardNoRecording: '이 데모에서는 아무것도 기록되지 않습니다.',
@@ -833,7 +846,9 @@ const JA_OVERRIDES: Partial<UiStrings> = {
   voiceReady: '音声の準備完了',
   voiceError: '音声エラー',
   voiceUnavailable: '音声を利用できません',
-  tapMicForVoice: 'マイクをタップして話してください',
+  tapMicForVoice: '入力するか、マイクをタップして話してください',
+  micUnavailableTypeHere: 'マイクを使えません。ここに入力してください',
+  sendMessage: '送信',
   waitingForAgent: 'エージェントを待っています...',
   waitingForSession: 'セッションを待っています...',
   waitingForRelay: 'エージェントのリレー接続を待っています...',
@@ -975,6 +990,7 @@ const JA_OVERRIDES: Partial<UiStrings> = {
   quickCardSayThis: 'こう話してください',
   quickCardWatchFor: 'ここに注目',
   quickCardStart: '開始して話す',
+  quickCardStartTyping: '開始して入力する',
   quickCardPreparing: '画面を準備中...',
   quickCardMicNote: 'スマホがマイクの許可を求めます。周りがうるさい場合は文字入力もできます。',
   quickCardNoRecording: 'このデモでは何も記録されません。',
@@ -1068,7 +1084,9 @@ const ZH_HANS_OVERRIDES: Partial<UiStrings> = {
   voiceReady: '语音已就绪',
   voiceError: '语音出错',
   voiceUnavailable: '语音不可用',
-  tapMicForVoice: '点击麦克风说话',
+  tapMicForVoice: '输入文字，或点击麦克风说话',
+  micUnavailableTypeHere: '麦克风不可用，请在这里输入',
+  sendMessage: '发送',
   waitingForAgent: '正在等待智能体...',
   waitingForSession: '正在等待会话...',
   waitingForRelay: '正在等待智能体中继连接...',
@@ -1208,6 +1226,7 @@ const ZH_HANS_OVERRIDES: Partial<UiStrings> = {
   quickCardSayThis: '请这样说',
   quickCardWatchFor: '请留意',
   quickCardStart: '开始并说话',
+  quickCardStartTyping: '开始并打字',
   quickCardPreparing: '正在准备场景...',
   quickCardMicNote: '手机会请求使用麦克风。如果周围很吵，也可以打字。',
   quickCardNoRecording: '本演示不会记录任何内容。',
@@ -1302,7 +1321,9 @@ const ZH_HANT_OVERRIDES: Partial<UiStrings> = {
   voiceReady: '語音已就緒',
   voiceError: '語音錯誤',
   voiceUnavailable: '無法使用語音',
-  tapMicForVoice: '點一下麥克風說話',
+  tapMicForVoice: '輸入文字，或點一下麥克風說話',
+  micUnavailableTypeHere: '無法使用麥克風，請在這裡輸入',
+  sendMessage: '傳送',
   waitingForAgent: '正在等待代理程式...',
   waitingForSession: '正在等待工作階段...',
   waitingForRelay: '正在等待代理程式中繼連線...',
@@ -1442,6 +1463,7 @@ const ZH_HANT_OVERRIDES: Partial<UiStrings> = {
   quickCardSayThis: '請這樣說',
   quickCardWatchFor: '請留意',
   quickCardStart: '開始並說話',
+  quickCardStartTyping: '開始並打字',
   quickCardPreparing: '正在準備畫面...',
   quickCardMicNote: '手機會要求使用麥克風。如果周圍很吵，也可以改用打字。',
   quickCardNoRecording: '此示範不會記錄任何內容。',
