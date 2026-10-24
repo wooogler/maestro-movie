@@ -47,9 +47,11 @@
 @keyframes gui-item-enter {
   from {
     opacity: 0;
+    transform: translateY(8px);
   }
   to {
     opacity: 1;
+    transform: translateY(0);
   }
 }
 
@@ -156,17 +158,31 @@
   }
 }
 
+/*
+  The durations come from `LIST_MOTION` (renderer/components/listMotion.ts),
+  through custom properties on the list wrapper, so the stylesheet and the
+  timer that drops an exited item cannot drift apart. The sort/close-up slide
+  is not here at all: ButtonGroup runs it as a transform-only Web Animation,
+  which leaves these transitions alone on an item that is moving and leaving at
+  once.
+
+  `max-height` and `margin-bottom` are layout properties and stay main-thread;
+  they are kept on purpose — the exit collapse is what lets the items below
+  close the gap smoothly in a single column — and they transition *only* on
+  `.gui-item-exit` below (transitions take the list of the style being changed
+  to). Listed here, they also ran on every reorder: a sort changes which item
+  is `:last-child`, so one item's margin went 0 → 12px and another's 12px → 0
+  through a 380ms transition — a forced layout on every frame of every sort,
+  measured as 20 of the sort window's extra layouts.
+*/
 .gui-item-shell {
   margin-bottom: 0.75rem;
   transform-origin: top center;
-  transition:
-    opacity 380ms ease,
-    max-height 380ms cubic-bezier(0.22, 1, 0.36, 1),
-    margin-bottom 380ms cubic-bezier(0.22, 1, 0.36, 1);
+  transition: opacity var(--gui-item-exit-ms) ease;
   /*
-    `max-height` was in here too, which bought nothing — it is a layout
-    property, so no promotion can make it cheap — while pinning a compositor
-    layer per item for the whole life of the list.
+    `max-height` was in `will-change` too, which bought nothing — it is a
+    layout property, so no promotion can make it cheap — while pinning a
+    compositor layer per item for the whole life of the list.
   */
   will-change: opacity;
   max-height: 120px;
@@ -211,8 +227,18 @@
   margin-bottom: 0;
 }
 
+/*
+  The split view's fit-to-height scale, easing to a list's settled height
+  (FullTuningSplitView adds this only for that re-read). Transform only.
+*/
+.gui-fit-scale-eased {
+  transition: transform var(--gui-fit-scale-ms) cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+/* `both`: an item waiting out its delay is already invisible, not flashed in. */
 .gui-item-enter {
-  animation: gui-item-enter 440ms cubic-bezier(0.22, 1, 0.36, 1);
+  animation: gui-item-enter var(--gui-item-enter-ms) cubic-bezier(0.22, 1, 0.36, 1)
+    var(--gui-item-enter-delay-ms) both;
 }
 
 .gui-item-exit {
@@ -221,6 +247,10 @@
   margin-bottom: 0;
   pointer-events: none;
   overflow: hidden;
+  transition:
+    opacity var(--gui-item-exit-ms) ease,
+    max-height var(--gui-item-exit-ms) cubic-bezier(0.22, 1, 0.36, 1),
+    margin-bottom var(--gui-item-exit-ms) cubic-bezier(0.22, 1, 0.36, 1);
 }
 
 .gui-item-text-shift {
@@ -415,7 +445,9 @@
     opacity: 0 !important;
   }
 
-  .gui-item-shell {
+  .gui-item-shell,
+  .gui-item-exit,
+  .gui-fit-scale-eased {
     transition: none;
   }
 }

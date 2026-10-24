@@ -19,3 +19,4 @@ export {
 export type { StageProps } from './stages';
 
 export { ButtonGroup } from './components/ButtonGroup';
+export { GUI_LIST_SETTLED_EVENT, LIST_MOTION } from './components/listMotion';
