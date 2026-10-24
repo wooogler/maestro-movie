@@ -18,15 +18,18 @@ export const MEMORY_STAGE_LABELS: Record<MemoryStage, string> = {
 };
 
 /**
- * Short form for the stage dots on a preference chip, where space is scarce,
- * per session language. A language with no table reads in English.
+ * The step names per session language: the stage words on a preference chip,
+ * where space is scarce, and the workflow graph. Kept to the booking stepper's
+ * own words so the chip and the stepper above it name a step the same way.
+ * A language with no table reads in English — de, fr and es, whose UI is still
+ * English.
  */
 const MEMORY_STAGE_LABELS_BY_LANGUAGE: Readonly<Record<string, Record<MemoryStage, string>>> = {
   ko: {
     movie: '영화',
     theater: '극장',
     date: '날짜',
-    time: '상영 시간',
+    time: '시간',
     seat: '좌석',
     confirm: '확인',
   },
@@ -61,15 +64,6 @@ const MEMORY_STAGE_LABELS_BY_LANGUAGE: Readonly<Record<string, Record<MemoryStag
 export function memoryStageLabel(stage: MemoryStage, language: string): string {
   return (MEMORY_STAGE_LABELS_BY_LANGUAGE[language] ?? MEMORY_STAGE_LABELS)[stage];
 }
-
-export const MEMORY_STAGE_INITIALS: Record<MemoryStage, string> = {
-  movie: 'M',
-  theater: 'T',
-  date: 'D',
-  time: 'S',
-  seat: 'St',
-  confirm: 'C',
-};
 
 export function isMemoryStage(value: string): value is MemoryStage {
   return (MEMORY_STAGE_ORDER as readonly string[]).includes(value);
