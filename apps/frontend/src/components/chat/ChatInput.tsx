@@ -21,6 +21,12 @@ interface ChatInputProps {
   voiceStatusLabel?: string | null;
   highlightVoiceToggle?: boolean;
   voiceToggleDisabled?: boolean;
+  /**
+   * Voice mode is on but the microphone never opened: permission denied, no
+   * device, or the voice session dropped. The visitor is then not being heard,
+   * so the box has to take typing — otherwise there is no way in at all.
+   */
+  voiceInputFailed?: boolean;
   onToggleVoiceMode?: () => void;
   /** Current verbosity preset, shown on the pill so the setting is visible at rest. */
   voiceVerbosityLabel?: string | null;
@@ -37,6 +43,7 @@ export function ChatInput({
   voiceStatusLabel = null,
   highlightVoiceToggle = false,
   voiceToggleDisabled = false,
+  voiceInputFailed = false,
   onToggleVoiceMode,
   voiceVerbosityLabel = null,
   onOpenVoiceSettings,
@@ -45,7 +52,16 @@ export function ChatInput({
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
   const shouldRestoreFocusRef = useRef(false);
   const previousDisabledRef = useRef(disabled);
-  const isVoiceComposer = voiceModeAvailable;
+  /*
+    Read-only only while the microphone is actually what is listening.
+
+    This used to be `voiceModeAvailable` alone, so in every voice condition the
+    box stayed read-only with voice switched OFF too — "tap mic for voice" and
+    nothing to type into. A loud booth, a denied permission prompt or a phone
+    with no mic then had no way to reach the agent. Voice off, or voice on with
+    a failed mic, is a typing composer that keeps the mic button beside it.
+  */
+  const isVoiceComposer = voiceModeAvailable && voiceModeEnabled && !voiceInputFailed;
   const normalizedVoiceStatus = voiceStatusLabel?.toLowerCase() ?? '';
   const isVoiceInputHighlighted =
     voiceModeEnabled &&
@@ -116,7 +132,14 @@ export function ChatInput({
               : 'border border-transparent'
           }`}
         >
-          <div className="flex items-end gap-3">
+          {/*
+            Wraps rather than squeezing. The demo's conversation column is
+            about 260px wide, and with the verbosity pill, the mic and Send in
+            one row the box was left a few characters wide — a typed sentence
+            became a tall sliver. Below ~10rem of box the buttons drop to their
+            own row, right-aligned, and the box takes the full width.
+          */}
+          <div className="flex flex-wrap items-end gap-x-3 gap-y-2">
             <textarea
               ref={textareaRef}
               rows={1}
@@ -135,7 +158,7 @@ export function ChatInput({
                   handleSubmit();
                 }
               }}
-              className={`flex-1 resize-none rounded-3xl border bg-dark-light px-4 py-3 leading-6 text-fg-strong placeholder:text-fg placeholder:font-medium placeholder:opacity-100 transition-colors focus:outline-none ${
+              className={`min-w-0 flex-1 basis-40 resize-none rounded-3xl border bg-dark-light px-4 py-3 leading-6 text-fg-strong placeholder:text-fg placeholder:font-medium placeholder:opacity-100 transition-colors focus:outline-none ${
                 isVoiceInputHighlighted
                   ? 'border-accent-line/70 focus:border-accent-hover'
                   : 'border-dark-border focus:border-primary'
@@ -143,78 +166,83 @@ export function ChatInput({
                 isVoiceComposer ? 'cursor-default select-none' : ''
               }`}
             />
-            {isVoiceComposer && onOpenVoiceSettings ? (
-              <button
-                type="button"
-                onClick={onOpenVoiceSettings}
-                title={s.voiceSettingsHint}
-                aria-label={s.voiceSettingsTitle}
-                className="self-center shrink-0 rounded-full border border-dark-border bg-dark-light/70 px-2.5 py-1.5 text-[10px] font-semibold uppercase tracking-[0.14em] text-fg-muted transition-colors hover:border-primary hover:text-fg-strong"
-              >
-                {voiceVerbosityLabel ?? s.voice}
-              </button>
-            ) : null}
-            {isVoiceComposer ? (
-              <button
-                type="button"
-                disabled={micButtonDisabled}
-                onClick={() => onToggleVoiceMode?.()}
-                title={micButtonTitle}
-                aria-label={micButtonTitle}
-                className={`self-center flex h-10 w-10 shrink-0 items-center justify-center rounded-full border transition-colors ${
-                  voiceModeEnabled
-                    ? 'border-accent-line bg-accent text-accent-fg hover:bg-accent-hover'
-                    : shouldHighlightVoiceToggle
-                    ? 'animate-pulse border-primary bg-primary/12 text-primary-text shadow-[0_0_0_4px_var(--app-primary-glow)] hover:bg-primary/18'
-                    : 'border-info-border/60 bg-dark-light text-info-label hover:border-info-border hover:text-info-text'
-                } ${micButtonDisabled ? 'cursor-not-allowed opacity-50' : ''}`}
-              >
-                <svg
-                  className="h-5 w-5"
-                  fill="none"
-                  stroke="currentColor"
-                  viewBox="0 0 24 24"
+            <div className="ml-auto flex shrink-0 items-center gap-2 self-center">
+              {voiceModeAvailable && onOpenVoiceSettings ? (
+                <button
+                  type="button"
+                  onClick={onOpenVoiceSettings}
+                  title={s.voiceSettingsHint}
+                  aria-label={s.voiceSettingsTitle}
+                  className="self-center shrink-0 rounded-full border border-dark-border bg-dark-light/70 px-2.5 py-1.5 text-[10px] font-semibold uppercase tracking-[0.14em] text-fg-muted transition-colors hover:border-primary hover:text-fg-strong"
                 >
-                  <path
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                    strokeWidth={2}
-                    d="M12 15a3 3 0 003-3V7a3 3 0 10-6 0v5a3 3 0 003 3z"
-                  />
-                  <path
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                    strokeWidth={2}
-                    d="M19 11a7 7 0 01-14 0M12 18v3M8 21h8"
-                  />
-                </svg>
-              </button>
-            ) : (
-              <button
-                type="button"
-                disabled={disabled}
-                onClick={handleSubmit}
-                className={`self-center flex h-10 w-10 shrink-0 items-center justify-center rounded-full transition-colors ${
-                  isVoiceInputHighlighted
-                    ? 'bg-accent text-accent-fg hover:bg-accent-hover'
-                    : 'bg-primary text-primary-fg'
-                } ${disabled ? 'cursor-not-allowed opacity-50' : ''}`}
-              >
-                <svg
-                  className="h-5 w-5"
-                  fill="none"
-                  stroke="currentColor"
-                  viewBox="0 0 24 24"
+                  {voiceVerbosityLabel ?? s.voice}
+                </button>
+              ) : null}
+              {voiceModeAvailable ? (
+                <button
+                  type="button"
+                  disabled={micButtonDisabled}
+                  onClick={() => onToggleVoiceMode?.()}
+                  title={micButtonTitle}
+                  aria-label={micButtonTitle}
+                  className={`self-center flex h-10 w-10 shrink-0 items-center justify-center rounded-full border transition-colors ${
+                    voiceModeEnabled
+                      ? 'border-accent-line bg-accent text-accent-fg hover:bg-accent-hover'
+                      : shouldHighlightVoiceToggle
+                      ? 'animate-pulse border-primary bg-primary/12 text-primary-text shadow-[0_0_0_4px_var(--app-primary-glow)] hover:bg-primary/18'
+                      : 'border-info-border/60 bg-dark-light text-info-label hover:border-info-border hover:text-info-text'
+                  } ${micButtonDisabled ? 'cursor-not-allowed opacity-50' : ''}`}
                 >
-                  <path
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                    strokeWidth={2}
-                    d="M12 19l9 2-9-18-9 18 9-2zm0 0v-8"
-                  />
-                </svg>
-              </button>
-            )}
+                  <svg
+                    className="h-5 w-5"
+                    fill="none"
+                    stroke="currentColor"
+                    viewBox="0 0 24 24"
+                  >
+                    <path
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                      strokeWidth={2}
+                      d="M12 15a3 3 0 003-3V7a3 3 0 10-6 0v5a3 3 0 003 3z"
+                    />
+                    <path
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                      strokeWidth={2}
+                      d="M19 11a7 7 0 01-14 0M12 18v3M8 21h8"
+                    />
+                  </svg>
+                </button>
+              ) : null}
+              {isVoiceComposer ? null : (
+                <button
+                  type="button"
+                  disabled={disabled}
+                  onClick={handleSubmit}
+                  title={s.sendMessage}
+                  aria-label={s.sendMessage}
+                  className={`self-center flex h-10 w-10 shrink-0 items-center justify-center rounded-full transition-colors ${
+                    isVoiceInputHighlighted
+                      ? 'bg-accent text-accent-fg hover:bg-accent-hover'
+                      : 'bg-primary text-primary-fg'
+                  } ${disabled ? 'cursor-not-allowed opacity-50' : ''}`}
+                >
+                  <svg
+                    className="h-5 w-5"
+                    fill="none"
+                    stroke="currentColor"
+                    viewBox="0 0 24 24"
+                  >
+                    <path
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                      strokeWidth={2}
+                      d="M12 19l9 2-9-18-9 18 9-2zm0 0v-8"
+                    />
+                  </svg>
+                </button>
+              )}
+            </div>
           </div>
         </div>
       </div>

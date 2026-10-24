@@ -230,7 +230,7 @@ const en: AboutCopy = {
   voiceLead:
     'The demo is built to be spoken to. The planner writes every sentence; a separate voice model only listens, and is told to read aloud, word for word, whatever of those sentences the voice setting lets through.',
   voiceBullets: [
-    'Voice starts off. Turn it on with the round mic button (labelled **Turn on voice mode**). The composer is voice-only in the demo: its box shows **Tap mic for voice**, then the voice status — **Listening...**, **Transcribing...**, **Playing reply...** — and there is no Send button. While the agent works it reads **Waiting for the next agent message...**, and voice turns itself off on the last step. Instead of speaking you can answer by tapping the card, except while the agent is working or the next step is loading: until then the card is locked.',
+    'Voice starts off. Turn it on with the round mic button (labelled **Turn on voice mode**). With voice off the composer is an ordinary text box with a Send button beside the mic; its box reads **Type here, or tap the mic to talk**. With voice on it is voice-only: the box shows the voice status — **Listening...**, **Transcribing...**, **Playing reply...** — and the Send button goes away. If the microphone cannot open (permission denied, no device), the box stays typable and reads **Mic unavailable. Type here instead**. While the agent works it reads **Waiting for the next agent message...**, and voice turns itself off on the last step. Instead of speaking you can answer by tapping the card, except while the agent is working or the next step is loading: until then the card is locked.',
     'Interrupt any time: when you start talking, the agent’s voice stops mid-sentence.',
     'The pill beside the mic shows how much is said aloud and opens the setting: **Everything**, **Balanced** or **Minimal**, or any other mix, shown as **Custom**, plus **Skip smartly**. Until you choose, it reads **Balanced** while voice is off and turns **Custom** by itself when voice comes on (every row at **Speak**, **Skip smartly** on), because the agent then writes its spoken lines short itself. Anything this setting keeps from being spoken still appears in the chat, marked **not spoken** or **shortened**. With voice on, though, the agent also stops narrating steps you can watch happen, so those lines are missing from the chat too, whichever preset is picked.',
     '**Settings** → **Language** switches between English and 한국어. Speech recognition, what the agent says and most of the booking screen’s controls change; film titles, cinema names and prices stay as listed.',
@@ -241,7 +241,7 @@ const en: AboutCopy = {
 
   cardsTitle: 'At the booth: one card, one sentence',
   cardsLead:
-    'Five printed cards, one per selection step. Each QR code opens that step with the earlier choices already made, and the card screen has an English / 한국어 switch. Press **Start and talk** and say the line. Voice is on from the start, and a card session is never recorded for research.',
+    'Five printed cards, one per selection step. Each QR code opens that step with the earlier choices already made, and the card screen has an English / 한국어 switch. Press **Start and talk** and say the line, or **Start and type** to type it instead in a loud room. Voice is on from the start (off with **Start and type**), and a card session is never recorded for research.',
 
   worldTitle: 'The world it books in',
   worldLead:
@@ -427,7 +427,7 @@ const ko: AboutCopy = {
   voiceLead:
     '이 데모는 말로 조작하도록 만들어졌습니다. 모든 문장은 플래너가 쓰고, 별도의 음성 모델은 듣는 일과, 음성 설정이 통과시킨 문장을 바꾸지 말고 그대로 읽으라는 지시를 따르는 일만 합니다.',
   voiceBullets: [
-    '음성은 꺼진 채로 시작합니다. 둥근 마이크 버튼(**음성 모드 켜기**)으로 켜세요. 데모의 입력창은 음성 전용이라, 칸에는 처음에 **마이크를 눌러 말하세요**가, 음성을 켠 뒤에는 **듣는 중...**, **받아쓰는 중...**, **답변을 재생하는 중...** 같은 음성 상태가 표시되고, 보내기 버튼은 없습니다. 에이전트가 작업하는 동안에는 영어로 **Waiting for the next agent message...**가 표시되고, 마지막 단계에서는 음성이 자동으로 꺼집니다. 말하는 대신 카드를 눌러 답할 수도 있습니다. 다만 에이전트가 작업하는 동안과 다음 단계를 불러오는 동안에는 카드가 잠겨 있습니다.',
+    '음성은 꺼진 채로 시작합니다. 둥근 마이크 버튼(**음성 모드 켜기**)으로 켜세요. 음성이 꺼져 있으면 입력창은 마이크 옆에 보내기 버튼이 있는 보통 입력칸이고, 칸에는 **입력하거나 마이크를 눌러 말하세요**가 표시됩니다. 음성을 켜면 입력창은 음성 전용이 되어 **듣는 중...**, **받아쓰는 중...**, **답변을 재생하는 중...** 같은 음성 상태가 표시되고 보내기 버튼은 사라집니다. 마이크를 열 수 없으면(권한 거부, 장치 없음) 칸은 계속 입력할 수 있고 **마이크를 쓸 수 없어요. 여기에 입력하세요**가 표시됩니다. 에이전트가 작업하는 동안에는 영어로 **Waiting for the next agent message...**가 표시되고, 마지막 단계에서는 음성이 자동으로 꺼집니다. 말하는 대신 카드를 눌러 답할 수도 있습니다. 다만 에이전트가 작업하는 동안과 다음 단계를 불러오는 동안에는 카드가 잠겨 있습니다.',
     '언제든 끼어들어도 됩니다. 말을 시작하면 에이전트의 음성이 문장 중간에서 멈춥니다.',
     '마이크 옆 버튼은 에이전트가 소리 내어 말하는 양을 보여 주고, 누르면 설정이 열립니다. **Everything**, **Balanced**, **Minimal** 중 하나를 고르거나 항목별로 직접 조합할 수 있고, 세 프리셋 어느 것과도 맞지 않는 조합은 **Custom**으로 표시됩니다. **Skip smartly**도 켜고 끌 수 있습니다. 아직 아무것도 고르지 않았다면 음성이 꺼져 있을 때는 **Balanced**이고, 음성을 켜면 저절로 **Custom**(모든 줄이 **Speak**, **Skip smartly** 켜짐)으로 바뀝니다. 음성을 켜면 에이전트가 말할 문장을 스스로 짧게 쓰기 때문입니다. 이 설정 때문에 소리 내지 않은 문장은 대화창에 남고 **not spoken**이나 **shortened**로 표시됩니다. 다만 음성을 켜면 에이전트가 눈앞에서 바뀌는 단계를 설명하지 않으므로, 어떤 프리셋을 골라도 그 문장은 대화창에도 나오지 않습니다.',
     '**설정** → **언어**에서 English와 한국어 중 하나를 고를 수 있습니다. 음성 인식, 에이전트가 하는 말, 예매 화면 버튼 대부분이 바뀌고, 영화 제목·영화관 이름·가격은 원래 표기 그대로 남습니다.',
@@ -438,7 +438,7 @@ const ko: AboutCopy = {
 
   cardsTitle: '부스에서: 카드 한 장, 문장 하나',
   cardsLead:
-    '선택 단계(영화·영화관·날짜·상영 시간·좌석)마다 한 장씩, 모두 다섯 장의 카드가 있습니다. QR 코드를 찍으면 앞 단계가 이미 골라진 채로 그 단계가 열리고, 카드 화면 위쪽에서 **한국어**를 고르면 문장과 버튼이 한국어로 바뀝니다. **시작하고 말하기**를 누르고 화면의 문장을 말하세요. 음성은 처음부터 켜져 있고, 카드로 시작한 세션은 연구용으로 기록되지 않습니다.',
+    '선택 단계(영화·영화관·날짜·상영 시간·좌석)마다 한 장씩, 모두 다섯 장의 카드가 있습니다. QR 코드를 찍으면 앞 단계가 이미 골라진 채로 그 단계가 열리고, 카드 화면 위쪽에서 **한국어**를 고르면 문장과 버튼이 한국어로 바뀝니다. **시작하고 말하기**를 누르고 화면의 문장을 말하세요. 주변이 시끄러우면 **시작하고 입력하기**를 눌러 문장을 입력해도 됩니다. 음성은 처음부터 켜져 있고(**시작하고 입력하기**로 시작하면 꺼져 있습니다), 카드로 시작한 세션은 연구용으로 기록되지 않습니다.',
 
   worldTitle: '예매하는 세계',
   worldLead:

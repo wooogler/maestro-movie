@@ -34,8 +34,16 @@ interface DemoCardPageProps {
    * Hands the session and the card up to App, which owns both the routing and
    * the props the booking page reads. Called before navigating, so `/booking`
    * never renders a frame without them.
+   *
+   * `voice` is false when the visitor chose to type: the booking page then
+   * opens with voice off, so no microphone prompt appears and the composer is
+   * ready for typing.
    */
-  onCardStarted: (session: StudySessionState, card: QuickDemoCard) => void;
+  onCardStarted: (
+    session: StudySessionState,
+    card: QuickDemoCard,
+    options: { voice: boolean }
+  ) => void;
 }
 
 export function DemoCardPage({ onCardStarted }: DemoCardPageProps) {
@@ -63,7 +71,7 @@ export function DemoCardPage({ onCardStarted }: DemoCardPageProps) {
 
   const opener = useMemo(() => card ? cardText(card.opener, language) : '', [card, language]);
 
-  const handleStart = useCallback(async () => {
+  const handleStart = useCallback(async (voice: boolean) => {
     if (!card || starting) return;
     const code = accessCode.trim();
     if (!code) {
@@ -97,7 +105,7 @@ export function DemoCardPage({ onCardStarted }: DemoCardPageProps) {
         */
         researchConsent: false,
       });
-      onCardStarted(session, card);
+      onCardStarted(session, card, { voice });
       navigate('/booking');
     } catch (err) {
       setStarting(false);
@@ -215,12 +223,24 @@ export function DemoCardPage({ onCardStarted }: DemoCardPageProps) {
         <div className="mt-auto pt-8">
           <button
             type="button"
-            onClick={handleStart}
+            onClick={() => void handleStart(true)}
             disabled={starting}
             autoFocus
             className="w-full rounded-xl bg-primary px-4 py-4 text-base font-semibold text-primary-fg transition-colors hover:bg-primary-hover disabled:opacity-60"
           >
             {starting ? s.quickCardPreparing : s.quickCardStart}
+          </button>
+          {/* What makes the note below true. The note promises typing in a loud
+              room, and in the session itself the only way there is to find the
+              mic button and switch voice off; this is the same session with
+              voice off from the start, so no microphone prompt appears. */}
+          <button
+            type="button"
+            onClick={() => void handleStart(false)}
+            disabled={starting}
+            className="mt-2 w-full rounded-xl border border-dark-border px-4 py-3 text-sm font-medium text-fg-muted transition-colors hover:border-primary hover:text-fg-strong disabled:opacity-60"
+          >
+            {s.quickCardStartTyping}
           </button>
           <p className="mt-3 text-center text-[11px] leading-relaxed text-fg-faint">
             {s.quickCardMicNote}
