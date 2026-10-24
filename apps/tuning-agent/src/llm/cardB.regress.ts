@@ -78,6 +78,14 @@ const SESSIONS: Array<[string, string]> = [
   ['B4v', 'bd2644e381784ed585fd60379781bf09'],
 ];
 const MAX_CHAIN = 6;
+/**
+ * `--extra-trace <file>` (repeatable): live runs made with the fix. Their
+ * extractor requests that answer the conflict question become the
+ * `extract-relax-live` case — the real screen and wording, which the synthetic
+ * extract-relax case does not have (on 2026-10-24 the screen showed only Troy,
+ * and "첫 번째" was read as Troy once).
+ */
+const EXTRA_TRACES = process.argv.flatMap((arg, i) => (arg === '--extra-trace' ? [process.argv[i + 1] ?? ''] : [])).filter(Boolean);
 /** What the AFTER side's agent asks once the conflict shows, for the follow-up cases. */
 const CONFLICT_QUESTION =
   'IMAX는 20.4마일 떨어진 MJR Troy에만 있어요. IMAX 없이 가까운 곳에서 일반이나 3D로 보실래요, 아니면 Troy까지 가실래요?';
@@ -647,6 +655,45 @@ async function runSession(session: Session): Promise<void> {
   }
 }
 
+/** Requests from live runs where the visitor answered the either-or question. */
+function liveRelaxRequests(): ExtractorRequest[] {
+  const found: ExtractorRequest[] = [];
+  for (const file of EXTRA_TRACES) {
+    for (const line of fs.readFileSync(file, 'utf8').split('\n')) {
+      if (!line) continue;
+      const event = JSON.parse(line) as Json;
+      if (event.type !== 'llm.extractor.request') continue;
+      const payload = (event.payload ?? {}) as Json;
+      const body = (payload.body ?? {}) as { input?: Array<{ content?: unknown }> };
+      const messages = body.input ?? [];
+      const input = JSON.parse(String(messages[messages.length - 1]?.content ?? '{}')) as Json;
+      const dialogue = Array.isArray(input.recentDialogue) ? (input.recentDialogue as Json[]) : [];
+      const lastAgent = [...dialogue].reverse().find((entry) => entry.type === 'agent');
+      if (!lastAgent || !IMAX.test(String(lastAgent.text)) || !/아니면/.test(String(lastAgent.text))) continue;
+      if (!/첫 번째/.test(String(input.userMessage ?? ''))) continue;
+      found.push({ requestId: String(payload.requestId ?? ''), systemPrompt: String(messages[0]?.content ?? ''), input });
+    }
+  }
+  return found;
+}
+
+async function runLiveRelax(): Promise<void> {
+  if (!wants('extract-relax-live')) return;
+  for (const request of liveRelaxRequests()) {
+    for (let run = 0; run < RUNS; run += 1) {
+      const preferences = await extractStructuredPreferences(extractionCtx(request, true));
+      const hasImax = preferences.some((p) => IMAX.test(p.description));
+      const hasLimit = preferences.some((p) => /15/.test(p.description) && DISTANCE.test(p.description));
+      record(
+        'extract-relax-live (첫 번째 → no IMAX)',
+        'after',
+        { ok: !hasImax && hasLimit, label: `IMAX ${hasImax ? 'kept' : 'gone'}, 15 mi ${hasLimit ? 'kept' : 'gone'}` },
+        `${request.requestId}: ${describePreferences(preferences)}`
+      );
+    }
+  }
+}
+
 async function main(): Promise<void> {
   requireApiKey('cardB.regress.ts');
   const sessions = SESSIONS.map(([name, id]) => loadSession(name, id)).filter((s): s is Session => s !== null);
@@ -655,7 +702,7 @@ async function main(): Promise<void> {
     process.exit(2);
   }
   console.log(`card B replay: ${sessions.map((s) => s.name).join(', ')}, ${RUNS} run(s) per case and side`);
-  await Promise.all(sessions.map((session) => runSession(session)));
+  await Promise.all([...sessions.map((session) => runSession(session)), runLiveRelax()]);
 
   console.log('\nsummary (success / replays)');
   for (const [name, { before, after }] of tallies) {
