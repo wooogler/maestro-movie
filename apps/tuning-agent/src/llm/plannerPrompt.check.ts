@@ -81,6 +81,8 @@ const PRELOAD_MARKER = 'Remembered preferences (this session)';
 const DEMO_MARKER = 'Booth demo (this session)';
 const DECISIVE_MARKER = 'Deciding for the visitor (booth demo)';
 const CONFLICT_MARKER = 'Two requirements that rule each other out (booth demo)';
+const OPENING_MARKER = 'Opening a stage (booth demo)';
+const SEAT_MARKER = 'Seats (booth demo)';
 
 /*
   The prompt the recorded study ran against, pinned by content.
@@ -160,6 +162,22 @@ for (const config of STUDY_CONFIGS) {
   check(`${key}: ...and neither does leaving it undefined`, before === conflictsUndefined);
   check(`${key}: ...nor asking for it outside a demo session`, before === conflictsWithoutDemo);
   check(`${key}: no requirement-conflict section appears`, !before.includes(CONFLICT_MARKER));
+
+  const openingOff = buildSystemPrompt(wf, STAGE_META, config.language, false, false, false, false, false, false, false);
+  const openingUndefined = buildSystemPrompt(wf, STAGE_META, config.language, false, false, false, false, false, false, undefined);
+  const openingWithoutDemo = buildSystemPrompt(wf, STAGE_META, config.language, false, false, false, false, false, false, true);
+  check(`${key}: the opening-question flag off changes nothing`, before === openingOff);
+  check(`${key}: ...and neither does leaving it undefined`, before === openingUndefined);
+  check(`${key}: ...nor asking for it outside a demo session`, before === openingWithoutDemo);
+  check(`${key}: no opening-question section appears`, !before.includes(OPENING_MARKER));
+
+  const seatsOff = buildSystemPrompt(wf, STAGE_META, config.language, false, false, false, false, false, false, false, false);
+  const seatsUndefined = buildSystemPrompt(wf, STAGE_META, config.language, false, false, false, false, false, false, false, undefined);
+  const seatsWithoutDemo = buildSystemPrompt(wf, STAGE_META, config.language, false, false, false, false, false, false, false, true);
+  check(`${key}: the seat-choice flag off changes nothing`, before === seatsOff);
+  check(`${key}: ...and neither does leaving it undefined`, before === seatsUndefined);
+  check(`${key}: ...nor asking for it outside a demo session`, before === seatsWithoutDemo);
+  check(`${key}: no seat-choice section appears`, !before.includes(SEAT_MARKER));
 }
 check(
   'the style rule the narration section would override is still there, untouched',
@@ -341,6 +359,14 @@ console.log('\n10. a booth demo session that asks for decisive selection gets th
   check('a position in the visible list names an option', /A position names an option too/.test(tail));
   check('it keeps the fuzzy-match clarification', /\[ask-fuzzy\]/.test(tail) && /Never select a near miss/.test(tail));
   check('it keeps the remembered-preference question', /\[ask-remembered\]/.test(tail) && /prf_/.test(tail));
+  check(
+    'only a prf_ id is remembered: a pref_ id was said in this session, even after it leaves history',
+    /Only "prf_" ids are remembered/.test(tail) &&
+      /"pref_" was extracted from what the visitor said in this session/.test(tail) &&
+      /never under \(6\)/.test(tail) &&
+      !/or one the visitor has not stated in history/.test(tail)
+  );
+  check('a stated day at the date stage is selected, or at most stated', /call select on that day as the FIRST step, never highlight it first/.test(tail));
   check('a direct answer ends with the answer', /\[answer\]/.test(tail) && /nothing after it/.test(tail));
   check('it asks for the rule tag in reason, which the metric script reads', /Begin the reason field with the rule/.test(tail));
   check(
@@ -387,6 +413,98 @@ console.log('\n11. a booth demo session with CP memory gets the requirement-conf
   const withAgain = buildSystemPrompt(workflow(true, true), STAGE_META, 'en', false, false, false, true, true, true);
   check('the memo keys on the flag: off after on is off', !withoutAfter.includes(CONFLICT_MARKER));
   check('and on after off is on again', withAgain.includes(CONFLICT_MARKER) && withFirst === withAgain);
+}
+
+/*
+  The booth sections' exact text, pinned by content like the study prompt
+  above. A booth deploy is measured against these words (docs/scenarios/
+  ksea2026-korean-simulation.md, "Round 2"), so an edit should fail here and be
+  re-measured, not slip through because every regex still matches.
+*/
+const PINNED_BOOTH_SECTIONS: Record<string, string> = {
+  [DECISIVE_MARKER]: 'cface6aed128cd7e',
+  [OPENING_MARKER]: 'c8c8a3a878a2ab86',
+  [SEAT_MARKER]: 'caf0d17d0a680b41',
+};
+
+/** One section of a built prompt: from its marker up to the next blank-free section header. */
+function sectionText(prompt: string, marker: string): string {
+  const start = prompt.indexOf(marker);
+  if (start < 0) return '';
+  const rest = prompt.slice(start);
+  const end = rest.slice(marker.length).search(/\n[A-Z][^\n]*:\n/);
+  return end < 0 ? rest : rest.slice(0, marker.length + end);
+}
+
+function fullBoothPrompt(language: string): string {
+  return buildSystemPrompt(workflow(true, true), STAGE_META, language, false, true, false, true, true, true, true, true);
+}
+
+console.log('\n13. a booth demo session gets the opening-question section, after decisive selection');
+{
+  const off = buildSystemPrompt(workflow(true, true), STAGE_META, 'ko', false, true, false, true, true, true, false, false);
+  const on = buildSystemPrompt(workflow(true, true), STAGE_META, 'ko', false, true, false, true, true, true, true, false);
+  check('the section is appended', on.includes(OPENING_MARKER));
+  check('it only adds — every line of the off prompt is still there', off.split('\n').every((line) => on.includes(line)));
+  check(
+    'it sits after the brevity and decisive-selection sections, and before the conflict and language sections',
+    on.indexOf(OPENING_MARKER) > on.indexOf(BREVITY_MARKER) &&
+      on.indexOf(OPENING_MARKER) > on.indexOf(DECISIVE_MARKER) &&
+      on.indexOf(OPENING_MARKER) < on.indexOf(CONFLICT_MARKER) &&
+      on.indexOf(OPENING_MARKER) < on.indexOf('Language:')
+  );
+  const text = sectionText(on, OPENING_MARKER);
+  check('it applies only where nothing bears on the stage yet', /It applies only when nothing bears on this stage yet/.test(text) && /this section does not apply/.test(text));
+  check('it replaces "which one?" with one preference question', /do not ask which option they want/.test(text) && /Ask ONE short question/.test(text));
+  for (const stage of ['movie', 'theater', 'date', 'time', 'seat']) {
+    check(`it names the dimensions for the ${stage} stage`, new RegExp(`\\n  ${stage}: `).test(text));
+  }
+  check('it never lists every field or reads the options out', /Never list every field/.test(text) && /never read the options out/.test(text));
+  check('it allows one lead-in naming what is on screen', /One short lead-in/.test(text));
+  check('it is asked once per stage', /Ask it once per stage/.test(text) && /Never ask this question again on the same stage/.test(text));
+  check('it asks for its own reason tag', /\[open-stage\]/.test(text));
+  const withFirst = buildSystemPrompt(workflow(true), STAGE_META, 'en', false, false, false, true, true, false, true);
+  const withoutAfter = buildSystemPrompt(workflow(true), STAGE_META, 'en', false, false, false, true, true, false, false);
+  const withAgain = buildSystemPrompt(workflow(true), STAGE_META, 'en', false, false, false, true, true, false, true);
+  check('the memo keys on the flag: off after on is off', !withoutAfter.includes(OPENING_MARKER));
+  check('and on after off is on again', withAgain.includes(OPENING_MARKER) && withFirst === withAgain);
+}
+
+console.log('\n14. a booth demo session gets the seat-choice section, after the opening section');
+{
+  const off = buildSystemPrompt(workflow(true, true), STAGE_META, 'ko', false, true, false, true, true, true, true, false);
+  const on = buildSystemPrompt(workflow(true, true), STAGE_META, 'ko', false, true, false, true, true, true, true, true);
+  check('the section is appended', on.includes(SEAT_MARKER));
+  check('it only adds — every line of the off prompt is still there', off.split('\n').every((line) => on.includes(line)));
+  check(
+    'it sits after the opening section and before the conflict and language sections',
+    on.indexOf(SEAT_MARKER) > on.indexOf(OPENING_MARKER) &&
+      on.indexOf(SEAT_MARKER) < on.indexOf(CONFLICT_MARKER) &&
+      on.indexOf(SEAT_MARKER) < on.indexOf('Language:')
+  );
+  const text = sectionText(on, SEAT_MARKER);
+  check('party size comes from what the visitor said', /never what the layout suggests/.test(text));
+  check('it marks up to three whole choices of the party size and asks', /Mark up to three whole choices of exactly the party size/.test(text));
+  check('it keeps the ceiling: three pairs is three choices', /three pairs is six ids and three choices/.test(text));
+  check('a choice of the wrong size is never marked', /never four seats in a row/.test(text));
+  check('a delegation selects one whole choice and calls it a recommendation', /pick ONE whole choice/.test(text) && /say it is your recommendation/.test(text) && /do not ask anything/.test(text));
+  check('it names the Korean delegations the cards use', /추천해 주시는 자리로/.test(text) && /골라 주세요/.test(text));
+  check('it asks for its own reason tags', /\[seat-choices\]/.test(text) && /\[seat-recommend\]/.test(text));
+  const noGui = buildSystemPrompt(workflow(false, true), STAGE_META, 'en', false, false, false, true, true, true, true, false);
+  const noGuiAsked = buildSystemPrompt(workflow(false, true), STAGE_META, 'en', false, false, false, true, true, true, true, true);
+  check('without GUI adaptation there are no marks to govern, so nothing is added', noGui === noGuiAsked);
+  const withFirst = buildSystemPrompt(workflow(true), STAGE_META, 'en', false, false, false, true, true, false, false, true);
+  const withoutAfter = buildSystemPrompt(workflow(true), STAGE_META, 'en', false, false, false, true, true, false, false, false);
+  const withAgain = buildSystemPrompt(workflow(true), STAGE_META, 'en', false, false, false, true, true, false, false, true);
+  check('the memo keys on the flag: off after on is off', !withoutAfter.includes(SEAT_MARKER));
+  check('and on after off is on again', withAgain.includes(SEAT_MARKER) && withFirst === withAgain);
+}
+
+console.log('\n15. the booth sections, pinned by content');
+for (const [marker, pinned] of Object.entries(PINNED_BOOTH_SECTIONS)) {
+  const text = sectionText(fullBoothPrompt('en'), marker);
+  check(`"${marker}" is the measured text`, digest(text) === pinned, `now ${digest(text)}`);
+  check(`"${marker}" reads the same in a Korean session`, sectionText(fullBoothPrompt('ko'), marker) === text);
 }
 
 console.log('\n12. the extractor: a study session is unchanged, the booth rewrites only the format notes');
