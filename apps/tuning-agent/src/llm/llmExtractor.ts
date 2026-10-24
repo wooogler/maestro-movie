@@ -753,7 +753,8 @@ export function buildPreferenceSystemPrompt(
       "\n\nstageFieldGuides:\n" +
       guides.map((s) => `- ${s.stage}: ${s.fieldGuide}`).join("\n")
     : PREFERENCE_SYSTEM_PROMPT;
-  const languageLine = buildPreferenceLanguageLine(language);
+  const languageLine =
+    buildPreferenceLanguageLine(language) ?? (booth ? buildBoothPreferenceLanguageLine(language) : null);
   const withLanguage = languageLine ? `${basePrompt}\n\n${languageLine}` : basePrompt;
   return booth ? `${withLanguage}\n\n${BOOTH_RELAXATION_LINE}` : withLanguage;
 }
@@ -766,7 +767,8 @@ export function buildPreferenceSystemPrompt(
  * ran. Korean also gets nothing: the study ran in Korean with this prompt as
  * it stands, and its descriptions came back in whatever language the model
  * chose — changing that is a decision about Korean sessions, not part of
- * adding languages.
+ * adding languages. (That decision was made for the booth only, on 2026-10-24:
+ * see BOOTH_PREFERENCE_LANGUAGE_NAMES.)
  */
 const PREFERENCE_LANGUAGE_NAMES: Readonly<Record<string, string>> = {
   ja: "Japanese",
@@ -780,12 +782,40 @@ const PREFERENCE_LANGUAGE_NAMES: Readonly<Record<string, string>> = {
 export function buildPreferenceLanguageLine(language: string | undefined): string | null {
   const name = language ? PREFERENCE_LANGUAGE_NAMES[language] : undefined;
   if (!name) return null;
+  return preferenceLanguageLine(name);
+}
+
+function preferenceLanguageLine(name: string, extra = ""): string {
   return (
     "Language:\n" +
-    `- The user is speaking ${name}. Write every new or rewritten description in ${name}.\n` +
+    `- The user is speaking ${name}. Write every new or rewritten description in ${name}.${extra}\n` +
     "- Keep film titles, cinema names, formats, seat ids, dates, times and prices exactly as they appear on screen.\n" +
     "- An unchanged existing preference keeps its wording as it is, whatever language it is in. id, strength and relevantStages are unaffected by language."
   );
+}
+
+/*
+  Booth demo only: Korean gets the language line too.
+
+  The memory panel shows `description` verbatim, and with no line a Korean
+  booth session got whichever language the model chose: the 2026-10-24 KSEA
+  simulation's card A and B panels were English, card C's Korean, and one
+  quick card mixed the two in a single session. A study session is untouched
+  (see the note on PREFERENCE_LANGUAGE_NAMES): Korean adds nothing there, and
+  `extractorPrompt.check.ts` pins every study prompt byte for byte.
+
+  The sentence after the requirement is there because every worked example in
+  PREFERENCE_SYSTEM_PROMPT is English ("Wants to watch Cosmic Laughs."), which
+  is the likeliest reason the model drifted into English in the first place.
+*/
+const BOOTH_PREFERENCE_LANGUAGE_NAMES: Readonly<Record<string, string>> = {
+  ko: "Korean",
+};
+
+export function buildBoothPreferenceLanguageLine(language: string | undefined): string | null {
+  const name = language ? BOOTH_PREFERENCE_LANGUAGE_NAMES[language] : undefined;
+  if (!name) return null;
+  return preferenceLanguageLine(name, ` The examples above are in English; write yours in ${name} anyway.`);
 }
 
 export async function extractStructuredPreferences(

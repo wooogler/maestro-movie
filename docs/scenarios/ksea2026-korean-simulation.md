@@ -213,7 +213,7 @@ The other two final-code runs are in the appendix (F2, F3).
 
 ## Quick cards 1–5
 
-All quick-card runs were voice on, from `/demo/card#c=<id>&k=<code>&lang=ko`. A quick card never sends `spokenBrevity` (`plannerWritesForTheEar` excludes `quickStartCard`), so it narrates every step. That is why these settle times are long.
+All quick-card runs were voice on, from `/demo/card#c=<id>&k=<code>&lang=ko`. At the time a quick card never sent `spokenBrevity` (`plannerWritesForTheEar` excluded `quickStartCard`; changed in Round 2 below), so it narrated every step. That is why these settle times are long.
 
 | Card | Visitor line (ko) | Printed "watch" | Observed (run 1 / run 2) | First action / settle |
 |---|---|---|---|---|
@@ -268,15 +268,86 @@ The card pages render in Korean with the right line and watch text. Each card pa
    - change the cards: quick card 5 should name a row ("뒤쪽 E열로 두 자리요"), and A/C should delegate explicitly ("가운데쯤 한 자리 골라 주세요"); or
    - `llmPlanner.ts` (Highlight economy plus DECISIVE_SELECTION_RULES): when the visitor delegates ("추천", "골라 주세요"), mark one whole choice of the stated party size and say "추천해 드린 자리" rather than "선택했어요".
    - In both cases, fix the four-seat highlight: Highlight economy already says to mark a choice whole and of the party size, so add a regress case for three-seat parties.
-4. **Silent respond.** `apps/tuning-agent/src/index.ts` (around line 1618, `maybeSendAssistantMessage`): a `respond` with empty text is never a valid end of turn. Re-plan once, or fall back to the stage question in the session language.
+4. **Silent respond.** *Implemented (booth only) and measured on 24 Oct; see "Round 2" below.* `apps/tuning-agent/src/index.ts` (around line 1618, `maybeSendAssistantMessage`): a `respond` with empty text is never a valid end of turn. Re-plan once, or fall back to the stage question in the session language.
 5. **`[ask-remembered]` scope.** `llmPlanner.ts:697`: limit rule (6) to `prf_` (preloaded) ids. A `pref_` id was extracted from this session's speech, so it counts as stated even after it scrolls out of history (`MAX_HISTORY_ENTRIES = 12`, `RECENT_WINDOW = 8` in `core/planner.ts`).
 6. **Ordinals.** `llmPlanner.ts` DECISIVE_SELECTION_RULES (1): list a positional reference to a visible list ("첫 번째", "맨 위", "the first one") as a named option.
-7. **Quick-card verbosity.** `apps/frontend/src/pages/ChatPage.tsx:799`: consider letting a quick card send `spokenBrevity` too, or cap quick-card narration to the final sentence through `QUICK_CARD_VOICE_VERBOSITY`. Measure the change with `spokenBrevity.regress.ts`.
+7. **Quick-card verbosity.** *Implemented (booth only, voice on) and measured on 24 Oct; see "Round 2" below.* `apps/frontend/src/pages/ChatPage.tsx:799`: consider letting a quick card send `spokenBrevity` too, or cap quick-card narration to the final sentence through `QUICK_CARD_VOICE_VERBOSITY`. Measure the change with `spokenBrevity.regress.ts`.
 8. **Quick cards 2–4.**
    - `apps/frontend/src/study/quickDemoCards.ts`: reword the `watch` lines to match what the planner does, so card 2 drops "거리순 재정렬" and card 3 says "주말 두 날이 강조됩니다". Alternatively add "가까운 순으로" to card 2's line so a sort is asked for.
    - For card 4, include the format in time labels (augment) so the two 8:10 rows differ.
-9. **Memory language.** `llmExtractor.ts`: pass the conversation language and write `description` in it (the panel already takes it verbatim).
+9. **Memory language.** *Implemented (booth only) and measured on 24 Oct; see "Round 2" below.* `llmExtractor.ts`: pass the conversation language and write `description` in it (the panel already takes it verbatim).
 10. **Capacity.** `apps/backend/src/study/sessionService.ts`: finish a demo session when its last host socket closes, or shorten the idle timeout for demo sessions.
+
+### Round 2: silence, memory language, quick-card brevity (24 Oct 2026)
+
+Fixes 4, 7 and 9 are implemented on branch `worktree-agent-a67b0a5099e119ca9`, on top of `realtime-voice` @ `7989a44` (which includes the card-B fix). The commits are `203a0d6` (memory language), `44084b7` (silent respond), `1229bae` (quick-card brevity) and `1ec6a31` (drop a respond that repeats the sentence just spoken, found while measuring fix 7). Every change is behind the booth flag: `AGENT_STUDY_MODE=demo` on the agent, and on the frontend `normalizeStudyMode(...) === DEMO_STUDY_MODE`, which `plannerWritesForTheEar` already required. A study session's planner input, extractor prompt and runtime loop are unchanged. `extractorPrompt.check.ts` pins every study extractor prompt by hash, and `plannerPrompt.check.ts` still passes. The planner prompt files were not touched.
+
+**How these runs were made.** I used an isolated stack from the worktree: backend :3200 with `NODE_ENV=development`, so the agent ran from `src`, and Vite :5373. The access code was from batch `r2b`. Every run used `--voice`. Settle time is the driver's `secondsToSettle`, the time from the visitor's line to the agent's last frame. It includes playback of every sentence except the last. The "before" quick-card runs were made in this session on `7989a44`, not taken from the table above. They differ from it because quick card 2's printed line now ends "가까운 순으로 보여 주세요". Traces are in the worktree's `logs/demo/trace/` (gitignored). The quick cards have no trace.
+
+#### Fix 4: an empty respond never ends the visitor's turn
+
+- **What changed.** The change is in `apps/tuning-agent/src/core/emptyRespond.ts`, called from `maybePlanAndExecute`. It applies when the visitor has spoken and nothing has been said to them since (`userTurnAwaitingAnswer`), and the planner returns a `respond` with empty text. The agent then plans once more, with a runtime note appended to history: a `system` entry whose annotation says the previous answer was empty and is never a valid end of turn. If the second answer is empty too, the agent says the stage's question in the session language, for example "어떤 영화를 보고 싶으세요?". It never uses the English "I will run…" sentence.
+- **When it is left alone.** An empty respond after the visitor already heard something this turn stays as it is: the question was asked on an earlier step, and asking again would repeat it. Rule-sourced decisions also stay as they are.
+- **Offline check.** `core/emptyRespond.check.ts` (in `npm run check`) drives the re-plan and fallback paths with a stub planner, using the C1v history. It also checks that the note does not stop the visitor's utterance from opening the chain, which `chainOpenedByUserUtterance` uses to keep `select` available.
+- **How rare the failure is.** The 50 booth traces of 24 Oct hold **1 empty respond in 345 responds** (C1v planner-8).
+- **Replaying it.** `llm/emptyRespond.regress.ts` replays that request. The logged body, byte for byte with the prompt that failed (`--raw`), came back `select m3` in **15 of 15** runs, and also 15 of 15 with the note added. Today's prompt, which has the ordinal rule (fix 6), did the same in 6 of 6 runs with and without the note. The C1v empty answer does not reproduce. It was a one-off from a stochastic model.
+- **Card C, 3 runs, `1229bae`.** All three booked Wildwood, Emagine Royal Oak, Thu 5 Nov 1:15 PM, E1–E3, $63: `st_97cfa705`, `st_d28f3b05`, `st_d4178fb7`. **No turn ended silent.** Every turn up to the confirm question got speech (first sentence after 2.8–15.6 s). The last turn is the confirming "네, 좋아요", which ends the booking without a sentence, as designed. The planner returned 0 empty responds in 33. "첫 번째 걸로 할게요." at the movie stage was selected (`select m3 → next`) in 3 of 3 runs. So the guard never fired on its own.
+- **Fault injection, to exercise the guard live.** I made a temporary edit, not committed and reverted afterwards: it forced the planner's answer to "첫 번째…" lines to be an empty respond.
+  - Forcing only the first answer (`st_8befee68`) led to 9 re-plans in the run, at the movie, theater, date, time and seat stages. **All 9 re-plans gave a valid step**: 6 silent `select`/`next` steps, one highlight with a question, and two respond questions. The run booked.
+  - Forcing both answers (`st_91b0bcec`) led to 8 fallbacks. Each spoke "어떤 영화를 보고 싶으세요?" 0.9–1.2 s after the line and finished playing before the next turn. No turn stalled.
+  - At the movie stage that question repeats one already asked. It is a last resort, and it is still better than silence.
+- **The 15 s playback watchdog.** The 15 s watchdog is the agent's speech barrier (`TTS_PLAYBACK_TIMEOUT_MS`). The frontend's own speak watchdogs are 30 s for Realtime and 12 s for the companion. None of them interacts with this path:
+  - A barrier credit is taken only when the host accepts an `agent.message`. An empty respond sends nothing, so there was nothing to wait for. The 90 s in C1v was the driver's turn timeout, not a watchdog.
+  - The re-plan happens before anything is sent, so it costs only one planner call (about 2–3 s).
+  - The fallback is an ordinary `agent.message`. Its credit was released by `tts.playback.complete` in every injected turn, so no watchdog timed out.
+
+#### Fix 9: the memory panel in the session language
+
+- **What changed.** In a booth session the extractor prompt now gives Korean the same language line the post-study languages have: "Write every new or rewritten description in Korean", plus "The examples above are in English; write yours in Korean anyway." Film titles, cinema names, formats, seat ids, dates, times and prices are kept exactly as on screen.
+- **Study sessions.** Korean adds nothing there, as before. The planner already received `language` in every session, and the extractor received it too: Korean simply had no line. So no study prompt changes in any language, and `extractorPrompt.check.ts` asserts that with hashes taken before the change. English booth sessions are also unchanged.
+- **Live runs, Korean.** Every chip was in Korean:
+
+  | Run | Commit | Chips in Korean | Outcome |
+  |---|---|---|---|
+  | Card A `st_1c15f15e` | `1ec6a31` | 9/9 ("Klara and the Sun을 보고 싶어 합니다.", "15마일 이내의 극장만 원합니다." …) | Booked Cinema Detroit, Tue 3 Nov 9:30 PM, C4 |
+  | Card C × 3 | `1229bae` | 7/7 in each run | Booked (see fix 4) |
+  | Quick cards, the 12 runs below | — | all of them | — |
+
+  Before the change, quick card 1 and quick card 4 had written English chips in this session ("Wants a movie appropriate for an eight-year-old child…"), and quick card 2 Korean ones.
+- **Output shape (`llm/extractorLanguage.regress.ts`).** This replays the 18 extractor requests logged in A2v and C2v, 2 runs each with the old booth prompt and 2 with the new one:
+  - New descriptions in Korean: **10/32 before, 32/32 after.**
+  - Existing preference ids dropped: 0 before, 0 after.
+  - Output shape (count, kept ids, strengths, relevantStages): before against before agreed 18 of 18 pairs, and before against after 68 of 72.
+  - All four disagreements come from one request, C's opener "목요일 오후에 아이 둘 데리고 영화 보러 가려고요." Before, it read as "Needs tickets for two children." with stage `seat` (both runs). After, it read as "아이 둘과 함께 볼 수 있는 영화를 원합니다." with stage `movie` (both runs). The Korean wording leads the model to a different but defensible reading, and the second card line makes the PG requirement explicit anyway.
+- **`preferenceIds` coverage on planner actions** did not drop:
+  - Before (A2v, A3v, C1v, C2v, C4v): filter 6/6, highlight 10/10.
+  - After (the 3 C runs and A): filter 5/5, highlight 12/13.
+  - The one miss is a degenerate model output in C3's seat turn. That highlight's `itemIds` turned into garbage tokens after six seat ids. It has nothing to do with the extractor; see "Still open".
+
+#### Fix 7: quick cards write for the ear
+
+- **What changed.** With voice on, a quick card now sends `spokenBrevity` and drops `narrateAdaptations` (`ChatPage.tsx`, `plannerWritesForTheEar`). The planner drops brevity whenever narration is on, so sending both would do nothing. With voice off, a card narrates as before.
+- **Why not the other option.** Capping narration through `QUICK_CARD_VOICE_VERBOSITY` (silencing `nav`, `select` and `view`) was rejected. The gate silences by the tool a sentence rides on, and under narration the question often rides on a GUI step. Quick card 3 ends on a highlight carrying "…어느 날로 할까요?", so the cap would have made that card silent.
+- **Why the watch line survives.** Under brevity the demo rules put the hidden count into the closing sentence, which is the card's "watch" line.
+- **Second commit.** The first brevity runs spoke the closing sentence twice: quick card 1 repeated "3개는 PG 조건 때문에 숨겨져 있어요. 둘 중 어떤 영화를 볼까요?" from the highlight step. `1ec6a31` drops a respond that repeats, word for word, a sentence already spoken this turn (booth only). That makes the last column.
+
+| Quick card | Before (`7989a44`): settle s / sentences | Brevity (`1229bae`) | Brevity + repeat drop (`1ec6a31`) |
+|---|---|---|---|
+| 1 영화 | 25.8 / 6 · 17.1 / 4 | 14.4 / 5 · 9.9 / 3 | **11.5 / 3 · 5.9 / 2** |
+| 2 영화관 | 31.8 / 6 · 35.4 / 7 | 17.0 / 4 · 16.8 / 3 | **11.5 / 2 · 16.4 / 2** |
+| 4 상영 시간 | 27.8 / 5 · 29.3 / 4 | 20.9 / 4 · 20.2 / 3 | **10.6 / 2 · 14.0 / 2** |
+
+- **Settle time and length.** Settle time fell from 17–35 s to 6–16 s, and the spoken part from 4–7 sentences to 2–3. The tools are the same: augment, then filter(s), then sort or highlight.
+- **The watch line.** The closing sentence states what was hidden in 11 of 12 brevity runs, for example "15마일 이내와 무료 주차 조건 때문에 2곳이 숨겨져 있어요. 어느 극장으로 할까요?" and "13개 상영은 오후 8시 이후 시작 및 오후 11시 종료 조건 때문에 숨겨져 있어요." The miss was quick card 1, run 1 of `1ec6a31`: "둘 다 조건에 맞아요. 어느 쪽으로 할까요?" never said that three films were hidden.
+- **Quick card 2's sort.** 2 of 4 runs mention the sort aloud ("…가까운 순으로 정렬했어요"), and it happens on screen in all 4.
+- **The cost.** The first sentence now comes later: after 5.6–14.0 s, against 3.5–5.3 s before. The visitor watches the list change in silence and then hears one sentence, where before each step was narrated as it happened. Speech/GUI sync (`speechSyncEnabled`) no longer holds anything, because the GUI steps have no sentence to wait for.
+- **The regression harness.** `spokenBrevity.regress.ts` does not apply. It replays recorded study turns with narration off, and quick cards are never recorded. The brevity section it measures is unchanged; this change only lets a new kind of session reach it.
+
+#### Still open after Round 2
+
+- **A degenerate planner output.** In C3 (`st_d4178fb7`) the seat-stage highlight's `itemIds` and reason dissolved into garbage tokens. Nothing visible broke: the turn spoke a normal question, and the run booked. The model may still do it in the booth (`gpt-5.6-terra`), and nothing in the validator caught it.
+- **Near-duplicate questions.** Exact repeats are now dropped. Near-repeats are not, such as "C4로 할까요?" right after "가운데쯤인 C4로 할까요?", or "목요일로 할까요?" right after "…이 날짜로 할까요?".
+- **The fallback question.** It is the stage's generic question, so in the rare case it fires it can repeat a question already asked. It fired only under fault injection. Its ja, zh-Hans, zh-Hant, de, fr and es wordings are machine-drafted.
 
 ## Traces and raw run data
 
