@@ -1531,8 +1531,22 @@ async function maybePlanAndExecute(trigger: string): Promise<void> {
       }
 
       if (readingDelayPromise) await readingDelayPromise;
-      if (decisionExplainText.trim()) {
+      /*
+        Booth only: the closing respond often repeats, word for word, the
+        sentence the visitor just heard on the GUI step before it (quick card
+        1, 2026-10-24: "3개는 PG 조건 때문에 숨겨져 있어요. 둘 중 어떤 영화를
+        볼까요?" on the highlight, then again as the respond). The tool path
+        already drops an exact repeat within a turn; this is the same rule for
+        the respond. A study session speaks it as before.
+      */
+      if (isDemoMode && decisionExplainText.trim() && turnRepeatGuard.hasSpoken(decisionExplainText)) {
+        monitor.pushEvent('assistant_message.repeat_suppressed', {
+          trigger,
+          text: decisionExplainText.trim(),
+        });
+      } else if (decisionExplainText.trim()) {
         await maybeSendAssistantMessage(planningContext, decisionExplainText, 'respond');
+        if (isDemoMode) turnRepeatGuard.noteSpoken(decisionExplainText);
       }
       monitor.pushEvent('planner.no_action', {
         source: decision.source,
