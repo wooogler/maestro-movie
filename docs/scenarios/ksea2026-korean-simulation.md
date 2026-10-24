@@ -111,6 +111,73 @@ Why it fails, from the traces:
 
 Rows 7–9 are the driver's agreeable answers to the agent's own fallback. A presenter would step in here, but the fallback the agent offers is the problem.
 
+### Card B after the fix (24 Oct 2026)
+
+Fix 1 below is implemented on branch `worktree-agent-ab4a1cfee1f3bf5af` (commits `ad3d99b`, `21641a8`, `4c658f9`, `578bc84`, `28ede6b`, on top of `realtime-voice` @ `a340d1c`). Every change is behind the booth flag (`AGENT_STUDY_MODE=demo`). A study session's planner and extractor prompts are byte-identical to before, and `plannerPrompt.check.ts` pins that.
+
+What changed, layer by layer:
+
+- **Extractor.** The agent rewrites the two format notes in the field guides before it builds the extractor prompt (`boothStageFieldGuides` in `llmExtractor.ts`). The frontend still sends the study text. In the booth a format requirement belongs to both `theater` and `time`, because amenities list "IMAX". A booth line also tells the extractor how to read the answer to an either-or question: "첫 번째 걸로" means the first way out offered, and that way out drops the requirement it goes without.
+- **Counts.** In the booth, each `priorStageAlternativeCounts` entry also lists `uncheckedHardPreferenceIds`: the hard preferences relevant to that stage that the count did not apply. That is how the planner can tell that "date: 5" includes four days the visitor ruled out. The count itself is unchanged, because a free-text preference ("Thursday night") cannot be evaluated there.
+- **Planner.** A new booth-only section, `REQUIREMENT_CONFLICT_RULES` (`llmPlanner.ts`), applies when two hard requirements exclude each other. The agent augments both fields and filters as usual, then does not select. It says where the one requirement can be met and what breaks the other, and asks one either-or question. Once the visitor gives one up, the booking carries on under the other. At a later stage it never offers a way out that breaks a stated requirement.
+- **Ordinals (fix 6, separable commit `4c658f9`).** In the first live run, the visitor gave up IMAX and was then refused "첫 번째 걸로 할게요." five times at the cinema question. A position in `visibleItems` now names an option in `DECISIVE_SELECTION_RULES` (1).
+- **Driver.** Three changes to `simulate-cards.mjs`. An either-or question ("…, 아니면 …?") now gets a pick instead of "네, 좋아요". A booked run is recognised from the host's "Booking Complete" spec; two runs that booked had ended `done=false` after a 90 s wait. A line is now retried while the composer is briefly disabled.
+
+**Replay (`apps/tuning-agent/src/llm/cardB.regress.ts`, real API calls, logged B2t/B3v/B4v turns, 3 runs each, final code):**
+
+| Case | Before | After |
+|---|---|---|
+| Opener: IMAX scoped to the theater stage | 0/9 (time only) | 9/9 |
+| "15마일…": IMAX and the limit both on theater | 0/9 | 9/9 |
+| Theater stage after the limit: names IMAX + Troy/20.4 mi and asks, no pick | 0/9 (filters to ≤15 mi, asks which cinema) | 9/9 |
+| Time-stage fallback at a cinema with no IMAX: no other day, names both and asks | 0/9 ("다른 날짜로 돌아갈까요?") | 9/9 |
+| Answer "첫 번째 걸로 할게요." retracts IMAX only | 0/9 (retracts nothing) | 9/9 |
+| The same, on the live requests from the runs below | — | 9/9 |
+| Answer "트로이까지 갈게요." retracts the distance limit only | 6/9 | 9/9 |
+| After giving up IMAX: carries on among the nearby two, distance filter kept | — | 8/9 (1 cleared the filter and left Troy on screen) |
+| After giving up the limit: selects Troy | — | 9/9 |
+
+**Live runs.** These ran on an isolated stack from the worktree (backend :3100 with `NODE_ENV=development`, so the agent ran from `src`; Vite :5273), with `--voice` and access code batch `cardb-fix`. Each row is one card-B run, oldest first. In every run, the visitor's opener led the agent to filter the cinemas to the one with IMAX and ask "MJR Troy로 할까요?". "15마일 넘게는 운전 안 할 거예요" then arrived at the theater stage.
+
+| Run | Code | Conflict named at the theater stage | Right requirement relaxed | Booked |
+|---|---|---|---|---|
+| L1 `st_7511f754` | `ad3d99b` | ✅ | ✅ (after 3 "네" from the old driver) | ❌ "첫 번째" refused 5× at the cinema question (fix 6 not yet in) |
+| L2 `st_c3997de5` | + ordinal | ✅ | ✅ | ✅ Emagine, Thu 7:15 PM, C9–C10 |
+| L3 `st_fcec7537` | + ordinal | ✅ | ❌ the extractor retracted the 15-mile limit; the planner still filtered ≤15 mi | ✅ Emagine, Thu 6:55 PM, F7–F8 |
+| L4 `st_4e74ebd6` | `4c658f9` | ✅ | ✅ | ✅ Emagine, Thu 6:55 PM, F7–F8 |
+| L5 `st_76ab7ae5` | `4c658f9` | ✅ | ❌ the 15-mile limit was retracted, so the conflict was raised again at the time stage | ❌ seat-stage loop (issue 3) |
+| L6 `st_36d456d6` | `4c658f9` | ✅ | ✅ | ✅ Emagine, Thu 6:55 PM, F8–F9 |
+| L7 `st_7ad8a4b6` | `578bc84` | ✅ | ✅ | ❌ seat-stage loop: "추천해 주시는 자리로" answered with a question 4× (issue 3) |
+| L8 `st_680888ad` | `578bc84` | ✅ | ✅ | ✅ Emagine, Thu 6:55 PM, B1–B2 |
+| L9 `st_6cb5406b` | `578bc84` | ✅ | ✅ | ✅ Emagine, Thu 6:55 PM, F7–F8 |
+| **F1** `st_8816f14b` | **`28ede6b`** | ✅ | ✅ | ✅ Emagine, Thu 6:55 PM, B1–B2 |
+| **F2** `st_e89d2cce` | **`28ede6b`** | ✅ | ✅ | ✅ Emagine, Thu 6:55 PM, B1–B2 |
+| **F3** `st_4d79136d` | **`28ede6b`** | ✅ | ✅ | ✅ Emagine, Thu 6:55 PM, B1–B2 |
+
+- **The card now does what it promises: 12 of 12 runs named the conflict at the theater stage.** No run booked a non-IMAX cinema without saying so, and no run offered another day. The sentence varied little: "IMAX는 MJR Troy Grand Digital Cinema 16에서만 가능하지만 20.4마일 떨어져 있어요. 가까운 곳에서 Standard 또는 3D로 볼까요, 아니면 Troy까지 가서 IMAX로 볼까요?"
+- The extractor misread "첫 번째" in 2 of the first 6 runs (L3, L5). Both logged requests are replay cases now, and the final wording reads them correctly 9/9. On the final code, 3 of 3 runs relaxed IMAX, kept "15 miles", and booked.
+- The conflict memory names both preference ids (`conflictMemory.preferenceIds`), and the panel drops the relaxed one. No dead end is recorded, because no `prev` happens. That is what the machinery does for a conflict resolved at its own stage.
+- What is still rough, all pre-existing: the date stage asks to confirm "목요일" (issue 5). The seat line gets a question before a recommendation (issue 3), and it looped in L5 and L7. "B1–B2" is the second row of six, which a visitor may not count as "앞줄 말고". The demo log's heuristic `conflict.detected` event also fires on the planner's new `[conflict]` reason tag, so demo logs count those turns.
+- **Cards A and C did not regress.** A (`st_361fb0b5`, `578bc84`) booked Cinema Detroit, Tue 9:30 PM (ends 11:28 PM), C4. C booked twice: `st_3ea62f48` (`4c658f9`) F5–F7 and `st_ff5667d8` (`578bc84`) E1–E3, both Wildwood at Emagine, Thu 1:15 PM. `28ede6b` changed only the booth extractor's relaxation line, which A and C never trigger, and they were not re-run on it.
+
+#### Transcript F1 (final code, voice on)
+
+| # | 방문자 | 에이전트가 한 말 | GUI 동작 | 첫 반응 / 마무리 (s) |
+|---|---|---|---|---|
+| 0 | — | 어떤 영화를 보고 싶으세요? | — | — |
+| 1 | 공저자랑 같이 목요일 밤에 스트리트 파이터를 IMAX로 보려고요. | IMAX 상영관만 보이도록 했어요. / IMAX 조건 때문에 2곳이 숨겨져 있어요. MJR Troy Grand Digital Cinema 16로 할까요? | select m1 → next → augment (3 labels, e.g. “MJR Troy Grand Digital Cinema 16 — IMAX, 3D Screens”) → filter amenities contains IMAX → augment (3 labels, e.g. “MJR Troy Grand Digital Cinema 16 — 20.4 miles — IMAX, 3D Screens”) | 8.3 / 13.7 |
+| 2 | 15마일 넘게는 운전 안 할 거예요. | IMAX는 MJR Troy Grand Digital Cinema 16에서만 가능하지만 20.4마일 떨어져 있어요. 가까운 곳에서 Standard 또는 3D로 볼까요, 아니면 Troy까지 가서 IMAX로 볼까요? | augment (3 labels, e.g. “MJR Troy Grand Digital Cinema 16 — 20.4 miles — IMAX, 3D Screens”) | 6.0 / 6.0 |
+| 3 | 첫 번째 걸로 할게요. *(follow-up)* | 15마일 이내 상영관만 보이도록 했어요. / 15마일 조건 때문에 1곳이 숨겨져 있어요. 어느 상영관으로 할까요? | clearModification filter → filter distanceMiles lte 15 | 4.9 / 8.2 |
+| 4 | 첫 번째 걸로 할게요. *(follow-up)* | 목요일로 할까요? / 목요일로 할까요? | select t4 → next → highlight 05 | 7.0 / 9.1 |
+| 5 | 네, 좋아요. *(follow-up)* | 저녁 시간대만 보고 있어요. / 저녁 시간대 조건으로 4개가 숨겨져 있어요. 어떤 시간으로 할까요? | select 2026-11-05 → next → augment (8 labels, e.g. “10:00 PM — 3D”) → filter time gte 18:00 | 9.8 / 12.7 |
+| 6 | 6시 반 이후에 시작해서 11시까지는 끝나야 해요. | 4개가 저녁 시간대 조건으로 숨겨져 있고, 종료 시간 조건으로 맞지 않는 상영도 제외했어요. / 6개가 저녁 시간대 조건으로 숨겨져 있어요. 어떤 시간으로 할까요? | augment (4 labels, e.g. “10:00 PM–12:04 AM — 3D”) → augment (4 labels, e.g. “10:00 PM–12:04 AM — 3D”) → filter endTime lte 23:00 | 8.7 / 15.6 |
+| 7 | 첫 번째 걸로 할게요. *(follow-up)* | 어느 붙어 있는 두 좌석으로 할까요? | select s_m1_t4_20261105_1855_s1 → next | 7.6 / 7.6 |
+| 8 | 두 자리 붙어서요. 앞줄은 말고요. | 어느 두 좌석으로 할까요? / 어느 두 좌석으로 할까요? | highlight B1, B2, B3, B4 | 4.6 / 7.7 |
+| 9 | 추천해 주시는 자리로 할게요. *(follow-up)* | 추천 좌석으로 B1, B2를 선택했어요. / Street Fighter를 Emagine Royal Oak에서 11월 5일 6:55 PM에 B1, B2 좌석으로 예매할까요? | selectMultiple B1, B2 → next | 2.9 / 10.0 |
+| 10 | 네, 좋아요. *(follow-up)* | — | next → **booked** | — / 2.9 |
+
+The other two final-code runs are in the appendix (F2, F3).
+
 ## Card C: 가족 낮 상영
 
 **Expected:** nothing blocks. Films are filtered to PG or under and re-sorted by runtime, a showing on Thu 5 Nov ends by 5 PM, and the party gets three adjacent seats.
@@ -189,7 +256,7 @@ The card pages render in Korean with the right line and watch text. Each card pa
 
 ## Concrete fixes (not implemented; for dispatch)
 
-1. **B dead end.**
+1. **B dead end.** *Implemented (booth only) and measured on 24 Oct; see "Card B after the fix".*
    - `apps/tuning-agent/src/llm/llmExtractor.ts`: a format requirement (IMAX, 3D, Dolby) should also be relevant to `theater`, since `amenities` carries it.
    - `apps/tuning-agent/src/core/planner.ts`: `priorStageAlternativeCounts` should apply every hard preference relevant to a stage, not only those with a filter binding, so "목요일" makes the date count 0.
    - `apps/tuning-agent/src/llm/llmPlanner.ts` (CP_MEMORY_PROMPT_RULES, Dead-end handling, around lines 353–368): when the blocking requirement is satisfiable only where another hard requirement excludes it, name both requirements and ask which to relax instead of proposing a backtrack.
@@ -333,3 +400,36 @@ The quick cards have no trace, because `/demo/card` never records. Each run's re
 | 8 | 세 자리 붙어서요. 앞줄은 말고요. | 앞줄을 제외하고 붙어 있는 세 자리 조합이 여러 개예요. 어느 줄을 원하세요? | — | 4.5 / 4.5 |
 | 9 | 추천해 주시는 자리로 할게요. *(follow-up)* | 앞줄을 제외한 붙어 있는 세 자리 중 한 조합을 표시했어요. 이 자리로 할까요? / 앞줄을 제외한 붙어 있는 세 자리 조합이 여러 개예요. 원하시는 줄이나 좌석을 말씀해 주세요. | highlight B1, B2, B3 | 3.0 / 6.7 |
 | 10 | 네, 좋아요. *(follow-up)* | `EN: I will run selectMultiple next.…` / 다음 단계로 넘어갈게요. / Wildwood를 Emagine Royal Oak에서 2026-11-05 1:15 PM에 보시며, B1, B2, B3 좌석이고 총 $45예요. 예약을 확정할까요? | selectMultiple B1, B2, B3 → next | 2.7 / 7.1 |
+
+### F2 (card B after the fix, voice)
+
+| # | 방문자 | 에이전트가 한 말 | GUI 동작 | 첫 반응 / 마무리 (s) |
+|---|---|---|---|---|
+| 0 | — | 어떤 영화를 보고 싶으세요? | — | — |
+| 1 | 공저자랑 같이 목요일 밤에 스트리트 파이터를 IMAX로 보려고요. | IMAX 조건에 맞는 극장만 보여드릴게요. / IMAX 상영관은 이 극장뿐이에요. 여기로 할까요? | select m1 → next → augment (3 labels, e.g. “MJR Troy Grand Digital Cinema 16 — 편의시설: Reserved Seating, Free Parking, Recliner Seating, IMAX, 3D Screens, Arcade”) → filter amenities contains IMAX | 8.0 / 11.4 |
+| 2 | 15마일 넘게는 운전 안 할 거예요. | IMAX는 MJR Troy Grand Digital Cinema 16에서만 가능하지만 20.4마일 떨어져 있어요. 가까운 곳에서 Standard 또는 3D로 볼까요, 아니면 Troy까지 가서 IMAX로 볼까요? | augment (3 labels, e.g. “MJR Troy Grand Digital Cinema 16 — 거리: 20.4마일 — 편의시설: Reserved Seating, Free Parking, Recliner Seating, IMAX, 3D Screens, Arcade”) | 7.4 / 7.4 |
+| 3 | 첫 번째 걸로 할게요. *(follow-up)* | 15마일 이내 극장만 보여드릴게요. / 15마일 제한 때문에 1곳이 숨겨져 있어요. 어느 극장으로 할까요? | clearModification filter → filter distanceMiles lte 15 | 5.2 / 8.6 |
+| 4 | 첫 번째 걸로 할게요. *(follow-up)* | 목요일로 할까요? / 목요일로 할까요? | select t4 → next → highlight 05 | 6.2 / 8.4 |
+| 5 | 네, 좋아요. *(follow-up)* | 저녁 시간대만 보여드려요. / 저녁 조건 때문에 4개 시간은 숨겨져 있어요. 어느 시간으로 할까요? | select 2026-11-05 → next → augment (8 labels, e.g. “10:00 PM — 시간대: 저녁”) → filter time gte 18:00 | 9.1 / 11.5 |
+| 6 | 6시 반 이후에 시작해서 11시까지는 끝나야 해요. | 종료 시간 조건 때문에 6개 시간이 숨겨져 있어요. 어느 시간으로 할까요? / 시작·종료 시간 조건 때문에 6개 시간이 숨겨져 있어요. 어느 시간으로 할까요? | augment (4 labels, e.g. “10:00 PM — 종료 12:04 AM”) → filter endTime lte 23:00 | 7.3 / 13.4 |
+| 7 | 첫 번째 걸로 할게요. *(follow-up)* | 붙어 있는 두 좌석 중 어느 쪽으로 할까요? | select s_m1_t4_20261105_1855_s1 → next | 7.6 / 7.6 |
+| 8 | 두 자리 붙어서요. 앞줄은 말고요. | 어느 두 자리를 고를까요? / 어느 두 자리를 고를까요? | highlight B1, B2, B3, B4 | 4.2 / 6.9 |
+| 9 | 추천해 주시는 자리로 할게요. *(follow-up)* | 추천 자리로 B1, B2를 골랐어요. / Street Fighter를 Emagine Royal Oak에서 11월 5일 6:55 PM에 B1, B2 좌석으로 예매합니다. 총 $30이며, 확정할까요? | selectMultiple B1, B2 → next | 3.3 / 8.7 |
+| 10 | 네, 좋아요. *(follow-up)* | — | next → **booked** | — / 2.7 |
+
+### F3 (card B after the fix, voice)
+
+| # | 방문자 | 에이전트가 한 말 | GUI 동작 | 첫 반응 / 마무리 (s) |
+|---|---|---|---|---|
+| 0 | — | 어떤 영화를 보고 싶으세요? | — | — |
+| 1 | 공저자랑 같이 목요일 밤에 스트리트 파이터를 IMAX로 보려고요. | IMAX 상영관만 보이도록 했어요. / IMAX 조건 때문에 다른 극장 2곳은 숨겨져 있어요. 이 극장으로 할까요? | select m1 → next → augment (3 labels, e.g. “MJR Troy Grand Digital Cinema 16 — IMAX, 3D Screens”) → filter amenities contains IMAX | 8.2 / 11.6 |
+| 2 | 15마일 넘게는 운전 안 할 거예요. | IMAX는 MJR Troy Grand Digital Cinema 16에서만 가능하지만 20.4마일이에요. 가까운 곳에서 Standard 또는 3D로 볼까요, 아니면 Troy까지 가서 IMAX로 볼까요? | augment (3 labels, e.g. “MJR Troy Grand Digital Cinema 16 — 20.4 miles — IMAX, 3D Screens”) | 6.6 / 6.6 |
+| 3 | 첫 번째 걸로 할게요. *(follow-up)* | 15마일 이내 극장만 보이도록 했어요. / 두 곳 모두 15마일 이내예요. 어느 극장으로 할까요? | clearModification filter → filter distanceMiles lte 15 | 5.6 / 8.7 |
+| 4 | 첫 번째 걸로 할게요. *(follow-up)* | 목요일로 할까요? / 목요일로 할까요? | select t4 → next → highlight 05 | 8.7 / 10.8 |
+| 5 | 네, 좋아요. *(follow-up)* | 저녁 시간대만 보여드릴게요. / 저녁 시간대 조건으로 4개가 숨겨져 있어요. 어떤 시간을 원하세요? | select 2026-11-05 → next → augment (8 labels, e.g. “10:00 PM — 3D”) → filter time gte 18:00 | 8.7 / 11.4 |
+| 6 | 6시 반 이후에 시작해서 11시까지는 끝나야 해요. | 종료 시간 조건으로 2개가 숨겨져 있어요. 어떤 시간을 원하세요? / 조건에 맞지 않아 6개 시간이 숨겨져 있어요. 6:55 PM과 7:15 PM 중 어느 시간이 좋으세요? | augment (4 labels, e.g. “10:00 PM — 3D, ends 12:04 AM”) → filter endTime lte 23:00 | 6.6 / 12.3 |
+| 7 | 첫 번째 걸로 할게요. *(follow-up)* | 붙어 있는 두 좌석이 여러 쌍 있어요. 어느 줄이 좋으세요? / 어느 붙어 있는 두 좌석으로 할까요? | select s_m1_t4_20261105_1855_s1 → next → highlight A1, A2, B1, B2, B3, B4, F7, F8, F9, F10 | 7.1 / 11.9 |
+| 8 | 두 자리 붙어서요. 앞줄은 말고요. | 어느 줄로 할까요? / 어느 줄로 할까요? | highlight B1, B2, B3, B4, F7, F8, F9, F10 | 4.9 / 7.0 |
+| 9 | 추천해 주시는 자리로 할게요. *(follow-up)* | B1, B2를 추천해요. / 어느 줄로 할까요? | highlight B1, B2 | 3.0 / 6.0 |
+| 10 | 추천해 주시는 자리로 할게요. *(follow-up)* | Street Fighter, Emagine Royal Oak, 2026-11-05 6:55 PM, B1·B2, 총 $30로 예약할까요? | selectMultiple B1, B2 → next | 6.2 / 6.2 |
+| 11 | 네, 좋아요. *(follow-up)* | — | next → **booked** | — / 2.6 |
