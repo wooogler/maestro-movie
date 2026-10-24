@@ -264,12 +264,12 @@ The card pages render in Korean with the right line and watch text. Each card pa
 2. **Typing fallback.**
    - `apps/frontend/src/components/chat/ChatInput.tsx`: make `isVoiceComposer` depend on `voiceModeEnabled`, not only on `voiceModeAvailable`, so turning the mic off gives a typable box.
    - Alternatively, if that is unwanted, drop the "타이핑" sentence from `quickCardMicNote` in `apps/frontend/src/i18n/strings.ts`.
-3. **Seat highlights.** Either:
+3. **Seat highlights.** *Implemented (booth only, second option) and measured on 24 Oct; see "Round 2" below.* Either:
    - change the cards: quick card 5 should name a row ("뒤쪽 E열로 두 자리요"), and A/C should delegate explicitly ("가운데쯤 한 자리 골라 주세요"); or
    - `llmPlanner.ts` (Highlight economy plus DECISIVE_SELECTION_RULES): when the visitor delegates ("추천", "골라 주세요"), mark one whole choice of the stated party size and say "추천해 드린 자리" rather than "선택했어요".
    - In both cases, fix the four-seat highlight: Highlight economy already says to mark a choice whole and of the party size, so add a regress case for three-seat parties.
 4. **Silent respond.** `apps/tuning-agent/src/index.ts` (around line 1618, `maybeSendAssistantMessage`): a `respond` with empty text is never a valid end of turn. Re-plan once, or fall back to the stage question in the session language.
-5. **`[ask-remembered]` scope.** `llmPlanner.ts:697`: limit rule (6) to `prf_` (preloaded) ids. A `pref_` id was extracted from this session's speech, so it counts as stated even after it scrolls out of history (`MAX_HISTORY_ENTRIES = 12`, `RECENT_WINDOW = 8` in `core/planner.ts`).
+5. **`[ask-remembered]` scope.** *Implemented (booth only) and measured on 24 Oct; see "Round 2" below.* `llmPlanner.ts:697`: limit rule (6) to `prf_` (preloaded) ids. A `pref_` id was extracted from this session's speech, so it counts as stated even after it scrolls out of history (`MAX_HISTORY_ENTRIES = 12`, `RECENT_WINDOW = 8` in `core/planner.ts`).
 6. **Ordinals.** `llmPlanner.ts` DECISIVE_SELECTION_RULES (1): list a positional reference to a visible list ("첫 번째", "맨 위", "the first one") as a named option.
 7. **Quick-card verbosity.** `apps/frontend/src/pages/ChatPage.tsx:799`: consider letting a quick card send `spokenBrevity` too, or cap quick-card narration to the final sentence through `QUICK_CARD_VOICE_VERBOSITY`. Measure the change with `spokenBrevity.regress.ts`.
 8. **Quick cards 2–4.**
@@ -277,6 +277,103 @@ The card pages render in Korean with the right line and watch text. Each card pa
    - For card 4, include the format in time labels (augment) so the two 8:10 rows differ.
 9. **Memory language.** `llmExtractor.ts`: pass the conversation language and write `description` in it (the panel already takes it verbatim).
 10. **Capacity.** `apps/backend/src/study/sessionService.ts`: finish a demo session when its last host socket closes, or shorten the idle timeout for demo sessions.
+
+### Round 2: opening questions, remembered scope, seats (24 Oct 2026)
+
+Three more booth-only planner changes, on branch `worktree-agent-af0d7b5c002895fec` on top of `realtime-voice` @ `7989a44`. Each is a demo-gated prompt section or flag. A study session's prompt is byte-identical; `plannerPrompt.check.ts` asserts that for every study configuration, and it now also pins the three booth sections by content hash.
+
+| Change | Where | Gate |
+|---|---|---|
+| **Opening questions.** On entering a stage that nothing in memory or history bears on yet, ask ONE spoken question that invites a preference the stage's fields can act on, instead of "which one?". | `STAGE_OPENING_RULES` (`llmPlanner.ts`) | `openingQuestions` (demo only) |
+| **Remembered scope (fix 5).** Rule (6) `[ask-remembered]` now covers `prf_` (profile-seeded) ids only. A `pref_` id was extracted from this session's speech, so it counts as said even after it scrolls out of history. A stated day is (1) `[named-option]` at the date stage, including on entry. To let the agent act on that, `select` is offered at the date stage's entry when memory holds a hard `pref_` date preference (`keepSelectAtDateEntry`, `core/planner.ts`). | `DECISIVE_SELECTION_RULES` (6), `getPlannerToolSchema` | demo only |
+| **Seats (fix 3).** With a party size and a position, the agent marks up to three whole choices of exactly that size and asks which one. When the visitor delegates, it selects one whole choice and says it is a recommendation. If no party size has been given, it asks once and then books one seat. The ≤3-choices ceiling is kept; only the ban on choosing which qualifying choices to mark is lifted, and only at the seat stage. | `SEAT_CHOICE_RULES` (`llmPlanner.ts`) | `seatChoices` (demo only, GUI on) |
+
+I checked the id prefixes in code before relying on them. The extractor mints ids through `createPreferenceId()` → `pref_…` (`core/cpMemory.ts`) and keeps an echoed id, so a restated profile preference stays `prf_`. A profile seeds `PROFILE_PREFERENCE_ID_PREFIX = 'prf_'`, and `memory.hasProfilePreferences()` already keys on that prefix.
+
+**How these were measured.** The stack was isolated and ran from the worktree (backend :3100 with `NODE_ENV=development`, so the agent ran from `src`; Vite :5273). Every run used `--voice` and access-code batch `r2a`, with planner `gpt-5.6-terra`. "Before" means the same stack on `7989a44`, run before any source edit. The driver gained a walk-through card `W`: a visitor with nothing in mind answers each stage with "상관없어요, 첫 번째 걸로 할게요." ("No preference, the first one is fine."), and on the seat map with "상관없어요, 추천해 주시는 자리로 할게요.". It also gained a follow-up for preference questions: "no preference" plus a pick, instead of a yes that answers nothing. The prompt was revised three times during the runs, so each row below says which text it ran on. "Final" is the committed text.
+
+#### 1. Opening questions
+
+What the agent said on entering each stage in the walk-through, with no preset memory:
+
+| Stage | Before (ko) | After (ko, final, `st_b677d179`) | Before (en) | After (en, `st_909ec15a`) |
+|---|---|---|---|---|
+| movie | 어떤 영화를 보고 싶으세요? | 장르나 관람등급, 러닝타임 중에 중요하게 보는 게 있으세요? | What kind of movie are you in the mood for? | Anything you care about, like genre, age rating, or how long it runs? |
+| theater | 어느 극장에서 보실까요? | 얼마나 멀리까지 괜찮으세요? 주차나 리클라이너 좌석도 중요하면 말씀해 주세요. | Which theater would you like? | How far are you willing to go? Tell me if parking or recliners matter. |
+| date | 어느 날짜로 보실까요? | 평일이 좋으세요, 주말이 좋으세요? | Which day works for you? | A weekday, or the weekend? |
+| time | 어느 시간으로 보실까요? | 몇 시쯤 시작하거나 끝나면 좋으세요? | Which showtime would you like? | Roughly when should it start, or be over by? |
+| seat | 어느 좌석으로 하실까요? | 몇 분이시고, 앞쪽과 뒤쪽 중 어디가 좋으세요? | Which seat would you like? | How many of you, and do you like it nearer the front or the back? |
+
+- **Walk-throughs:** before, 9 of 10 stage openers asked "which one?". The tenth was the English movie opener, "what kind of movie". After, 20 of 20 openers across 4 walks (2 ko, 2 en) asked one preference question naming two or three of the stage's real fields. None listed every field.
+- **English wording:** English sessions use the prompt's example sentences almost word for word. Korean sessions paraphrase them.
+- **Position words:** the minimal answer "상관없어요, 첫 번째 걸로 할게요" selected the first visible option 16 of 16 times. That includes the answer to "평일이 좋으세요, 주말이 좋으세요?", where it picked the first date, not "weekday". The position-word rule from `4c658f9` did not misfire in any Round 2 run.
+- **Cards A and C:** the opening question never took a turn that a card line should have had.
+  - In all 8 after-runs (A ×4, C ×4), every one of the 32 card lines was acted on (select, augment, filter, sort or highlight). None was answered with an opening question.
+  - The question fired only where nothing applied: the session start, C's theater stage (4/4), and the seat stage before the seat line (8/8). The seat line then answered it.
+  - Turn counts went down: card A from 8 to 7 (in the 3 runs after the first text), card C from 11 to 8 (4 of 4). Most of the saving comes from change 2.
+- **Where it still fires with a preference in memory:**
+  - At card A's time stage, "Wants to see it tonight" is in memory, and the agent asked "몇 시쯤 시작하면 좋을까요?" in 4 of 4 runs. Before the change it asked "어느 시간으로 할까요?". That preference narrows nothing at that stage, so the question works as rule (4)'s narrowing question, and the next card line answers it. Strictly, it breaks the "never where a preference applies" rule.
+  - One early run (`st_47bba7dc`, first text) added "주차나 리클라이너 좌석도 중요하세요?" after applying the 15-mile filter. The final text restricts the section to the turn that enters the stage, and this did not recur in the 7 later card runs.
+
+#### 2. Remembered scope: the date stage
+
+**Replay** (`apps/tuning-agent/src/llm/statedDay.regress.ts`, real API calls). The input is the first planner call at the date stage of every 24 Oct trace in the main checkout that had a hard date preference: 10 sessions, 3 runs each. BEFORE ran the same harness from a `git archive` of `7989a44`. `prf-control` is the same request with the date preference's id renamed to `prf_…`, which must still be asked about.
+
+| Side | Stated day (`pref_`) | `prf-control` |
+|---|---|---|
+| BEFORE (`7989a44`) | **confirm-q 29/30**, statement 1 | confirm-q 30/30 |
+| AFTER, prompt only (`--no-widen`) | confirm-q 4, statement 26, commit 0 | confirm-q 30/30 |
+| AFTER, final (prompt + select at date entry) | **commit 25/30, all on the named day**; statement 5; confirm-q 0 | confirm-q 29/30, statement 1 |
+
+- The prompt alone stops the question, but the agent can then only state the day, and the visitor still has to say something to move on. Offering `select` at entry is what saves the turn.
+- In the remaining 5 of 30, it marks the day and states it ("오늘은 Nov 3 (Tue)예요.").
+- Three wordings were tried. The first gave commit 8/30. The second added "not highlight" (23/30), and the final one added the explicit `prf_` exception (24/30, then 25/30 with every booth flag on). In the second wording, 3 of 30 `prf-control` runs took a profile day as named ("오늘 날짜로 할게요."); the exception brought that back to 30/30.
+
+**Live:**
+- Before, the date stage asked in 2 of 2 runs: A "오늘 날짜로 할까요? / 오늘로 할까요?", C "목요일 일정에 맞는 날짜예요. / Nov 5 (Thu)로 할까요?".
+- After, 8 of 8 card runs (A ×4, C ×4) selected the stated day on entry and moved straight to the time stage. A said "오늘로 할게요." (4/4). C said "목요일로 할게요." (3/4) or nothing (1/4).
+- No run selected a wrong day.
+
+#### 3. Seats
+
+| Measure | Before | After |
+|---|---|---|
+| Quick card 5 ("두 자리 붙어서, 뒤쪽으로요. 앞줄은 말고요."): right-size choices marked | **0/3** today (0/2 this morning): "뒤쪽에서 붙어 있는 두 자리 선택지가 여러 개예요. 어느 줄로 하실까요?" | **9/9**: three pairs in rows E/F of A–F every time (3 final-text runs, 6 on earlier texts), then "표시된 자리 중 어느 쌍으로 하시겠어요?" |
+| Card C ("세 자리 붙어서요. 앞줄은 말고요."): right-size choices marked | E1–E4 (four for three), then E1–E3 and two more questions | 3/4. Final text: E2–E4, F5–F7, F8–F10 ✓, and E1–E3, F5–F7, B1–B3 (right size, but B is the second row of six). Earlier text: one run marked a pair (F9–F10) beside two triples ✗ |
+| Card A ("한 자리만요. 가운데쯤으로, 앞줄은 말고요."): marked | C4 | Three single seats, 4/4 (e.g. C4, E4, E5). E is the back row of A–E, which is not "가운데쯤", in 3/4 |
+| Delegation ("추천해 주시는 자리로 할게요") ends in a selection with no further question | A 1/1, C 1/1 (C after two extra questions, said "추천 좌석 E1, E2, E3로 선택했어요.") | **A 4/4, C 4/4**, first try, as a recommendation: "C4 좌석을 추천해요.", "F5, F6, F7을 추천해요.", "E2, E3, E4를 추천드려요." One early run said "추천으로 F5, F6, F7을 골랐어요." |
+| Delegation with no party size (walk-through) | 8 delegations, never booked (ko and en, 0/2): "몇 분이 함께 보시나요?" ×6, "Which seat would you like?" ×6 | Booked 4/4 after 2–4 delegations: it asked "몇 자리로 할까요?" 1–3 times, then booked one seat ("E6 좌석을 추천해요.") |
+
+- A fix found along the way: the first seat wording told the highlight step to say nothing. A quick card does not send `spokenBrevity`, so the empty sentence fell back to the English "I will run highlight next. Reason: [seat-choices] …", which was spoken in 3 of 3 quick-card runs. The final wording only keeps the question off the highlight step, and the fallback did not recur in the 6 runs that followed.
+- **Party-size guesses:** at C's seat stage the agent sometimes guessed a size from "아이 둘": "두 분이 함께 앉을 자리로…" in 2 of 4 runs, one of them on the final text. The visitor's line corrects it straight away.
+
+#### Transcript W2 (final code, voice on, Korean walk-through, `st_b677d179`)
+
+| # | 방문자 | 에이전트가 한 말 | GUI 동작 |
+|---|---|---|---|
+| 0 | — | 장르나 관람등급, 러닝타임 중에 중요하게 보는 게 있으세요? | — |
+| 1 | 상관없어요, 첫 번째 걸로 할게요. | 얼마나 멀리까지 괜찮으세요? 주차나 리클라이너 좌석도 중요하면 말씀해 주세요. | select m4 → next |
+| 2 | 상관없어요, 첫 번째 걸로 할게요. | 평일이 좋으세요, 주말이 좋으세요? | select t2 → next |
+| 3 | 상관없어요, 첫 번째 걸로 할게요. | 몇 시쯤 시작하거나 끝나면 좋으세요? | select 2026-11-03 → next |
+| 4 | 상관없어요, 첫 번째 걸로 할게요. | 몇 분이시고, 앞쪽과 뒤쪽 중 어디가 좋으세요? | select 12:50 PM → next |
+| 5–7 | 상관없어요, 추천해 주시는 자리로 할게요. ×3 | 몇 자리로 할까요? ×3 | — |
+| 8 | 상관없어요, 추천해 주시는 자리로 할게요. | E6 좌석을 추천해요. / The Legend of Aang: The Last Airbender, Bel Air Luxury Cinema, 11월 3일 12:50 PM, E6 좌석으로 총 $19.00예요. 예매를 확정할까요? | select E6 → next |
+| 9 | 네, 좋아요. | — | next → **booked** |
+
+Rows 5–7 show the driver's visitor refusing to give a number, which a real visitor would not do. The opening questions are rows 0–4.
+
+**Not measured:**
+- English cards A and C.
+- Quick cards 1–4. The opening question is now also spoken before a quick card's line, because a quick card starts at its stage with nothing in memory.
+
+**Card B in Round 2 (final text, 2 runs, `st_2a3c7a4d` and `st_003c5788`).** Both booked Emagine on Thursday: 6:55 PM B2–B3, and 7:15 PM 3D F1–F2.
+- **Conflict:** both runs named it at the theater stage, in the same sentence as before ("IMAX는 MJR Troy Grand Digital Cinema 16에서만 가능하지만 20.4마일이에요. 가까운 곳에서 Standard 또는 3D로 볼까요, 아니면 …?"). "첫 번째 걸로" relaxed IMAX in both.
+- **Date stage:** both runs said "목요일로 할게요." and selected Thursday on entry. Before Round 2 it asked "목요일로 할까요?".
+- **Seat stage, two things that are new:**
+  - "두 자리 붙어서요. 앞줄은 말고요." was answered with ONE pair and "B2와 B3로 할까요?" / "F1과 F2로 할까요?" — a pointer and a confirmation, not up to three choices and a which-one question. B is the second row.
+  - In one run, the seat-entry step called `highlight` before the visitor had said anything about seats. Its ids were A1–A8 plus one corrupted id containing stray model output (`…assistant to=functions.respond 北京赛车…`), followed by the opening question. Guessing the party size from "공저자랑 같이" is what the seat section forbids. The corrupted id got through because `validateLlmAction` checks ids for select and selectMultiple but not for highlight (pre-existing). Nothing was spoken from it, and the booking went on normally.
+
+Traces for the runs above are in the worktree's `logs/demo/trace/` (gitignored). The driver JSONs and replay outputs are scratch.
 
 ## Traces and raw run data
 
