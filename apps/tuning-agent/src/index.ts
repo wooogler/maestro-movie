@@ -5,6 +5,7 @@ import { AgentMemory } from './core/memory';
 import { applyStateUpdated, applyUserMessage, fromSnapshot } from './core/perception';
 import { planNextAction } from './core/planner';
 import { agentNotice } from './core/agentNotices';
+import { planWithEmptyRespondGuard } from './core/emptyRespond';
 import {
   buildViewFingerprint,
   createTurnRepeatGuard,
@@ -234,6 +235,13 @@ let conversationLanguage = 'en';
  * stale one from an earlier turn. Rule-sourced decisions leave it null.
  */
 let lastPlannerTiming: { model: string; plannerMs: number } | null = null;
+/**
+ * The visitor spoke and nothing has been said to them since. Set by
+ * `user.message`, cleared by the first `agent.message` the host accepts. The
+ * booth's empty-respond guard (core/emptyRespond.ts) reads it: an empty respond
+ * while this is true would end the visitor's turn in silence.
+ */
+let userTurnAwaitingAnswer = false;
 let ensureSessionReadyInFlight: Promise<void> | null = null;
 let sessionReady = false;
 let hostConnectionAvailable = false;
@@ -1267,7 +1275,10 @@ async function maybeSendAssistantMessage(
   const action = buildAgentMessageAction(trimmed, category);
   if (!isActionSafe(context, action)) return;
   const outcome = await executePlannedAction(relay, action);
-  if (outcome.ok) noteAgentSpeechSent();
+  if (outcome.ok) {
+    noteAgentSpeechSent();
+    userTurnAwaitingAnswer = false;
+  }
   monitor.pushEvent('assistant_message.outcome', { text: trimmed, outcome });
 }
 
@@ -1444,20 +1455,49 @@ async function maybePlanAndExecute(trigger: string): Promise<void> {
       });
     }
     const plannerStartedAt = Date.now();
-    const decision: PlanDecision = await planNextAction(
+    /*
+      Booth only: an empty respond is never how the visitor's turn ends (KSEA
+      run C1v, 90 s of silence). Planned once more with a note, and if that is
+      empty too, the stage's question in the session language stands in for
+      it. A study session plans exactly once, as before.
+    */
+    const guarded = await planWithEmptyRespondGuard(
       planningContext,
-      memory,
-      lastAgentToolName,
-      activeBacktrackContinuation,
-      suppressNavigationTools,
-      conversationLanguage
+      (context) =>
+        planNextAction(
+          context,
+          memory,
+          lastAgentToolName,
+          activeBacktrackContinuation,
+          suppressNavigationTools,
+          conversationLanguage
+        ),
+      {
+        enabled: isDemoMode,
+        userTurnAwaitingAnswer,
+        language: conversationLanguage,
+        onStep: (step, stepDecision, replanned) => {
+          if (step.kind === 'accept') return;
+          monitor.pushEvent(step.kind === 'replan' ? 'planner.empty_respond_replan' : 'planner.empty_respond_fallback', {
+            trigger,
+            stage: planningContext.stage ?? null,
+            replanned,
+            reason: stepDecision.action?.reason ?? null,
+            ...(step.kind === 'fallback' ? { text: step.text } : {}),
+          });
+        },
+      }
     );
+    const decision: PlanDecision = guarded.decision;
     lastPlannerTiming =
       decision.source === 'llm'
         ? { model: resolveOpenAIModel(), plannerMs: Date.now() - plannerStartedAt }
         : null;
     const action = decision.action;
-    const decisionExplainText = decision.explainText ?? '';
+    // Non-empty only for a respond that came back empty twice: see above.
+    const decisionExplainText = (decision.explainText ?? '').trim()
+      ? (decision.explainText ?? '')
+      : guarded.fallbackText;
     const plannedToolName =
       action?.type === 'tool.call' && typeof action.payload.toolName === 'string'
         ? action.payload.toolName
@@ -1958,6 +1998,7 @@ function resetRuntimeState(): void {
   lastActionFingerprint = '';
   lastAgentToolName = null;
   lastActionAt = 0;
+  userTurnAwaitingAnswer = false;
   turnRepeatGuard.reset('session-reset');
   // A barrier or reading delay left armed from the previous trial would
   // otherwise leak into the next one — the study resets between trials.
@@ -2308,6 +2349,7 @@ async function handleInbound(envelope: RelayEnvelope): Promise<void> {
       const userMessage = toUserMessagePayload(envelope.payload);
       if (!userMessage.text.trim()) return;
       userConversationStarted = true;
+      userTurnAwaitingAnswer = true;
       lastAgentToolName = null;
       resetTurnRepeatGuard('user-message');
       if (activeBacktrackContinuation) {
