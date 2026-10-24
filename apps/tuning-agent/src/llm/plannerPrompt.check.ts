@@ -71,6 +71,7 @@ const NARRATION_MARKER = 'Narrating the adaptation';
 const BREVITY_MARKER = 'Writing for the ear';
 const PRELOAD_MARKER = 'Remembered preferences (this session)';
 const DEMO_MARKER = 'Booth demo (this session)';
+const DECISIVE_MARKER = 'Deciding for the visitor (booth demo)';
 
 /*
   The prompt the recorded study ran against, pinned by content.
@@ -133,6 +134,15 @@ for (const config of STUDY_CONFIGS) {
   check(`${key}: the demo flag off changes nothing`, before === demoOff);
   check(`${key}: ...and neither does leaving it undefined`, before === demoUndefined);
   check(`${key}: no booth-demo section appears`, !before.includes(DEMO_MARKER));
+
+  const decisiveOff = buildSystemPrompt(wf, STAGE_META, config.language, false, false, false, false, false);
+  const decisiveUndefined = buildSystemPrompt(wf, STAGE_META, config.language, false, false, false, false, undefined);
+  // The flag without the demo flag is a caller's mistake, and must still be a no-op.
+  const decisiveWithoutDemo = buildSystemPrompt(wf, STAGE_META, config.language, false, false, false, false, true);
+  check(`${key}: the decisive flag off changes nothing`, before === decisiveOff);
+  check(`${key}: ...and neither does leaving it undefined`, before === decisiveUndefined);
+  check(`${key}: ...nor asking for it outside a demo session`, before === decisiveWithoutDemo);
+  check(`${key}: no decisive-selection section appears`, !before.includes(DECISIVE_MARKER));
 }
 check(
   'the style rule the narration section would override is still there, untouched',
@@ -289,6 +299,43 @@ console.log('\n9. a booth demo session gets the demo section, before brevity and
   const withAgain = buildSystemPrompt(workflow(true), STAGE_META, 'en', false, false, false, true);
   check('the memo keys on the flag: off after on is off', !withoutAfter.includes(DEMO_MARKER));
   check('and on after off is on again', withAgain.includes(DEMO_MARKER) && withFirst === withAgain);
+}
+
+console.log('\n10. a booth demo session that asks for decisive selection gets the section, after brevity');
+{
+  const off = buildSystemPrompt(workflow(true, true), STAGE_META, 'ko', false, true, true, true, false);
+  const on = buildSystemPrompt(workflow(true, true), STAGE_META, 'ko', false, true, true, true, true);
+  check('the section is appended', on.includes(DECISIVE_MARKER));
+  check('it only adds — every line of the off prompt is still there', off.split('\n').every((line) => on.includes(line)));
+  check('it says which side wins on conflict', /this section wins/i.test(on.slice(on.indexOf(DECISIVE_MARKER))));
+  check(
+    'it names the brevity section among what it overrides, since brevity forbids selecting without consent',
+    /the brevity section/.test(on.slice(on.indexOf(DECISIVE_MARKER)))
+  );
+  check(
+    'it sits after the demo, remembered-preferences and brevity sections and before the language section',
+    on.indexOf(DECISIVE_MARKER) > on.indexOf(DEMO_MARKER) &&
+      on.indexOf(DECISIVE_MARKER) > on.indexOf(PRELOAD_MARKER) &&
+      on.indexOf(DECISIVE_MARKER) > on.indexOf(BREVITY_MARKER) &&
+      on.indexOf(DECISIVE_MARKER) < on.indexOf('Language:')
+  );
+  const tail = on.slice(on.indexOf(DECISIVE_MARKER));
+  check('it keeps the final booking confirmation', /\[confirm-booking\]/.test(tail) && /always stays/.test(tail));
+  check('it keeps the fuzzy-match clarification', /\[ask-fuzzy\]/.test(tail) && /Never select a near miss/.test(tail));
+  check('it keeps the remembered-preference question', /\[ask-remembered\]/.test(tail) && /prf_/.test(tail));
+  check('a direct answer ends with the answer', /\[answer\]/.test(tail) && /nothing after it/.test(tail));
+  check('it asks for the rule tag in reason, which the metric script reads', /Begin the reason field with the rule/.test(tail));
+  check(
+    'it never selects a filtered-down survivor as if it were the only option',
+    /never select the one option a filter left on screen/.test(tail)
+  );
+  const withFirst = buildSystemPrompt(workflow(true), STAGE_META, 'en', false, false, false, true, true);
+  const withoutAfter = buildSystemPrompt(workflow(true), STAGE_META, 'en', false, false, false, true, false);
+  const withAgain = buildSystemPrompt(workflow(true), STAGE_META, 'en', false, false, false, true, true);
+  check('the memo keys on the flag: off after on is off', !withoutAfter.includes(DECISIVE_MARKER));
+  check('and on after off is on again', withAgain.includes(DECISIVE_MARKER) && withFirst === withAgain);
+  const demoOnly = buildSystemPrompt(workflow(true), STAGE_META, 'en', false, false, false, true, false);
+  check('without the flag a demo session reads exactly as before', demoOnly === withoutAfter && !demoOnly.includes(DECISIVE_MARKER));
 }
 
 console.log('\nL. the post-study languages add a section and leave en/ko alone');

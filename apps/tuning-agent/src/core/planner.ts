@@ -240,7 +240,8 @@ function hasTool(toolSchema: ToolSchemaItem[], toolName: string): boolean {
 function getPlannerToolSchema(
   toolSchema: ToolSchemaItem[],
   lastAgentToolName?: string | null,
-  suppressNavigationTools?: boolean
+  suppressNavigationTools?: boolean,
+  keepSelectAfterGuiStep?: boolean
 ): ToolSchemaItem[] {
   // Treat conversational text as assistant response (agent.message), not as a UI tool.
   const plannerTools = toolSchema.filter((tool) => tool.name !== 'postMessage');
@@ -252,6 +253,15 @@ function getPlannerToolSchema(
   if (!lastAction) return restrictNavigation(plannerTools);
 
   const guiFollowUpTools = new Set(['augment', 'filter', 'sort', 'highlight', 'clearModification']);
+  // Booth demo only, and only in a chain the visitor's own utterance opened:
+  // "I want the closest theater" must augment first (the visibility gate) and
+  // may then select, in the same turn, the one option that leaves. Never after
+  // next — stage entry stays a consent boundary, the visitor has not spoken
+  // there yet — and never after highlight, which is the step that points
+  // rather than commits.
+  const guiThenCommitTools = keepSelectAfterGuiStep
+    ? new Set([...guiFollowUpTools, 'select', 'selectMultiple'])
+    : guiFollowUpTools;
 
   switch (lastAction) {
     case 'select':
@@ -265,10 +275,37 @@ function getPlannerToolSchema(
     case 'filter':
     case 'sort':
     case 'clearModification':
-      return restrictNavigation(plannerTools.filter((tool) => guiFollowUpTools.has(tool.name)));
+      return restrictNavigation(plannerTools.filter((tool) => guiThenCommitTools.has(tool.name)));
     default:
       return restrictNavigation(plannerTools);
   }
+}
+
+/**
+ * Did the visitor's own words open the chain of planner calls now running at
+ * this stage? True when, walking the host's history back from the end, the
+ * first thing that is not an agent sentence or an agent tool annotation at this
+ * stage is a user utterance at this stage. A stage-entry entry (a system entry
+ * for this stage with no annotation) or anything from another stage means the
+ * chain began with the agent's own next or prev, where the visitor has said
+ * nothing yet and select stays withheld.
+ */
+export function chainOpenedByUserUtterance(messageHistory: unknown[], stage: string | null): boolean {
+  if (!stage) return false;
+  for (let i = messageHistory.length - 1; i >= 0; i -= 1) {
+    const entry = asRecord(messageHistory[i]);
+    if (!entry) continue;
+    const type = toHistoryType(entry.type);
+    const entryStage = readTrimmedString(entry.stage);
+    if (type === 'agent') continue;
+    if (entryStage !== stage) return false;
+    if (type === 'user') return Boolean(readTrimmedString(entry.label));
+    if (type === 'system') {
+      if (compactAnnotation(entry.annotation, true)) continue;
+      return false;
+    }
+  }
+  return false;
 }
 
 function toStage(raw: string | null): Stage | null {
@@ -961,7 +998,8 @@ export async function planNextAction(
     const plannerTools = getPlannerToolSchema(
       context.toolSchema,
       lastAgentToolName,
-      suppressNavigationTools
+      suppressNavigationTools,
+      DEMO_SESSION && chainOpenedByUserUtterance(context.messageHistoryTail, stage)
     );
     const plannerCpMemoryLimit = Math.max(0, Math.floor(context.plannerCpMemoryLimit ?? 0));
     const cpMemoryEnabled = plannerCpMemoryLimit > 0;
@@ -995,7 +1033,7 @@ export async function planNextAction(
       // Profile-seeded preferences exist only in the demo; see
       // PRELOADED_MEMORY_RULES for why the planner is told about them.
       ...(memory.hasProfilePreferences() ? { preloadedMemory: true } : {}),
-      ...(DEMO_SESSION ? { demoSession: true } : {}),
+      ...(DEMO_SESSION ? { demoSession: true, decisiveSelection: true } : {}),
     };
 
     const llm = await planActionWithOpenAI(plannerInput);

@@ -58,7 +58,8 @@
     "regress:extractor": "tsx apps/tuning-agent/src/llm/extractorPrompt.regress.ts",
     "regress:highlight": "tsx apps/tuning-agent/src/llm/highlightPrompt.regress.ts",
     "regress:stalefilter": "tsx apps/tuning-agent/src/llm/staleFilterPrompt.regress.ts",
-    "regress:brevity": "tsx apps/tuning-agent/src/llm/spokenBrevity.regress.ts"
+    "regress:brevity": "tsx apps/tuning-agent/src/llm/spokenBrevity.regress.ts",
+    "regress:decisive": "tsx apps/tuning-agent/src/llm/decisiveSelection.regress.ts"
   },
   "devDependencies": {
     "typescript": "^5.3.3"

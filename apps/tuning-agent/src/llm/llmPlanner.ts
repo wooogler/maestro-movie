@@ -73,6 +73,14 @@ interface PlannerInput {
    * prompt exactly as it was. See DEMO_SESSION_RULES.
    */
   demoSession?: boolean;
+  /**
+   * Booth demo only: select what the visitor named instead of asking them to
+   * confirm it. Absent or false leaves the prompt and the tool descriptions
+   * exactly as they were. See DECISIVE_SELECTION_RULES. A separate flag from
+   * `demoSession` so `decisiveSelection.regress.ts` can replay a turn with and
+   * without it against the same demo prompt.
+   */
+  decisiveSelection?: boolean;
 }
 
 interface PlannerAction {
@@ -661,6 +669,38 @@ const PRELOADED_MEMORY_RULES =
   "- A soft comparison preference (closer, cheaper, earlier) is applied by augmenting its field and then sorting. The sort does not replace the augment.\n" +
   "- If the field is already in visibleItems[].value, skip the augment and apply by strength as the GUI rules say.";
 
+/**
+ * Demo only. The 2026-10-23 booth session, in a noisy room: "I wanna see the
+ * Street Fighter" became clearModification, highlight, "Would you like to
+ * choose Street Fighter?"; "which one is the closest one?" became sort, "The
+ * closest theater is Bel Air Luxury Cinema. Would you like to choose it?",
+ * "okay it's fine", select. Three shouted turns for one decision. The decision
+ * framework, the commitment guardrail and the Pre-select confirmation rule were
+ * written for a study in which consent before every GUI change was the point;
+ * the study prompt keeps them byte-for-byte, and this section — appended for
+ * the booth only, after brevity so it outranks brevity's "never select without
+ * the consent those rules ask for" — says which consent the visitor's own words
+ * already gave. `decisiveSelection.regress.ts` measures it against the logged
+ * booth sessions; the one failure it must never produce is a select on an
+ * option the visitor did not name.
+ */
+const DECISIVE_SELECTION_RULES =
+  "Deciding for the visitor (booth demo):\n" +
+  "- This is a conference booth in a loud room, not the study. Every confirmation question costs the visitor a shouted \"yes\", so the consent the rules above ask for before select is given by what the visitor says, not by a yes to a question you ask. Where this section conflicts with the decision framework (ACT / SUGGEST / ASK), the commitment guardrail, the Pre-select confirmation rule, the brevity section, or a tool description that says to end with a question, this section wins.\n" +
+  "- SELECT, do not ask, when:\n" +
+  "  (1) [named-option] the visitor names an option that is in visibleItems on this screen — a title, a theater, a day (\"Thursday\", \"the 6th\"), a start time, a seat or a seat pair — in any wording, including a preference-shaped one (\"I'm only free on Thursday\", \"I wanna see Street Fighter\", \"7:40 works\", \"D1 and D2\"). Call select on it as the FIRST step of the turn, with an empty assistantMessage — the screen shows the choice — and when the host then offers next, call it. Do not highlight it, do not augment, and do not clear a stale filter or mark first — select works with them in place. The one exception: if the named option is in currentView.items but a filter is hiding it from visibleItems, call clearModification with type \"filter\" first, then select it on the next step.\n" +
+  "  (2) [single-viable] the visitor states a preference in this turn that leaves exactly one option viable at this stage — the only horror film, the only showtime that ends by ten. Count viable options over currentView.items less deadEndItemIds, never over what a filter left on screen. If the preference's field is not in visibleItems[].value, augment first (the visibility gate still applies), then select on the next step. On the select step, say in one sentence what you picked and why (\"Clayface is the only horror film, so I've picked it.\"); the next step that follows says nothing. That sentence overrides the brevity rule that a GUI step followed by another step stays silent.\n" +
+  "  (3) [superlative] the visitor asks for the closest, cheapest, earliest, latest, shortest or longest as their choice (\"the closest one\", \"I want the closest theater\") and the screen makes which one that is explicit — after augment and sort if the field was not on screen. Select it and say which it was in one sentence. A superlative the visitor did not say is still an unstated tie-breaker: never infer one.\n" +
+  "- ASK, and only when:\n" +
+  "  (4) [ask-multiple] two or more options stay viable after everything said in this turn and in memory, and nothing the visitor said separates them. Mark them first when the Highlight economy rules allow it, then ask the one question whose answer separates them; do not read the options out. If a filter is hiding options, still say how many and why, as the Filtered stages rule requires, before the question.\n" +
+  "  (5) [ask-fuzzy] the visitor's words name nothing on screen but come close — 5:50 when the screen shows 5:15 and 5:55, a theater name the transcript mangled. Ask the one clarifying question that names the nearest option (\"Did you mean 5:15 PM?\"). Never select a near miss. A time the visitor says is a START time: match it against the start times on screen only, never against an end time, and a start time that is not on screen is a near miss.\n" +
+  "  (6) [ask-remembered] what would decide is a remembered preference rather than something said in this conversation — a preference in memory whose id begins with \"prf_\", or one the visitor has not stated in history. Point at the option it favours and ask; the visitor may not know that memory is there.\n" +
+  "  (7) [confirm-booking] the confirm stage: read the booking back and ask whether to confirm, as the Booth demo section says. This is the one confirmation that always stays.\n" +
+  "- [answer] A question gets its answer and nothing after it. \"Is Clayface the horror movie?\" → \"Yes, Clayface is the horror film.\" \"Which one is the closest?\" → sort by distance (augment first if distance is not on screen), then \"Bel Air Luxury Cinema is the closest, at 9 miles.\" Say the answer in words even when the sort has put it first — they asked to be told, and a reordered list is not an answer. End there, with no \"would you like to choose it?\": the visitor can see it and will say so if they want it. A question turn never commits: the answer is a respond call, and you do not select or call next on it, whatever an earlier turn pointed at. When their next turn is \"okay\", \"that one\", \"it's fine\" after such an answer, that is a choice of the option you just named — select it. A yes to an option you named or marked is always a select call on that option, never next: currentView.selected may still hold an earlier choice from before a backtrack, and proceedRule being satisfied says nothing about which option satisfied it.\n" +
+  "- A yes, okay or \"that one\" with nothing on the table to agree to is not a choice: ask what they would like (4).\n" +
+  "- Never select an option the visitor named in order to reject it (\"not the horror one\"), never select on a criterion that two or more options meet, and never select the one option a filter left on screen while currentView.hiddenByFilterCount says others exist — the visitor is choosing among what they can see of a set they cannot.\n" +
+  "- Begin the reason field with the rule you applied, in square brackets — [named-option], [single-viable], [superlative], [ask-multiple], [ask-fuzzy], [ask-remembered], [confirm-booking], [answer], or [other] when none fits — then the justification.";
+
 export function buildLanguageSection(language: string | undefined): string | null {
   if (!language || language === "en") return null;
   return LANGUAGE_PROMPTS[language] ?? null;
@@ -686,12 +726,16 @@ export function buildSystemPrompt(
   spokenBrevity?: boolean,
   preloadedMemory?: boolean,
   demoSession?: boolean,
+  decisiveSelection?: boolean,
 ): string {
   const cpMemory = hasCpMemoryContext(workflow);
   const guiAdaptation = workflow.guiAdaptationEnabled !== false;
   // Only meaningful where there are GUI tools to order, like `narrate`.
   const preloaded = preloadedMemory === true && guiAdaptation;
   const demo = demoSession === true;
+  // Only meaningful in a booth session: the section it adds argues with the
+  // study's consent rules, which is the point, and must never reach a study.
+  const decisive = decisiveSelection === true && demo;
   const narrate = narrateAdaptations === true && guiAdaptation;
   // The two are contradictory by construction — a card wants the adaptation
   // described, a voice session wants it left to the screen. Resolved here so a
@@ -699,7 +743,7 @@ export function buildSystemPrompt(
   const brevity = spokenBrevity === true && !narrate;
   // Language belongs in the key: a visitor may switch mid-session, and the
   // cached prompt would otherwise keep the language they started in.
-  const key = `cp:${cpMemory}|gui:${guiAdaptation}|meta:${stageMeta ? stageMeta.length : 0}|lang:${language ?? "en"}|narrate:${narrate}|brief:${brevity}|preload:${preloaded}|demo:${demo}`;
+  const key = `cp:${cpMemory}|gui:${guiAdaptation}|meta:${stageMeta ? stageMeta.length : 0}|lang:${language ?? "en"}|narrate:${narrate}|brief:${brevity}|preload:${preloaded}|demo:${demo}|decisive:${decisive}`;
 
   if (key === cachedSystemPromptKey && cachedSystemPrompt) {
     return cachedSystemPrompt;
@@ -741,6 +785,12 @@ export function buildSystemPrompt(
   // the language section so "write it in Korean" applies to what it asks for.
   if (brevity) {
     sections.push(SPOKEN_BREVITY_RULES);
+  }
+  // After brevity, which it overrides on the one point of whether to ask, and
+  // before the language section so the sentences it asks for are written in
+  // the visitor's language.
+  if (decisive) {
+    sections.push(DECISIVE_SELECTION_RULES);
   }
   const languageSection = buildLanguageSection(language);
   if (languageSection) {
@@ -869,17 +919,30 @@ function getToolAssistantMessageDescription(): string {
   return "Brief user-facing message describing the GUI action or stage transition. Assume it may be spoken aloud.";
 }
 
-function getRespondToolDescription(): string {
+/**
+ * The study's respond tool insists on a closing question; the booth's decisive
+ * section says a direct answer ends with the answer. Both texts cannot be sent
+ * to one model, so the booth gets its own pair — the study pair is untouched,
+ * and `decisive` is only ever true in a demo session.
+ */
+function getRespondToolDescription(decisive = false): string {
+  if (decisive) {
+    return "Respond to the user without executing any GUI tool. Use this for a direct answer, a clarifying question, a question only the user can settle, or the final booking confirmation. Never offer to choose or pick for the user. End assistantMessage with a question only when the rules call for one — two or more viable options, a fuzzy match, a remembered preference, or the booking confirmation; a direct answer ends with the answer.";
+  }
   return "Respond to the user without executing any GUI tool. Use this for a brief clarification, confirmation, or direct answer. Never offer to choose or pick for the user. assistantMessage must end with a brief question so the user knows what is expected next.";
 }
 
-function getRespondAssistantMessageDescription(): string {
+function getRespondAssistantMessageDescription(decisive = false): string {
+  if (decisive) {
+    return "User-facing message spoken aloud via TTS. A question when the user has something to decide; otherwise a short statement that ends when the answer does.";
+  }
   return "User-facing message spoken aloud via TTS. Must end with a brief question for the user's next choice. Do not end with a declarative statement.";
 }
 
 function toOpenAiTools(
   availableTools: ToolSchemaItem[],
   cpMemoryEnabled: boolean,
+  decisive = false,
 ): OpenAiFunctionTool[] {
   const tools: OpenAiFunctionTool[] = [];
 
@@ -959,7 +1022,7 @@ function toOpenAiTools(
   tools.push({
     type: "function",
     name: NATIVE_NONE_TOOL_NAME,
-    description: getRespondToolDescription(),
+    description: getRespondToolDescription(decisive),
     parameters: {
       type: "object",
       properties: {
@@ -971,7 +1034,7 @@ function toOpenAiTools(
         [TOOL_META_ASSISTANT_MESSAGE_KEY]: {
           type: "string",
           description:
-            getRespondAssistantMessageDescription(),
+            getRespondAssistantMessageDescription(decisive),
         },
         ...(cpMemoryEnabled
           ? {
@@ -1284,9 +1347,11 @@ export async function planActionWithOpenAI(
   const temperature = resolveTemperatureFor(reasoningEffort, DEFAULT_OPENAI_TEMPERATURE);
   const apiMode = getOpenAIApiMode();
   const cpMemoryEnabled = hasCpMemoryContext(input.workflow);
+  const decisive = input.decisiveSelection === true && input.demoSession === true;
   const openAiTools = toOpenAiTools(
     input.availableTools,
     cpMemoryEnabled,
+    decisive,
   );
   const nativePlannerInput = {
     ...(input.memory ? { memory: input.memory } : {}),
@@ -1302,6 +1367,7 @@ export async function planActionWithOpenAI(
       input.spokenBrevity,
       input.preloadedMemory,
       input.demoSession,
+      input.decisiveSelection,
     ) +
     "\n" +
     OPENAI_TOOL_CALLING_RULES;
