@@ -437,6 +437,25 @@ export class AgentMemory {
     );
   }
 
+  /**
+   * The preferences the hard-bound filters at this stage were applied for —
+   * the ones `getStageAlternativeCount` actually applied. A hard preference
+   * relevant to the stage that is not in this list was never turned into a
+   * filter (a day the visitor named and the planner simply selected), so the
+   * count says nothing about it.
+   */
+  getStageHardFilterPreferenceIds(stage: string, parentContextKey: string): string[] {
+    const record = this.stageAlternatives.get(this.buildStageAlternativeKey(stage, parentContextKey));
+    if (!record) return [];
+    const ids = new Set<string>();
+    for (const entry of record.filters) {
+      if (entry.preferenceBindings.length === 0) continue;
+      if (!entry.preferenceBindings.every((binding) => binding.strength === 'hard')) continue;
+      for (const binding of entry.preferenceBindings) ids.add(binding.id);
+    }
+    return Array.from(ids);
+  }
+
   getPreferenceBindings(ids: string[]): PreferenceBinding[] {
     const preferencesById = new Map(this.preferences.map((item) => [item.id, item]));
     return Array.from(new Set(ids.map((item) => item.trim()).filter(Boolean)))

@@ -1056,6 +1056,9 @@ async function runPreferenceExtractionFromUserMessage(
     existingPreferences,
     stageMeta: context.stageMeta,
     language: conversationLanguage,
+    // Absent outside the booth, so a study session's extractor prompt is the
+    // one the study ran (see boothStageFieldGuides).
+    ...(isDemoMode ? { demoSession: true } : {}),
   };
 
   try {

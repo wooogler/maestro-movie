@@ -674,6 +674,86 @@ export interface PreferenceExtractionContext {
   stageMeta?: Array<{ stage: string; goal: string; fieldGuide: string }>;
   /** The host-reported conversation language. Absent and 'en' are identical. */
   language?: string;
+  /**
+   * A booth demo session (AGENT_STUDY_MODE=demo). Absent or false leaves the
+   * prompt exactly as the study ran it. See boothStageFieldGuides.
+   */
+  demoSession?: boolean;
+}
+
+/*
+  Booth demo only: a screening format is a theater property too.
+
+  The stage field guides come from the frontend's STAGE_META, which study
+  sessions send as well, and the study's guide says outright that IMAX and 3D
+  are "NOT a property of theaters". That was the reason card B failed 3 of 3 in
+  the 2026-10-24 Korean simulation: "IMAX로 보려고요" was scoped to the time
+  stage only, so at the theater stage the planner filtered on distance alone,
+  booked a cinema with no IMAX screen, and met the dead end two stages later.
+  In the booth world a cinema's `amenities` list the formats its screens show
+  ("IMAX", "3D Screens") and a cinema without the amenity has no showing in that
+  format (demo_uist2026_detroit.json: IMAX only at MJR Troy, in amenities and
+  showings alike), so a format requirement can be judged where the cinema is
+  chosen. The rewrite happens here, on the agent, so the frontend keeps sending
+  the study's text and a study session's extractor prompt is unchanged.
+  `plannerPrompt.check.ts` pins both halves: the study sentences it replaces
+  are still in generators.ts, and the study prompt is untouched without the flag.
+*/
+export const STUDY_THEATER_FORMAT_NOTE =
+  "Note: screening format (IMAX, 3D) is NOT a property of theaters — it varies per showtime and belongs to the time stage.";
+export const STUDY_TIME_FORMAT_NOTE =
+  "Important: IMAX and 3D are per-showtime attributes determined at this stage, not at the theater stage.";
+const BOOTH_THEATER_FORMAT_NOTE =
+  'Screening format: amenities list the formats a theater\'s screens can show ("IMAX", "3D Screens"), and a theater whose amenities lack a format never shows a film in it. So a screening-format requirement (IMAX, 3D) is relevant to this stage as well as to time — assign it to both theater and time.';
+const BOOTH_TIME_FORMAT_NOTE =
+  "IMAX and 3D are per-showtime attributes confirmed at this stage; a screening-format requirement belongs to both theater and time.";
+
+/** Appended to the extractor prompt in a booth session: see the field-guide note above. */
+const BOOTH_RELAXATION_LINE =
+  "Booth demo:\n" +
+  "- If the agent's last message said two of the user's requirements cannot both be met and offered two ways out — one that gives up requirement A, one that gives up requirement B — and the user picks one, retract only the requirement the picked way out gives up, and keep the other unchanged.\n" +
+  "- A positional answer counts in the order of the agent's message: \"the first one\" / \"첫 번째\" is the way out the agent offered first, \"the second one\" / \"두 번째\" the one it offered after it. Example: agent \"IMAX is only at MJR Troy, 20.4 miles away. See it in Standard or 3D closer by, or drive to Troy for IMAX?\" — \"the first one\" gives up IMAX and keeps the distance limit; \"Troy, then\" gives up the distance limit and keeps IMAX.";
+
+function replaceOrAppend(guide: string, studyNote: string, boothNote: string): string {
+  return guide.includes(studyNote)
+    ? guide.replace(studyNote, boothNote)
+    : `${guide} ${boothNote}`;
+}
+
+export function boothStageFieldGuides(
+  stageMeta: Array<{ stage: string; goal: string; fieldGuide: string }>,
+): Array<{ stage: string; goal: string; fieldGuide: string }> {
+  return stageMeta.map((meta) => {
+    if (meta.stage === "theater") {
+      return { ...meta, fieldGuide: replaceOrAppend(meta.fieldGuide, STUDY_THEATER_FORMAT_NOTE, BOOTH_THEATER_FORMAT_NOTE) };
+    }
+    if (meta.stage === "time") {
+      return { ...meta, fieldGuide: replaceOrAppend(meta.fieldGuide, STUDY_TIME_FORMAT_NOTE, BOOTH_TIME_FORMAT_NOTE) };
+    }
+    return meta;
+  });
+}
+
+/**
+ * The extractor's system prompt, before the JSON-only line the call appends.
+ * Exported for `plannerPrompt.check.ts`, which pins that a study session's
+ * prompt is unchanged and that the booth flag only rewrites the format notes.
+ */
+export function buildPreferenceSystemPrompt(
+  stageMeta: Array<{ stage: string; goal: string; fieldGuide: string }> | undefined,
+  language: string | undefined,
+  demoSession?: boolean,
+): string {
+  const booth = demoSession === true;
+  const guides = stageMeta && booth ? boothStageFieldGuides(stageMeta) : stageMeta;
+  const basePrompt = guides
+    ? PREFERENCE_SYSTEM_PROMPT +
+      "\n\nstageFieldGuides:\n" +
+      guides.map((s) => `- ${s.stage}: ${s.fieldGuide}`).join("\n")
+    : PREFERENCE_SYSTEM_PROMPT;
+  const languageLine = buildPreferenceLanguageLine(language);
+  const withLanguage = languageLine ? `${basePrompt}\n\n${languageLine}` : basePrompt;
+  return booth ? `${withLanguage}\n\n${BOOTH_RELAXATION_LINE}` : withLanguage;
 }
 
 /**
@@ -757,13 +837,7 @@ export async function extractStructuredPreferences(
     additionalProperties: false,
   };
 
-  const basePrompt = ctx.stageMeta
-    ? PREFERENCE_SYSTEM_PROMPT +
-      "\n\nstageFieldGuides:\n" +
-      ctx.stageMeta.map((s) => `- ${s.stage}: ${s.fieldGuide}`).join("\n")
-    : PREFERENCE_SYSTEM_PROMPT;
-  const languageLine = buildPreferenceLanguageLine(ctx.language);
-  const systemPrompt = languageLine ? `${basePrompt}\n\n${languageLine}` : basePrompt;
+  const systemPrompt = buildPreferenceSystemPrompt(ctx.stageMeta, ctx.language, ctx.demoSession);
 
   const parsed = await callStructuredExtractor(
     "preferences",

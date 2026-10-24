@@ -174,10 +174,12 @@ const QUICK_IDS = ['movie', 'theater', 'date', 'time', 'seat'];
 // What the visitor says between card lines, keyed on the agent's last
 // sentence: a which-one question gets a pick (on the seat map, "you choose" —
 // "the first one" means nothing there), anything else gets a yes. Only a
-// QUESTION word counts: "선택할 수 없어요" is not asking for a pick.
+// QUESTION word counts: "선택할 수 없어요" is not asking for a pick. An
+// either-or question ("…보실까요, 아니면 Troy까지 가실까요?") is a which-one
+// question too: a yes to it says nothing, so the visitor picks the first.
 const FOLLOWUPS = {
-  ko: { choice: /어느|어떤|몇 시|몇시|어디/, pick: '첫 번째 걸로 할게요.', seat: '추천해 주시는 자리로 할게요.', yes: '네, 좋아요.' },
-  en: { choice: /\bwhich\b|\bwhat time\b|\bwhere\b/i, pick: 'The first one, please.', seat: 'Whichever seats you recommend.', yes: 'Yes, sounds good.' },
+  ko: { choice: /어느|어떤|몇 시|몇시|어디|아니면/, pick: '첫 번째 걸로 할게요.', seat: '추천해 주시는 자리로 할게요.', yes: '네, 좋아요.' },
+  en: { choice: /\bwhich\b|\bwhat time\b|\bwhere\b|\bor\b[^.?!]*\?/i, pick: 'The first one, please.', seat: 'Whichever seats you recommend.', yes: 'Yes, sounds good.' },
 };
 
 // The quick-card lines live in a TypeScript module that also pulls in the i18n

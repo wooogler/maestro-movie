@@ -22,7 +22,12 @@ export interface PlannerWorkflowMemory {
 export interface PlannerWorkflow {
   currentStage: string;
   previousStage: string | null;
-  priorStageAlternativeCounts?: Array<{ stage: string; count: number }>;
+  priorStageAlternativeCounts?: Array<{
+    stage: string;
+    count: number;
+    /** Booth only: hard preferences relevant to that stage the count did not apply. */
+    uncheckedHardPreferenceIds?: string[];
+  }>;
   nextStage: string | null;
   proceedRule: string;
   availableToolNames: string[];
@@ -81,6 +86,14 @@ interface PlannerInput {
    * without it against the same demo prompt.
    */
   decisiveSelection?: boolean;
+  /**
+   * Booth demo only: two hard requirements that exclude each other are a
+   * conflict to put to the visitor, not a dead end to back out of. Absent or
+   * false leaves the prompt exactly as it was. See REQUIREMENT_CONFLICT_RULES;
+   * its own flag, like `decisiveSelection`, so `cardB.regress.ts` can replay a
+   * turn with and without it against the same demo prompt.
+   */
+  requirementConflicts?: boolean;
 }
 
 interface PlannerAction {
@@ -701,6 +714,30 @@ const DECISIVE_SELECTION_RULES =
   "- Never select an option the visitor named in order to reject it (\"not the horror one\"), never select on a criterion that two or more options meet, and never select the one option a filter left on screen while currentView.hiddenByFilterCount says others exist — the visitor is choosing among what they can see of a set they cannot.\n" +
   "- Begin the reason field with the rule you applied, in square brackets — [named-option], [single-viable], [superlative], [ask-multiple], [ask-fuzzy], [ask-remembered], [confirm-booking], [answer], or [other] when none fits — then the justification.";
 
+/**
+ * Demo only. Card B ("IMAX로", then "15마일 넘게는 운전 안 할 거예요") failed 3
+ * of 3 in the 2026-10-24 Korean simulation. The only IMAX screen is MJR Troy at
+ * 20.4 miles, by design, and the agent never said so: it filtered to ≤15 mi,
+ * booked a cinema with no IMAX, found no IMAX showtime two stages later, and
+ * offered "날짜를 바꿔볼까요?" — a day the visitor had named, at a cinema that
+ * has no IMAX on any day. The dead-end rules above were written for a single
+ * requirement no option meets, and they answer it with "go back to the nearest
+ * earlier stage with alternatives". Two requirements that exclude each other
+ * are a different thing: no backtrack fixes them, and the visitor is the only
+ * one who can say which matters more. The study prompt keeps the dead-end rules
+ * byte-for-byte; this section is appended for the booth only, after brevity and
+ * decisive selection, both of which it overrides on its one point.
+ */
+const REQUIREMENT_CONFLICT_RULES =
+  "Two requirements that rule each other out (booth demo):\n" +
+  "- Check the visitor's hard preferences against each other, not only one at a time. When one hard requirement can be met only by options that another hard requirement rules out — the only theater whose amenities list IMAX is beyond the visitor's distance limit — no choice at this stage or any earlier one meets both. That is a conflict between two things the visitor said, not a dead end. Going back to another movie, date or theater cannot fix it, so do not suggest going back, and never select an option that breaks one of the two. Where this section conflicts with Dead-end handling, Backtracking, the brevity section or the decisive-selection section, this section wins.\n" +
+  "- A theater can show a format only if its amenities list it (\"IMAX\", \"3D Screens\"). Judge a format requirement at the theater stage from amenities, over currentView.items; the time stage confirms it.\n" +
+  "- At the stage where the conflict shows: make both requirements visible first (one augment over every option with both fields, as the visibility gate says); apply the filter for whichever requirement has one, as usual; then do not select. Respond: say where the one requirement can be met and what breaks the other there, with the option and the value (\"IMAX is only at MJR Troy, 20.4 miles away.\"), and end with one either-or question that offers each way out by name — giving up the requirement that would change the booking more comes first (\"Would you rather see it in Standard or 3D somewhere closer, or drive out to Troy for IMAX?\"). Two sentences are allowed here. Emit conflictMemory with both preference ids.\n" +
+  "- The same holds when the second requirement arrives after the first already decided an earlier choice (Troy was chosen for IMAX, then the visitor says no more than 15 miles): say that the choice breaks the new requirement and why it was made, and ask the same either-or question. Do not quietly keep the earlier choice, and do not undo it before they answer.\n" +
+  "- When the visitor answers by giving one up — by name, or \"the first one\" for the first way out you offered — that one is relaxed and the other still holds. If a filter on screen enforces the one given up, call clearModification with type \"filter\" (it removes every filter) and then, before anything else, filter again for each requirement that still holds. If no filter on screen enforces the one given up, leave the filters as they are — the one that still holds is already applied. Then carry on under the rest as usual: select a named or single viable option, ask among several. If an earlier choice rested on the one given up, call prev to go back to that stage.\n" +
+  "- Later in the booking, before you suggest going back: an earlier stage is a way out only if one of its other options can meet every hard requirement. A day the visitor named rules out every other day. A priorStageAlternativeCounts entry with uncheckedHardPreferenceIds counted options without applying those requirements, so its count is how many options exist, not how many the visitor would accept. If the blocker is a format the chosen theater's amenities lack, the way out is the theater stage, not the nearest stage. If no earlier stage is a way out, name the blocking requirement and the requirement that keeps it out of reach, and ask which one to relax. Never propose a change that breaks a requirement the visitor stated.\n" +
+  "- Begin the reason field with [conflict] when you apply this section.";
+
 export function buildLanguageSection(language: string | undefined): string | null {
   if (!language || language === "en") return null;
   return LANGUAGE_PROMPTS[language] ?? null;
@@ -727,6 +764,7 @@ export function buildSystemPrompt(
   preloadedMemory?: boolean,
   demoSession?: boolean,
   decisiveSelection?: boolean,
+  requirementConflicts?: boolean,
 ): string {
   const cpMemory = hasCpMemoryContext(workflow);
   const guiAdaptation = workflow.guiAdaptationEnabled !== false;
@@ -736,6 +774,10 @@ export function buildSystemPrompt(
   // Only meaningful in a booth session: the section it adds argues with the
   // study's consent rules, which is the point, and must never reach a study.
   const decisive = decisiveSelection === true && demo;
+  // Booth only, for the same reason: it overrides the study's dead-end rules.
+  // It speaks in conflictMemory and priorStageAlternativeCounts, which only
+  // exist with CP memory.
+  const conflicts = requirementConflicts === true && demo && cpMemory;
   const narrate = narrateAdaptations === true && guiAdaptation;
   // The two are contradictory by construction — a card wants the adaptation
   // described, a voice session wants it left to the screen. Resolved here so a
@@ -743,7 +785,7 @@ export function buildSystemPrompt(
   const brevity = spokenBrevity === true && !narrate;
   // Language belongs in the key: a visitor may switch mid-session, and the
   // cached prompt would otherwise keep the language they started in.
-  const key = `cp:${cpMemory}|gui:${guiAdaptation}|meta:${stageMeta ? stageMeta.length : 0}|lang:${language ?? "en"}|narrate:${narrate}|brief:${brevity}|preload:${preloaded}|demo:${demo}|decisive:${decisive}`;
+  const key = `cp:${cpMemory}|gui:${guiAdaptation}|meta:${stageMeta ? stageMeta.length : 0}|lang:${language ?? "en"}|narrate:${narrate}|brief:${brevity}|preload:${preloaded}|demo:${demo}|decisive:${decisive}|conflicts:${conflicts}`;
 
   if (key === cachedSystemPromptKey && cachedSystemPrompt) {
     return cachedSystemPrompt;
@@ -791,6 +833,12 @@ export function buildSystemPrompt(
   // the visitor's language.
   if (decisive) {
     sections.push(DECISIVE_SELECTION_RULES);
+  }
+  // After brevity and decisive selection, which it overrides on whether to
+  // select and how long the sentence may be; before the language section so
+  // the question it asks for is written in the visitor's language.
+  if (conflicts) {
+    sections.push(REQUIREMENT_CONFLICT_RULES);
   }
   const languageSection = buildLanguageSection(language);
   if (languageSection) {
@@ -1368,6 +1416,7 @@ export async function planActionWithOpenAI(
       input.preloadedMemory,
       input.demoSession,
       input.decisiveSelection,
+      input.requirementConflicts,
     ) +
     "\n" +
     OPENAI_TOOL_CALLING_RULES;
