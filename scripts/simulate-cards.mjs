@@ -21,6 +21,10 @@
 // Cards: A (오늘 밤), B (IMAX 밤), C (가족 낮 상영), and the five quick cards by
 // id — movie, theater, date, time, seat — whose lines are read straight out of
 // apps/frontend/src/study/quickDemoCards.ts so they cannot drift from print.
+// W is not a printed card: a visitor with nothing in mind walks all five
+// stages answering as little as possible ("상관없어요, 첫 번째 걸로 할게요."),
+// which is how each stage's opening question is measured with nothing in
+// memory. Give it --max-followups=12.
 //
 // The code is a demo access code (`npm run codes:generate -- --batch <name>`
 // against a backend with DEMO_ACCESS_CODES_ENABLED=true); pass it with --code=
@@ -57,7 +61,8 @@
 // the stage it belongs to (FULL_CARDS[].stages — "when the stage calls for
 // it"); --eager reads the card straight through instead. In between, and once
 // the card runs out, the visitor answers what the agent asks the way a
-// cooperative visitor would (FOLLOWUPS: a pick for a which-one question, "you
+// cooperative visitor would (FOLLOWUPS: "no preference" plus a pick for a
+// question that asks for a preference, a pick for a which-one question, "you
 // choose" on the seat map, a yes to anything else), at most --max-followups
 // times (default 8 for a full card, 0 for a quick card, whose whole job is one
 // sentence). Those turns are marked as follow-ups: they are the driver's
@@ -167,6 +172,23 @@ const FULL_CARDS = {
       ],
     },
   },
+  // Not a printed card: a visitor with nothing in mind who walks all five
+  // stages answering as little as possible, so every stage-entry question is
+  // the agent's own opener with nothing in memory. WALK_REPLIES says what they
+  // answer; the run records the question each stage opened with.
+  W: {
+    stages: [],
+    walk: true,
+    title: 'Walk-through (no preferences)',
+    lines: { ko: [], en: [] },
+  },
+};
+
+// The walk's minimal answers: no criterion, then the first thing on screen
+// ("you choose" on the seat map, a yes at the confirm read-back).
+const WALK_REPLIES = {
+  ko: { pick: '상관없어요, 첫 번째 걸로 할게요.', seat: '상관없어요, 추천해 주시는 자리로 할게요.', yes: '네, 좋아요.' },
+  en: { pick: 'No preference, the first one is fine.', seat: 'No preference, whichever seat you recommend.', yes: 'Yes, sounds good.' },
 };
 
 const QUICK_IDS = ['movie', 'theater', 'date', 'time', 'seat'];
@@ -177,9 +199,14 @@ const QUICK_IDS = ['movie', 'theater', 'date', 'time', 'seat'];
 // QUESTION word counts: "선택할 수 없어요" is not asking for a pick. An
 // either-or question ("…보실까요, 아니면 Troy까지 가실까요?") is a which-one
 // question too: a yes to it says nothing, so the visitor picks the first.
+// A question that asks for a preference rather than a pick ("장르나 연령
+// 등급 중에 신경 쓰이는 조건이 있으세요?", "How far are you willing to go?")
+// gets "no preference" plus a pick, the way a visitor with nothing in mind
+// answers it; a yes would say nothing and a bare "the first one" would not
+// answer it. Checked before `choice`, since such a question can contain "어느".
 const FOLLOWUPS = {
-  ko: { choice: /어느|어떤|몇 시|몇시|어디|아니면/, pick: '첫 번째 걸로 할게요.', seat: '추천해 주시는 자리로 할게요.', yes: '네, 좋아요.' },
-  en: { choice: /\bwhich\b|\bwhat time\b|\bwhere\b|\bor\b[^.?!]*\?/i, pick: 'The first one, please.', seat: 'Whichever seats you recommend.', yes: 'Yes, sounds good.' },
+  ko: { prefer: /조건|신경|얼마나|평일|주말|몇 분|몇 명|선호|중요|원하시는 게|있으세요\?|있나요\?/, none: '상관없어요, 첫 번째 걸로 할게요.', noneSeat: '상관없어요, 추천해 주시는 자리로 할게요.', choice: /어느|어떤|몇 시|몇시|어디|아니면/, pick: '첫 번째 걸로 할게요.', seat: '추천해 주시는 자리로 할게요.', yes: '네, 좋아요.' },
+  en: { prefer: /\bmatter|\bcare about\b|\bhow far\b|\bhow many\b|\bweekday|\bweekend|\bprefer|\bimportant\b|\banything you\b|\bany (?:preference|requirement)/i, none: 'No preference, the first one is fine.', noneSeat: 'No preference, whichever seats you recommend.', choice: /\bwhich\b|\bwhat time\b|\bwhere\b|\bor\b[^.?!]*\?/i, pick: 'The first one, please.', seat: 'Whichever seats you recommend.', yes: 'Yes, sounds good.' },
 };
 
 // The quick-card lines live in a TypeScript module that also pulls in the i18n
@@ -564,7 +591,14 @@ async function main() {
       await click(browser, labels.blank);
       await sleep(300);
       await click(browser, labels.start);
-      await waitFor(browser, `document.body.innerText.includes(${JSON.stringify(labels.go)})`, 45000, 'pairing screen');
+      // About one start in three on 24 Oct sat on the start page after this
+      // click (the code check had not settled yet); a visitor taps again.
+      try {
+        await waitFor(browser, `document.body.innerText.includes(${JSON.stringify(labels.go)})`, 30000, 'pairing screen');
+      } catch {
+        await click(browser, labels.start);
+        await waitFor(browser, `document.body.innerText.includes(${JSON.stringify(labels.go)})`, 90000, 'pairing screen');
+      }
       await click(browser, labels.go);
     } else {
       await browser.navigate(`${ORIGIN}/demo/card#c=${cardId}&k=${code}&lang=${lang}`);
@@ -602,10 +636,17 @@ async function main() {
       if (due) {
         ({ text } = cardLines.shift());
         kind = 'card';
-      } else if (followups < maxFollowups && (cardLines.length > 0 || report.turns.length > 0)) {
+      } else if (followups < maxFollowups && (cardLines.length > 0 || report.turns.length > 0 || full?.walk)) {
         followups += 1;
-        const policy = FOLLOWUPS[lang];
-        text = !policy.choice.test(lastReply) ? policy.yes : stageNow === 'seat' ? policy.seat : policy.pick;
+        if (full?.walk) {
+          const walk = WALK_REPLIES[lang];
+          text = stageNow === 'confirm' ? walk.yes : stageNow === 'seat' ? walk.seat : walk.pick;
+        } else {
+          const policy = FOLLOWUPS[lang];
+          text = policy.prefer.test(lastReply) && /\?/.test(lastReply)
+            ? (stageNow === 'seat' ? policy.noneSeat : policy.none)
+            : !policy.choice.test(lastReply) ? policy.yes : stageNow === 'seat' ? policy.seat : policy.pick;
+        }
         kind = 'followup';
       } else {
         break;
@@ -623,7 +664,7 @@ async function main() {
       if (bookingCompleteInSpec(frames)) gui.done = true;
       const spec = lastUiSpec(frames);
       const turn = {
-        kind, visitor: text, stalled,
+        kind, visitor: text, stalled, stageBefore: stageNow,
         replies: turnFrames.filter((frame) => frame.data.type === 'agent.message').map((frame) => frame.data.payload?.text ?? ''),
         view: summariseSpec(spec),
         secondsToFirstReply: firstSay ? (firstSay.at - sentAt) / 1000 : null,
