@@ -711,8 +711,9 @@ const BOOTH_TIME_FORMAT_NOTE =
 /** Appended to the extractor prompt in a booth session: see the field-guide note above. */
 const BOOTH_RELAXATION_LINE =
   "Booth demo:\n" +
-  "- If the agent's last message said two of the user's requirements cannot both be met and offered two ways out — one that gives up requirement A, one that gives up requirement B — and the user picks one, retract only the requirement the picked way out gives up, and keep the other unchanged.\n" +
-  "- A positional answer counts in the order of the agent's message: \"the first one\" / \"첫 번째\" is the way out the agent offered first, \"the second one\" / \"두 번째\" the one it offered after it. Right after such a question this holds whatever compactUi shows: the answer is about the two ways out, not about the first option on screen. Example: agent \"IMAX is only at MJR Troy, 20.4 miles away. See it in Standard or 3D closer by, or drive to Troy for IMAX?\" — \"the first one\" gives up IMAX and keeps the distance limit; \"Troy, then\" gives up the distance limit and keeps IMAX.";
+  "- If the agent's last message said two of the user's requirements cannot both be met and offered two ways out, and the user picks one, retract exactly one requirement and keep the other unchanged.\n" +
+  "- Which way out: a positional answer counts in the order of the agent's message — \"the first one\" / \"첫 번째\" is the way out the agent offered first (before \"or\" / \"아니면\"), \"the second one\" / \"두 번째\" the one after it. Right after such a question this holds whatever compactUi shows: the answer is about the two ways out, not about the first option on screen.\n" +
+  "- Which requirement it retracts: the one that way out goes WITHOUT. A way out that stays close (\"closer by\", \"가까운 곳에서\", \"15마일 안쪽에서\") in Standard or 3D goes without the format, so it retracts the format requirement (IMAX) and keeps the distance limit. A way out that drives farther (\"drive out to Troy\", \"Troy까지 가서\") for the format goes without the distance limit, so it retracts the distance limit and keeps the format.";
 
 function replaceOrAppend(guide: string, studyNote: string, boothNote: string): string {
   return guide.includes(studyNote)

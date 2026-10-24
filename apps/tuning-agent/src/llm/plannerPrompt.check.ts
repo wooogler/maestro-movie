@@ -424,7 +424,7 @@ console.log('\n12. the extractor: a study session is unchanged, the booth rewrit
   check('the booth drops the study theater note', !booth.includes(STUDY_THEATER_FORMAT_NOTE));
   check('the booth drops the study time note', !booth.includes(STUDY_TIME_FORMAT_NOTE));
   check('the booth assigns a format requirement to theater and time', /assign it to both theater and time/.test(booth));
-  check('the booth reads a positional answer to a two-way-out question', /A positional answer counts in the order/.test(booth));
+  check('the booth reads a positional answer to a two-way-out question', /a positional answer counts in the order/.test(booth) && /the one that way out goes WITHOUT/.test(booth));
   check('the booth leaves the movie guide alone', booth.includes('- movie: Film selection.'));
   check(
     'the booth only rewrites: the study prompt minus its two notes is still all there',

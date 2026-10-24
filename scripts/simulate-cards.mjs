@@ -351,6 +351,19 @@ async function waitFor(browser, expression, timeoutMs, what) {
   that a non-voice build's Enter key reaches.
 */
 async function say(browser, text) {
+  // The composer is disabled for a moment while a reply is still being
+  // spoken or the agent is mid-step; a visitor would simply wait for it.
+  for (let attempt = 0; ; attempt += 1) {
+    try {
+      return await sayOnce(browser, text);
+    } catch (error) {
+      if (attempt >= 20 || !/composer disabled/.test(error.message)) throw error;
+      await sleep(1000);
+    }
+  }
+}
+
+async function sayOnce(browser, text) {
   const result = await browser.evaluate(`((text) => {
     const textarea = document.querySelector('textarea');
     if (!textarea) return 'no composer';
@@ -472,10 +485,20 @@ async function waitForAgentTurn(browser, frames, since) {
     const heard = !voice || played >= said;
     if (spoke && idle && quiet && heard) return { stalled: false };
     // Confirming the booking ends the conversation without a closing sentence.
-    if (idle && quiet && (await readGui(browser)).done) return { stalled: false };
+    if (idle && quiet && (bookingCompleteInSpec(frames) || (await readGui(browser)).done)) return { stalled: false };
     await sleep(300);
   }
   return { stalled: true };
+}
+
+/**
+ * The host reports the finished booking as a confirm-stage spec titled
+ * "Booking Complete" before (and sometimes without) the confirmation text the
+ * page check looks for, so a run that had booked used to sit out the whole
+ * turn timeout and end with done=false.
+ */
+function bookingCompleteInSpec(frames) {
+  return lastUiSpec(frames)?.title === 'Booking Complete';
 }
 
 /** The GUI as the frontend last reported it to the agent (tool.result / snapshot.state). */
@@ -597,6 +620,7 @@ async function main() {
       const actions = turnFrames.map((frame) => ({ ms: frame.at - sentAt, line: describeFrame(frame) })).filter((a) => a.line);
       const firstSay = turnFrames.find((frame) => frame.data.type === 'agent.message');
       const gui = await readGui(browser);
+      if (bookingCompleteInSpec(frames)) gui.done = true;
       const spec = lastUiSpec(frames);
       const turn = {
         kind, visitor: text, stalled,
@@ -616,6 +640,7 @@ async function main() {
     }
 
     const final = await readGui(browser);
+    if (bookingCompleteInSpec(frames)) final.done = true;
     report.final = final;
     report.finalView = summariseSpec(lastUiSpec(frames));
     report.memory = lastMemory(frames);
