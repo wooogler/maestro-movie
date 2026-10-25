@@ -141,6 +141,13 @@ export interface UiStrings {
   plannerModelStatsAvg: string;
   /** `{seconds}` is replaced. */
   plannerModelStatsLast: string;
+  /** Settings sheet: which screen arrangement the demo draws. */
+  layoutLabel: string;
+  layoutHint: string;
+  layoutAuto: string;
+  layoutKiosk: string;
+  layoutDesktop: string;
+  layoutCompact: string;
   settings: string;
   settingsTitle: string;
   close: string;
@@ -389,6 +396,13 @@ const EN: UiStrings = {
   plannerModelStatsTitle: 'This session',
   plannerModelStatsAvg: '{seconds}s avg · {turns} turn(s)',
   plannerModelStatsLast: 'last {seconds}s',
+  layoutLabel: 'Screen layout',
+  layoutHint:
+    'Auto picks from the screen: a portrait monitor or tablet gets the kiosk, with the booking screen on top and the conversation and memory below.',
+  layoutAuto: 'Auto',
+  layoutKiosk: 'Kiosk',
+  layoutDesktop: 'Desktop',
+  layoutCompact: 'Phone',
   settings: 'Settings',
   settingsTitle: 'Settings',
   close: 'Close',
@@ -622,6 +636,13 @@ const KO: UiStrings = {
   plannerModelStatsTitle: '이번 세션',
   plannerModelStatsAvg: '평균 {seconds}초 · {turns}턴',
   plannerModelStatsLast: '마지막 {seconds}초',
+  layoutLabel: '화면 배치',
+  layoutHint:
+    '자동은 화면에 맞춰 고릅니다. 세로로 세운 모니터나 태블릿은 키오스크 배치가 되어, 예매 화면이 위에, 대화와 기억이 아래에 놓입니다.',
+  layoutAuto: '자동',
+  layoutKiosk: '키오스크',
+  layoutDesktop: '데스크톱',
+  layoutCompact: '휴대폰',
   settings: '설정',
   settingsTitle: '설정',
   close: '닫기',
@@ -871,6 +892,13 @@ const JA_OVERRIDES: Partial<UiStrings> = {
   plannerModelStatsTitle: 'このセッション',
   plannerModelStatsAvg: '平均 {seconds}秒 · {turns}ターン',
   plannerModelStatsLast: '直近 {seconds}秒',
+  layoutLabel: '画面レイアウト',
+  layoutHint:
+    '自動は画面に合わせて選びます。縦置きのモニターやタブレットはキオスク表示になり、予約画面が上に、会話と記憶が下に並びます。',
+  layoutAuto: '自動',
+  layoutKiosk: 'キオスク',
+  layoutDesktop: 'デスクトップ',
+  layoutCompact: 'スマホ',
   settings: '設定',
   settingsTitle: '設定',
   close: '閉じる',
@@ -1108,6 +1136,12 @@ const ZH_HANS_OVERRIDES: Partial<UiStrings> = {
   plannerModelStatsTitle: '本次会话',
   plannerModelStatsAvg: '平均 {seconds} 秒 · {turns} 轮',
   plannerModelStatsLast: '最近一次 {seconds} 秒',
+  layoutLabel: '屏幕布局',
+  layoutHint: '自动会根据屏幕选择：竖放的显示器或平板使用自助机布局，订票界面在上，对话和记忆在下。',
+  layoutAuto: '自动',
+  layoutKiosk: '自助机',
+  layoutDesktop: '桌面',
+  layoutCompact: '手机',
   settings: '设置',
   settingsTitle: '设置',
   close: '关闭',
@@ -1345,6 +1379,12 @@ const ZH_HANT_OVERRIDES: Partial<UiStrings> = {
   plannerModelStatsTitle: '本次工作階段',
   plannerModelStatsAvg: '平均 {seconds} 秒 · {turns} 輪',
   plannerModelStatsLast: '最近一次 {seconds} 秒',
+  layoutLabel: '螢幕版面',
+  layoutHint: '自動會依螢幕選擇：直立的螢幕或平板使用自助機版面，訂票畫面在上，對話與記憶在下。',
+  layoutAuto: '自動',
+  layoutKiosk: '自助機',
+  layoutDesktop: '桌面',
+  layoutCompact: '手機',
   settings: '設定',
   settingsTitle: '設定',
   close: '關閉',

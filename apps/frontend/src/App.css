@@ -414,6 +414,55 @@
   animation: booking-complete-overlay-in 280ms cubic-bezier(0.22, 1, 0.36, 1);
 }
 
+/*
+  Kiosk bottom band: every control at least 44px to a finger.
+
+  A portrait kiosk is used standing, at arm's length, and the panels in its
+  bottom band (the composer, the memory chips' Forget, the tabs) were drawn for
+  a mouse — a Forget is 20px tall. Rather than redraw each one, the hit area is
+  grown by an invisible box centred on the control: `min(0px, 50% - 22px)` is
+  0 for a control already 44px or more and negative (outward) for one smaller,
+  so the target reaches 44px and the drawing does not move a pixel.
+
+  Only buttons not already positioned get `position: relative`; an absolute or
+  fixed one is already the containing block its ::after needs.
+*/
+.kiosk-touch button:not(.absolute):not(.fixed):not(.sticky) {
+  position: relative;
+}
+
+/*
+  Kiosk bottom band, readable from a standing distance.
+
+  The composer, the mic status, the activity line and the memory chips were
+  sized for a laptop at arm's length. On a 27" portrait monitor (a MacBook
+  reports it as ~1200-1440 CSS px wide) a visitor stands back from it, so these
+  content-sized blocks are zoomed by a step that grows with the screen.
+
+  Deliberately NOT on the transcript's scroll container or its rows: the
+  scroll-sync pass mixes `getBoundingClientRect` with `clientHeight`, and under
+  `zoom` those are in different units. Only blocks whose size is their content
+  get it, so no grid cell or scroller changes size because of it.
+*/
+@media (min-width: 1000px) {
+  .kiosk-readable {
+    zoom: 1.2;
+  }
+}
+
+@media (min-width: 1360px) {
+  .kiosk-readable {
+    zoom: 1.35;
+  }
+}
+
+.kiosk-touch button::after {
+  content: '';
+  position: absolute;
+  inset-block: min(0px, calc(50% - 22px));
+  inset-inline: min(0px, calc(50% - 22px));
+}
+
 @media (prefers-reduced-motion: reduce) {
   .typing-dot,
   .gui-item-enter,

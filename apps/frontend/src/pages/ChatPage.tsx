@@ -90,7 +90,8 @@ import {
 import type { Movie, Theater, Showing, Booking } from '../types';
 import { formatScenarioTitle, formatTime12Hour } from '../utils/displayFormats';
 import { formatLocalDate, resolveScenarioToday } from '../utils/studyDate';
-import { COMPACT_VIEWPORT_QUERY, isCompactViewport } from '../utils/viewport';
+import { isCompactViewport } from '../utils/viewport';
+import { useFullTuningLayoutMode } from '../components/chat/useFullTuningLayoutMode';
 import {
   buildTranscriptionPrompt,
   collectStageHintLabels,
@@ -879,6 +880,9 @@ export function ChatPage({
   // Declared here rather than with the other side-panel derivations because the
   // effect that makes the header inert behind it sits above them.
   const memorySheetOpen = showMemoryPanel && scenarioBriefingVisible;
+  // Demo only: compact, desktop or the portrait kiosk (`fullTuningLayout.ts`).
+  // `null` in the study conditions, whose layout stays on the `lg` breakpoint.
+  const layoutMode = useFullTuningLayoutMode(normalizedStudyModePreset === 'demo');
   const voiceModeAvailable = studyModeConfig?.voiceModeAvailable ?? false;
 
   const scenarioTitle = studySession?.scenario.title
@@ -2709,28 +2713,19 @@ export function ChatPage({
     the header inert whenever the panel was open therefore killed every header
     button on a desktop — where the panel is a column beside the booking UI and
     opens by default, so Settings, Reset, Finish and even the Memory toggle that
-    would have closed it were all dead from first paint. Follow the breakpoint,
-    and keep following it: the sheet appears and disappears on resize with no
-    React state change to notice it.
+    would have closed it were all dead from first paint. The sheet is drawn only
+    in the compact arrangement (`layoutMode`, which follows resizes), so that
+    is exactly when the header goes inert.
   */
+  const memorySheetShown = memorySheetOpen && layoutMode === 'compact';
   useEffect(() => {
     const header = headerRef.current as (HTMLElement & { inert?: boolean }) | null;
     if (!header) return;
-    if (!memorySheetOpen || typeof window === 'undefined' || typeof window.matchMedia !== 'function') {
-      header.inert = false;
-      return;
-    }
-    const compact = window.matchMedia(COMPACT_VIEWPORT_QUERY);
-    const syncInert = () => {
-      header.inert = compact.matches;
-    };
-    syncInert();
-    compact.addEventListener('change', syncInert);
+    header.inert = memorySheetShown;
     return () => {
-      compact.removeEventListener('change', syncInert);
       header.inert = false;
     };
-  }, [memorySheetOpen]);
+  }, [memorySheetShown]);
 
   useEffect(() => {
     if (!interactionLocked || typeof document === 'undefined') return;
@@ -3228,6 +3223,34 @@ export function ChatPage({
     }
   }, [canDownloadTrace, downloadingTrace, logStudyEventNow, studySession]);
 
+  /*
+    The memory rail's contents, drawn either as the desktop rail below or, in
+    the portrait kiosk, as the bottom band's memory column inside the split
+    view. Both are editable: the split view is never made inert (see the
+    `interactionScopeRef` effect), unlike the phone sheet further down.
+  */
+  const memoryRailPanel = showMemoryPanel ? (
+    <AgentMemoryPanel
+      snapshot={agentMemory}
+      currentStage={currentStage}
+      onPreferenceDelete={handlePreferenceDelete}
+      onPreferenceRestore={handlePreferenceRestore}
+      onPreferenceClearAll={handlePreferenceClearAll}
+      pendingPreferenceIds={pendingPreferenceIds}
+    />
+  ) : null;
+  const memoryRailDevices = studySession?.viewToken ? (
+    <>
+      <DeviceRosterCard roster={deviceRoster?.roster ?? null} phone={phonePresence} />
+      <CompanionPairingCard
+        companionToken={companionToken}
+        target={voiceOutputTarget}
+        onTargetChange={setVoiceOutputTarget}
+        companionActive={companionActive}
+      />
+    </>
+  ) : null;
+
   return (
     /*
       `h-full`, not `app-viewport`: the shell in `App.tsx` already sets the
@@ -3239,9 +3262,12 @@ export function ChatPage({
     */
     <div className="relative h-full bg-dark">
       <div className="flex h-full min-h-0">
-      {sidePanelVisible && (
+      {/* In the kiosk the rail's contents move into the split view's bottom band. */}
+      {sidePanelVisible && layoutMode !== 'kiosk' && (
         <aside
-          className="relative hidden shrink-0 border-r border-dark-border bg-dark-light lg:block"
+          className={`relative shrink-0 border-r border-dark-border bg-dark-light ${
+            layoutMode ? (layoutMode === 'desktop' ? 'block' : 'hidden') : 'hidden lg:block'
+          }`}
           style={{ width: scenarioPanelWidthPx }}
         >
           <div
@@ -3262,32 +3288,8 @@ export function ChatPage({
           >
             {showMemoryPanel ? (
               <>
-                {/*
-                  Only the desktop rail is editable. The phone sheet below lives
-                  inside `interactionScopeRef`, which goes inert while the agent
-                  holds a turn — its controls would die mid-turn while these
-                  stayed live, which is a worse experience than not offering
-                  them there at all.
-                */}
-                <AgentMemoryPanel
-                  snapshot={agentMemory}
-                  currentStage={currentStage}
-                  onPreferenceDelete={handlePreferenceDelete}
-                  onPreferenceRestore={handlePreferenceRestore}
-                  onPreferenceClearAll={handlePreferenceClearAll}
-                  pendingPreferenceIds={pendingPreferenceIds}
-                />
-                {studySession?.viewToken ? (
-                  <div className="mt-4 space-y-4">
-                    <DeviceRosterCard roster={deviceRoster?.roster ?? null} phone={phonePresence} />
-                    <CompanionPairingCard
-                      companionToken={companionToken}
-                      target={voiceOutputTarget}
-                      onTargetChange={setVoiceOutputTarget}
-                      companionActive={companionActive}
-                    />
-                  </div>
-                ) : null}
+                {memoryRailPanel}
+                {memoryRailDevices ? <div className="mt-4 space-y-4">{memoryRailDevices}</div> : null}
               </>
             ) : (
               <ScenarioBriefing
@@ -3352,7 +3354,8 @@ export function ChatPage({
           style={{ height: `${HEADER_HEIGHT_PX}px` }}
         >
           <div className="mx-auto flex h-full w-full items-center justify-end gap-2 overflow-x-auto whitespace-nowrap [&>*]:shrink-0">
-            {sidePanelAvailable ? (
+            {/* The kiosk's memory column is always on screen; there is nothing to toggle. */}
+            {sidePanelAvailable && layoutMode !== 'kiosk' ? (
               <button
                 type="button"
                 onClick={handleScenarioBriefingToggle}
@@ -3433,9 +3436,9 @@ export function ChatPage({
           used to be an always-present `<details>` strip above the stage, which
           cost height on every screen whether or not it was open.
         */}
-        {memorySheetOpen && (
+        {memorySheetShown && (
           <div
-            className="absolute inset-0 z-50 flex flex-col bg-dark/95 backdrop-blur lg:hidden"
+            className="absolute inset-0 z-50 flex flex-col bg-dark/95 backdrop-blur"
             role="dialog"
             aria-label={ui.memory}
           >
@@ -3502,6 +3505,13 @@ export function ChatPage({
               voiceError={voiceError}
               voiceInputFailed={voiceInputFailed}
               compactLayoutEnabled={normalizedStudyModePreset === 'demo'}
+              layoutMode={layoutMode ?? undefined}
+              memoryPanel={layoutMode === 'kiosk' ? memoryRailPanel : null}
+              devicesPanel={
+                layoutMode === 'kiosk' && memoryRailDevices ? (
+                  <div className="space-y-4">{memoryRailDevices}</div>
+                ) : null
+              }
               memoryPreferences={showMemoryPanel ? adaptationMemoryPreferences : null}
               highlightVoiceToggle={highlightVoiceToggle}
               voiceToggleDisabled={voiceModeButtonDisabled}
@@ -3699,6 +3709,7 @@ export function ChatPage({
           plannerModel={plannerModelSetting.model}
           onPlannerModelChange={plannerModelSetting.handleChange}
           plannerTurnStats={plannerTurnStats}
+          layoutOverrideAvailable={layoutMode !== null}
         />
       ) : null}
     </div>

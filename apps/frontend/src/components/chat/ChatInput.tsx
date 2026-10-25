@@ -85,7 +85,11 @@ export function ChatInput({
     const element = textareaRef.current;
     if (!element) return;
     resizeTextareaToContent(element);
-  }, [chatWidthPx, text]);
+    // `placeholder` too: an empty textarea is sized by its placeholder, and the
+    // placeholder changes on its own ("Waiting for the next agent message..." →
+    // "Type here, or tap the mic to talk"). Without it, a placeholder that wraps
+    // where the previous one did not was clipped to the old height.
+  }, [chatWidthPx, text, placeholder]);
 
   useLayoutEffect(() => {
     const element = textareaRef.current;
