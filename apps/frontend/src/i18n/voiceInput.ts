@@ -346,6 +346,38 @@ function isPromptEcho(
 }
 
 /**
+ * The augment separator. It exists only in the label text the GUI builds
+ * ("Clayface · R", "4:10 PM · ends 6:08 PM"); no transcriber writes it for
+ * speech, so a transcript carrying it was copied from the prompt's own list.
+ */
+const AUGMENT_SEPARATOR = /[\u00b7\u2022\u30fb]/u;
+
+function containsRun(haystack: readonly string[], needle: readonly string[]): boolean {
+  if (needle.length === 0 || needle.length > haystack.length) return false;
+  for (let start = 0; start + needle.length <= haystack.length; start += 1) {
+    if (needle.every((token, offset) => haystack[start + offset] === token)) return true;
+  }
+  return false;
+}
+
+/**
+ * Booth only. One augmented label read back, which `isPromptEcho` lets through
+ * because it is a single label of fewer than four words: «Clayface · R.» in
+ * the KSEA poster session (822a4a42, 18:09:14) was accepted as a visitor turn,
+ * and the agent selected Clayface on it. The transcript must carry the
+ * separator itself and be nothing but (a run of) one separator-bearing label,
+ * so a visitor saying "Clayface" or "the R-rated one" still gets through.
+ */
+function isAugmentLabelEcho(text: string, hintLabels: readonly string[], language: Language): boolean {
+  if (!AUGMENT_SEPARATOR.test(text)) return false;
+  const transcriptTokens = getEchoTokens(text, language);
+  if (transcriptTokens.length < 2) return false;
+  return hintLabels.some(
+    (label) => AUGMENT_SEPARATOR.test(label) && containsRun(getEchoTokens(label, language), transcriptTokens)
+  );
+}
+
+/**
  * `durationMs` of 0 means the source never measured the clip, not that the clip
  * was instantaneous — an unknown duration must never reject anything.
  */
@@ -425,6 +457,11 @@ export interface TranscriptGateOptions {
    * `buildTranscriptionPrompt` formats. Without them the echo check is inert.
    */
   hintLabels?: readonly string[];
+  /**
+   * Booth demo only: also reject one augmented label read back
+   * (`isAugmentLabelEcho`). Absent, the gate is the one the study ran.
+   */
+  boothEcho?: boolean;
 }
 
 export function getIgnoredVoiceTranscriptReason(
@@ -432,7 +469,7 @@ export function getIgnoredVoiceTranscriptReason(
   durationMs: number,
   options: TranscriptGateOptions
 ): IgnoredTranscriptReason | null {
-  const { language, shortInputMaxDurationMs, shortInputMaxChars, hintLabels = [] } = options;
+  const { language, shortInputMaxDurationMs, shortInputMaxChars, hintLabels = [], boothEcho = false } = options;
 
   if (hasUnexpectedScript(text, language)) return 'non_english';
   if (isKnownHallucination(text, language)) return 'known_hallucination';
@@ -440,6 +477,7 @@ export function getIgnoredVoiceTranscriptReason(
   // Both of these describe a transcript that no one spoke, so they run before
   // the filler and duration rules, which describe speech that carried nothing.
   if (isPromptEcho(text, durationMs, hintLabels, language)) return 'prompt_echo';
+  if (boothEcho && isAugmentLabelEcho(text, hintLabels, language)) return 'prompt_echo';
   if (hasImplausibleRate(text, durationMs, language)) return 'implausible_rate';
 
   const tokens = getNormalizedVoiceTranscriptTokens(text, language);
@@ -456,6 +494,95 @@ export function getIgnoredVoiceTranscriptReason(
   }
 
   return null;
+}
+
+// ---------------------------------------------------------------------------
+// Low-content transcripts (booth demo only)
+// ---------------------------------------------------------------------------
+
+/**
+ * Words that make a one-word Korean answer a real one: a day, a time of day, a
+ * place in the room, a stage noun. Matched as a token prefix, so the particle
+ * a visitor glues on ("토요일로", "내일이요", "뒤쪽으로") does not hide it.
+ */
+const KO_CONTENT_PREFIXES: readonly string[] = [
+  '월요일', '화요일', '수요일', '목요일', '금요일', '토요일', '일요일', '주말', '평일',
+  '오늘', '내일', '모레', '이번', '다음', '저녁', '오후', '오전', '아침', '점심', '밤', '낮', '새벽',
+  '가운데', '중간', '앞', '뒤', '왼쪽', '오른쪽', '맨', '첫', '두번째', '세번째', '마지막', '번째',
+  '영화', '극장', '영화관', '시간', '좌석', '자리', '날짜', '상영',
+  '확정', '예약', '예매', '취소', '처음', '다시', '이전', '뒤로', '아니',
+  '할게', '할래', '해줘', '해주세요', '좋아', '싫어', '괜찮', '맞아', '그래',
+];
+
+const EN_CONTENT_WORDS = new Set([
+  'yes', 'yeah', 'yep', 'no', 'nope', 'ok', 'okay', 'sure', 'fine', 'that', 'this', 'it', 'next', 'back',
+  'confirm', 'cancel', 'first', 'second', 'third', 'last', 'middle', 'front', 'today', 'tonight',
+  'tomorrow', 'weekend', 'morning', 'afternoon', 'evening', 'night', 'monday', 'tuesday', 'wednesday',
+  'thursday', 'friday', 'saturday', 'sunday', 'one', 'two', 'three', 'four', 'five', 'six', 'seven',
+  'eight', 'nine', 'ten', 'closest', 'cheapest', 'earliest', 'latest',
+]);
+
+function touchesHint(token: string, hintTokens: ReadonlySet<string>): boolean {
+  if (token.length < 2) return false;
+  if (hintTokens.has(token)) return true;
+  for (const hint of hintTokens) {
+    if (hint.length >= 2 && (token.startsWith(hint) || hint.startsWith(token))) return true;
+  }
+  return false;
+}
+
+/**
+ * Booth demo only: a transcript that carries nothing a booking can act on —
+ * a fragment («이건데…», «저기 그게...»), a bare «뭐?», a filler, an exclamation
+ * («와!», «신기하다.»). In the KSEA poster hall 25 of the agent's 128 sentences
+ * were stopped by a transcript arriving, most of them hall noise. Such a
+ * transcript still reaches the agent (its repeat ledger decides what to say),
+ * but it does not cut the agent off mid-sentence.
+ *
+ * Leans toward "content": a false "low" only means the agent finishes its
+ * sentence before the visitor's answer is acted on. One token is low unless it
+ * is an answer word, touches an on-screen label, or carries a digit or a choice
+ * particle (로/으로); two or three tokens are low only when they trail off
+ * («…») or are a bare question. Korean and English are drafted from the
+ * poster logs; the other languages get the filler and trailing-off rules only
+ * (UNMEASURED).
+ */
+export function isLowContentTranscript(
+  text: string,
+  language: Language,
+  hintLabels: readonly string[] = []
+): boolean {
+  const trimmed = text.trim();
+  if (!trimmed) return true;
+  const tokens = getNormalizedVoiceTranscriptTokens(trimmed, language);
+  if (tokens.length === 0) return true;
+  if (tokens.every((token) => isLikelyFillerToken(token, language))) return true;
+  if (/\d/u.test(trimmed)) return false;
+  // "네?", "응?" alone are "pardon?", not a yes.
+  if (language === 'ko' && tokens.length === 1 && /[?？]\s*$/u.test(trimmed) && /^(네|넵|예|응|웅)$/u.test(tokens[0])) return true;
+
+  const hintTokens = new Set(hintLabels.flatMap((label) => getEchoTokens(label, language)));
+  const meaningful = MEANINGFUL_SHORT_TOKENS[language];
+  const isContentToken = (token: string): boolean => {
+    if (meaningful.has(token) || touchesHint(token, hintTokens)) return true;
+    if (language === 'ko') {
+      if (KO_CONTENT_PREFIXES.some((prefix) => token.startsWith(prefix))) return true;
+      // A choice particle: "디트로이트로", "그걸로", "세 번째로".
+      if (token.length >= 2 && /(으로|로)$/u.test(token)) return true;
+    }
+    if (language === 'en' && EN_CONTENT_WORDS.has(token)) return true;
+    return false;
+  };
+  if (tokens.some(isContentToken)) return false;
+
+  const trailsOff = /(\.\.\.|…)\s*$/u.test(trimmed);
+  const bareQuestion = /[?？]\s*$/u.test(trimmed);
+  if (language === 'ko' || language === 'en') {
+    if (tokens.length === 1) return true;
+    if (tokens.length <= 3 && (trailsOff || bareQuestion)) return true;
+    return false;
+  }
+  return tokens.length <= 3 && trailsOff;
 }
 
 // ---------------------------------------------------------------------------
