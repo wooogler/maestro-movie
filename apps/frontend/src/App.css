@@ -500,3 +500,41 @@
     transition: none;
   }
 }
+
+/*
+  The same path, switched on by the app rather than the OS: Settings' "Reduce
+  motion", or a booth tablet profile with `motion=off` (a slow tablet CPU is the
+  reason). Kept rule-for-rule identical to the media query above; a selector
+  added there belongs here too.
+*/
+:root[data-motion='reduced'] :is(
+  .typing-dot,
+  .gui-item-enter,
+  .gui-item-exit,
+  .gui-item-text-flash,
+  .gui-item-text-current,
+  .gui-item-text-previous,
+  .gui-highlight-wave,
+  .gui-highlight-border-once,
+  .timeline-sync-pulse,
+  .gui-stage-slide-in-down,
+  .gui-stage-slide-out-up,
+  .gui-stage-slide-in-up,
+  .gui-stage-slide-out-down,
+  .booking-complete-overlay
+) {
+  animation: none !important;
+}
+
+:root[data-motion='reduced'] :is(
+  .gui-highlight-wave,
+  .gui-highlight-border-once,
+  .timeline-sync-pulse
+)::after {
+  animation: none !important;
+  opacity: 0 !important;
+}
+
+:root[data-motion='reduced'] :is(.gui-item-shell, .gui-item-exit, .gui-fit-scale-eased) {
+  transition: none;
+}

@@ -17,9 +17,11 @@ interface LanguageSelectProps {
   hint?: string;
   className?: string;
   id?: string;
+  /** A 48px control at every width, for a touch screen used standing (the booth tablet). */
+  large?: boolean;
 }
 
-export function LanguageSelect({ label, hint, className, id = 'language-select' }: LanguageSelectProps) {
+export function LanguageSelect({ label, hint, className, id = 'language-select', large = false }: LanguageSelectProps) {
   const { language, setLanguage } = useLanguage();
   return (
     <div className={`rounded-xl border border-dark-border bg-dark p-3${className ? ` ${className}` : ''}`}>
@@ -37,7 +39,9 @@ export function LanguageSelect({ label, hint, className, id = 'language-select' 
         value={language}
         onChange={(event) => setLanguage(parseLanguage(event.target.value))}
         aria-label={label ? undefined : 'Language'}
-        className="h-11 w-full rounded-xl border border-dark-border bg-dark px-3 text-sm font-medium text-fg-strong focus:border-primary focus:outline-none sm:h-10"
+        className={`w-full rounded-xl border border-dark-border bg-dark px-3 font-medium text-fg-strong focus:border-primary focus:outline-none ${
+          large ? 'h-12 text-base' : 'h-11 text-sm sm:h-10'
+        }`}
       >
         {LANGUAGES.map((candidate) => (
           <option key={candidate} value={candidate} lang={languagePack(candidate).htmlLang}>

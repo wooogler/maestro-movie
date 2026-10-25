@@ -43,6 +43,11 @@ export const LIST_MOTION = {
 export const GUI_LIST_SETTLED_EVENT = 'gui-list-settled';
 
 export function prefersReducedMotion(): boolean {
+  // The booth's own switch (Settings, or a tablet profile with `motion=off`)
+  // takes the same path the OS setting does.
+  if (typeof document !== 'undefined' && document.documentElement.dataset.motion === 'reduced') {
+    return true;
+  }
   return (
     typeof window !== 'undefined' &&
     typeof window.matchMedia === 'function' &&

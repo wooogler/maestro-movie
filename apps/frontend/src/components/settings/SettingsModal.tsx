@@ -21,6 +21,7 @@ import {
   setFullTuningLayoutOverride,
   useFullTuningLayoutOverride,
 } from '../chat/useFullTuningLayoutMode';
+import { useReduceMotionSetting } from '../../study/tabletProfileStorage';
 import {
   DEFAULT_PLANNER_MODEL,
   PLANNER_MODEL_OPTIONS,
@@ -92,6 +93,7 @@ export function SettingsModal({
 }: SettingsModalProps) {
   const { language, setLanguage, s } = useLanguage();
   const layoutOverride = useFullTuningLayoutOverride();
+  const [reduceMotion, setReduceMotion] = useReduceMotionSetting();
   const closeRef = useRef<HTMLButtonElement | null>(null);
 
   // Escape closes it, and focus starts on the close button — the modal covers
@@ -203,6 +205,23 @@ export function SettingsModal({
                 );
               })}
             </div>
+            {/*
+              The app's reduced-motion path, the one `prefers-reduced-motion`
+              takes, for a slow tablet whose OS setting nobody wants to change.
+              Remembered on the device, like the layout above.
+            */}
+            <label className="mt-3 flex min-h-11 cursor-pointer items-center justify-between gap-3 rounded-xl border border-dark-border bg-dark px-4 py-2">
+              <span className="min-w-0">
+                <span className="block text-sm font-medium text-fg-strong">{s.reduceMotionLabel}</span>
+                <span className="block text-xs text-fg-muted">{s.reduceMotionHint}</span>
+              </span>
+              <input
+                type="checkbox"
+                className="h-5 w-5 shrink-0 accent-primary"
+                checked={reduceMotion}
+                onChange={(event) => setReduceMotion(event.target.checked)}
+              />
+            </label>
           </section>
         ) : null}
 

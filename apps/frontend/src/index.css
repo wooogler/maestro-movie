@@ -251,3 +251,13 @@ body {
     opacity: 0 !important;
   }
 }
+
+/* The app's own reduce-motion switch; mirrors the media query above (see App.css). */
+:root[data-motion='reduced'] :is(.memory-branch-enter, .memory-node-active) {
+  animation: none !important;
+}
+
+:root[data-motion='reduced'] .memory-node-active::after {
+  animation: none !important;
+  opacity: 0 !important;
+}

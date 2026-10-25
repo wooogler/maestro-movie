@@ -307,6 +307,24 @@ export interface UiStrings {
   languagePickerLabel: string;
   languagePickerHint: string;
 
+  // The booth tablet's one-tap screen and its reset controls
+  tabletInvite: string;
+  tabletStart: string;
+  tabletStarting: string;
+  tabletHeadsetHint: string;
+  tabletSoundTest: string;
+  tabletConsentNote: string;
+  tabletNoCode: string;
+  tabletStartOver: string;
+  tabletStartOverConfirm: string;
+  tabletKeepGoing: string;
+  tabletStillThere: string;
+  tabletIdleCountdown: string;
+  tabletImHere: string;
+  tabletCompleteCountdown: string;
+  reduceMotionLabel: string;
+  reduceMotionHint: string;
+
   /**
    * BCP-47 tag for `toLocaleString`. The calendar's month heading is formatted
    * rather than translated, so it needs a locale and not a string.
@@ -560,6 +578,24 @@ const EN: UiStrings = {
   languagePickerLabel: 'Language',
   languagePickerHint: 'Pick the language you want to speak with the agent.',
 
+
+  tabletInvite: "Say what you'd like to see and when",
+  tabletStart: 'Start',
+  tabletStarting: 'Starting...',
+  tabletHeadsetHint: 'Put on the headset, tap Start, and talk.',
+  tabletSoundTest: 'Test sound',
+  tabletConsentNote: 'No audio file and nothing that identifies you. Untick to record nothing.',
+  tabletNoCode: 'This tablet has no access code. Open the profile link again with code=.',
+  tabletStartOver: 'Start over',
+  tabletStartOverConfirm: 'Start over? This booking will be cleared.',
+  tabletKeepGoing: 'Keep going',
+  tabletStillThere: 'Still there?',
+  tabletIdleCountdown: 'Starting over for the next visitor in {seconds} s.',
+  tabletImHere: "I'm still here",
+  tabletCompleteCountdown: 'All done! Starting over for the next visitor in {seconds} s.',
+  reduceMotionLabel: 'Reduce motion',
+  reduceMotionHint: 'Turns off the booking animations. Helps on a slow tablet.',
+
   locale: 'en-US',
 };
 
@@ -807,6 +843,24 @@ const KO: UiStrings = {
   startBooking: '예매 시작하기',
   languagePickerLabel: '언어',
   languagePickerHint: '에이전트와 대화할 언어를 고르세요.',
+
+
+  tabletInvite: '보고 싶은 영화와 조건을 말씀해 보세요',
+  tabletStart: '시작하기',
+  tabletStarting: '시작하는 중...',
+  tabletHeadsetHint: '헤드셋을 쓰고 시작하기를 누른 뒤 말씀하세요.',
+  tabletSoundTest: '소리 확인',
+  tabletConsentNote: '음성 파일과 개인을 식별할 수 있는 정보는 저장하지 않습니다. 원치 않으면 체크를 해제하세요.',
+  tabletNoCode: '이 태블릿에 접속 코드가 없습니다. code= 가 포함된 프로필 링크를 다시 여세요.',
+  tabletStartOver: '처음부터',
+  tabletStartOverConfirm: '처음부터 다시 할까요? 지금까지의 예매가 지워집니다.',
+  tabletKeepGoing: '계속하기',
+  tabletStillThere: '아직 계신가요?',
+  tabletIdleCountdown: '{seconds}초 후 다음 방문자를 위해 처음 화면으로 돌아갑니다.',
+  tabletImHere: '계속할게요',
+  tabletCompleteCountdown: '예매 완료! {seconds}초 후 다음 방문자를 위해 처음 화면으로 돌아갑니다.',
+  reduceMotionLabel: '움직임 줄이기',
+  reduceMotionHint: '예매 화면의 애니메이션을 끕니다. 느린 태블릿에서 도움이 됩니다.',
 
   locale: 'ko-KR',
 };
@@ -1073,6 +1127,24 @@ const JA_OVERRIDES: Partial<UiStrings> = {
   languagePickerLabel: '言語',
   languagePickerHint: 'エージェントと話す言語を選んでください。',
 
+
+  tabletInvite: '観たい映画と条件を話しかけてください',
+  tabletStart: 'スタート',
+  tabletStarting: '開始しています...',
+  tabletHeadsetHint: 'ヘッドセットを着けて、スタートを押してから話してください。',
+  tabletSoundTest: '音声テスト',
+  tabletConsentNote: '音声ファイルや個人を特定する情報は保存しません。記録を望まない場合はチェックを外してください。',
+  tabletNoCode: 'このタブレットにはアクセスコードがありません。code= を付けたプロファイルのリンクを開き直してください。',
+  tabletStartOver: '最初から',
+  tabletStartOverConfirm: '最初からやり直しますか？ここまでの予約は消去されます。',
+  tabletKeepGoing: '続ける',
+  tabletStillThere: 'まだいらっしゃいますか？',
+  tabletIdleCountdown: '{seconds}秒後に次の方のために最初の画面に戻ります。',
+  tabletImHere: '続けます',
+  tabletCompleteCountdown: '予約完了！{seconds}秒後に次の方のために最初の画面に戻ります。',
+  reduceMotionLabel: '動きを減らす',
+  reduceMotionHint: '予約画面のアニメーションをオフにします。動作の遅いタブレットで効果があります。',
+
   locale: 'ja-JP',
 };
 
@@ -1323,6 +1395,24 @@ const ZH_HANS_OVERRIDES: Partial<UiStrings> = {
   startBooking: '开始订票',
   languagePickerLabel: '语言',
   languagePickerHint: '请选择您想与智能体对话的语言。',
+
+
+  tabletInvite: '说出您想看的电影和时间',
+  tabletStart: '开始',
+  tabletStarting: '正在开始...',
+  tabletHeadsetHint: '戴上耳机，点击开始，然后说话。',
+  tabletSoundTest: '测试声音',
+  tabletConsentNote: '不保存录音，也不保存任何可识别您身份的信息。若不愿被记录，请取消勾选。',
+  tabletNoCode: '这台平板没有访问码。请重新打开带有 code= 的配置链接。',
+  tabletStartOver: '重新开始',
+  tabletStartOverConfirm: '要重新开始吗？目前的预订将被清除。',
+  tabletKeepGoing: '继续',
+  tabletStillThere: '您还在吗？',
+  tabletIdleCountdown: '{seconds} 秒后将为下一位访客重新开始。',
+  tabletImHere: '我还在',
+  tabletCompleteCountdown: '预订完成！{seconds} 秒后将为下一位访客重新开始。',
+  reduceMotionLabel: '减少动画',
+  reduceMotionHint: '关闭订票界面的动画，在较慢的平板上更流畅。',
 
   locale: 'zh-CN',
 };
@@ -1575,6 +1665,24 @@ const ZH_HANT_OVERRIDES: Partial<UiStrings> = {
   startBooking: '開始訂票',
   languagePickerLabel: '語言',
   languagePickerHint: '請選擇您想與代理程式對話的語言。',
+
+
+  tabletInvite: '說出您想看的電影和時間',
+  tabletStart: '開始',
+  tabletStarting: '正在開始...',
+  tabletHeadsetHint: '戴上耳機，點選開始，然後說話。',
+  tabletSoundTest: '測試聲音',
+  tabletConsentNote: '不保存錄音，也不保存任何可識別您身分的資訊。若不願被記錄，請取消勾選。',
+  tabletNoCode: '這台平板沒有存取碼。請重新開啟帶有 code= 的設定連結。',
+  tabletStartOver: '重新開始',
+  tabletStartOverConfirm: '要重新開始嗎？目前的訂票將被清除。',
+  tabletKeepGoing: '繼續',
+  tabletStillThere: '您還在嗎？',
+  tabletIdleCountdown: '{seconds} 秒後將為下一位訪客重新開始。',
+  tabletImHere: '我還在',
+  tabletCompleteCountdown: '訂票完成！{seconds} 秒後將為下一位訪客重新開始。',
+  reduceMotionLabel: '減少動畫',
+  reduceMotionHint: '關閉訂票介面的動畫，在較慢的平板上更流暢。',
 
   locale: 'zh-TW',
 };
