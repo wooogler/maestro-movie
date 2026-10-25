@@ -80,6 +80,7 @@ import {
 } from '../hooks';
 import type { VoiceSpeakItem } from '../hooks/useRealtimeVoice';
 import { useVoiceCompanionHost, type VoiceOutputTarget } from '../hooks/useVoiceCompanionHost';
+import { usePushToTalkSetting } from '../hooks/usePushToTalk';
 import { agentTools, type ToolDefinition } from '../agent/tools';
 import {
   DEMO_STUDY_MODE,
@@ -274,6 +275,8 @@ function getVoiceStatusLabel(params: {
   voiceOutputStatus: string;
   hasLiveAgentSession: boolean;
   ui: UiStrings;
+  /** Booth push-to-talk: "listening" only while the key is held. */
+  pushToTalk?: boolean;
 }): string | null {
   const {
     voiceModeEnabled,
@@ -282,10 +285,15 @@ function getVoiceStatusLabel(params: {
     voiceOutputStatus,
     hasLiveAgentSession,
     ui,
+    pushToTalk = false,
   } = params;
 
   if (!voiceModeEnabled) return null;
   if (!voiceInputSupported) return ui.voiceUnavailable;
+  if (pushToTalk && voiceInputStatus === 'capturing') return ui.listening;
+  if (pushToTalk && voiceInputStatus === 'listening' && hasLiveAgentSession && voiceOutputStatus !== 'synthesizing' && voiceOutputStatus !== 'playing') {
+    return ui.pushToTalkIdle;
+  }
   if (voiceOutputStatus === 'synthesizing') return ui.generatingVoice;
   if (voiceOutputStatus === 'playing') return ui.playingReply;
 
@@ -895,9 +903,14 @@ export function ChatPage({
   const scenarioSeatRows = studySession?.scenario.seatRows ?? [];
   const { language, s: ui } = useLanguage();
   const createRealtimeVoiceSessionForLanguage = useCallback(
-    (sessionLanguage: string) => api.createRealtimeVoiceSession(sessionLanguage),
+    (sessionLanguage: string, options?: { turnDetection?: 'manual' }) =>
+      api.createRealtimeVoiceSession(sessionLanguage, options),
     []
   );
+  // Booth only; the backend refuses manual turns for any other session too.
+  const pushToTalkSetting = usePushToTalkSetting();
+  const pushToTalkActive =
+    pushToTalkSetting.enabled && normalizeStudyMode(studyModePreset) === DEMO_STUDY_MODE;
   const scenarioTodayIso = studySession?.scenario.todayIso;
   const scenarioDateWindowDays = studySession?.scenario.dateWindowDays ?? DEFAULT_DATE_WINDOW_DAYS;
   const {
@@ -2877,6 +2890,8 @@ export function ChatPage({
     transcriptionPrompt: companionTranscriptionPrompt,
     language,
     createSession: createRealtimeVoiceSessionForLanguage,
+    pushToTalk: pushToTalkActive,
+    pushToTalkKey: pushToTalkSetting.code,
     onTranscript: handleVoiceTranscript,
     onSpeakingItemChange: (item) => {
       setSpeakingMessageId(item?.id ?? null);
@@ -3082,6 +3097,7 @@ export function ChatPage({
     voiceOutputStatus,
     hasLiveAgentSession,
     ui,
+    pushToTalk: pushToTalkActive && voiceOutputTarget !== 'companion',
   });
   const voiceError = voiceModeEnabled ? voiceSessionError : null;
   /*
@@ -3709,6 +3725,7 @@ export function ChatPage({
           plannerModel={plannerModelSetting.model}
           onPlannerModelChange={plannerModelSetting.handleChange}
           plannerTurnStats={plannerTurnStats}
+          pushToTalkAvailable={plannerModelAvailable && voiceModeAvailable}
           layoutOverrideAvailable={layoutMode !== null}
         />
       ) : null}
