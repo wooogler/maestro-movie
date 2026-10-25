@@ -15,6 +15,7 @@
 import { useEffect, useRef } from 'react';
 import { LANGUAGES, LANGUAGE_LABELS, languagePack, useLanguage } from '../../i18n';
 import { VoiceVerbosityPanel } from '../voice/VoiceVerbosityPanel';
+import { PushToTalkSettings } from './PushToTalkSettings';
 import {
   DEFAULT_PLANNER_MODEL,
   PLANNER_MODEL_OPTIONS,
@@ -46,6 +47,12 @@ interface SettingsModalProps {
   onPlannerModelChange?: (model: string | null) => void;
   /** This session's measured planner latency per model, newest model last. */
   plannerTurnStats?: Array<{ model: string; turns: number; avgMs: number; lastMs: number }>;
+  /**
+   * Demo (booth) only, like the planner model: a study session's turn
+   * detection is part of the condition, and the backend refuses manual turns
+   * for it anyway.
+   */
+  pushToTalkAvailable?: boolean;
 }
 
 export function SettingsModal({
@@ -60,6 +67,7 @@ export function SettingsModal({
   plannerModel = null,
   onPlannerModelChange,
   plannerTurnStats = [],
+  pushToTalkAvailable = false,
 }: SettingsModalProps) {
   const { language, setLanguage, s } = useLanguage();
   const closeRef = useRef<HTMLButtonElement | null>(null);
@@ -202,6 +210,8 @@ export function SettingsModal({
             ) : null}
           </section>
         ) : null}
+
+        {pushToTalkAvailable ? <PushToTalkSettings /> : null}
 
         {voiceSettingsAvailable ? (
           <VoiceVerbosityPanel

@@ -970,6 +970,7 @@ export function StudyStartPage({
           plannerModelAvailable={demoMode}
           plannerModel={plannerModelSetting.model}
           onPlannerModelChange={plannerModelSetting.handleChange}
+          pushToTalkAvailable={demoMode}
         />
       ) : null}
 

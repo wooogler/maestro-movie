@@ -401,18 +401,26 @@ export const api = {
    * Mints a short-lived OpenAI Realtime client secret for voice mode. The
    * browser opens the WebRTC session with this secret; the real OpenAI key
    * stays on the backend.
+   *
+   * `turnDetection: 'manual'` is the booth's push-to-talk (no server VAD; the
+   * client commits). The backend refuses it outside a demo session, and the
+   * body is unchanged when it is not asked for.
    */
-  createRealtimeVoiceSession: (language?: string) =>
+  createRealtimeVoiceSession: (language?: string, options?: { turnDetection?: 'manual' }) =>
     fetchApi<{
       clientSecret: string;
       expiresAt: number | null;
       model: string;
       transcriptionModel: string;
       language: string;
+      turnDetection?: 'manual';
     }>('/speech/realtime-session',
       {
         method: 'POST',
-        body: JSON.stringify(language ? { language } : {}),
+        body: JSON.stringify({
+          ...(language ? { language } : {}),
+          ...(options?.turnDetection === 'manual' ? { turnDetection: 'manual' } : {}),
+        }),
       }
     ),
   /**

@@ -141,6 +141,17 @@ export interface UiStrings {
   plannerModelStatsAvg: string;
   /** `{seconds}` is replaced. */
   plannerModelStatsLast: string;
+  /** Booth push-to-talk: the toggle, its hint, the key picker and test light. */
+  pushToTalkLabel: string;
+  pushToTalkHint: string;
+  pushToTalkKeyLabel: string;
+  pushToTalkKeyOther: string;
+  pushToTalkKeyCapture: string;
+  pushToTalkKeyCapturing: string;
+  pushToTalkTestHeld: string;
+  pushToTalkTestIdle: string;
+  /** The status line in push-to-talk while the key is not held. */
+  pushToTalkIdle: string;
   settings: string;
   settingsTitle: string;
   close: string;
@@ -389,6 +400,15 @@ const EN: UiStrings = {
   plannerModelStatsTitle: 'This session',
   plannerModelStatsAvg: '{seconds}s avg · {turns} turn(s)',
   plannerModelStatsLast: 'last {seconds}s',
+  pushToTalkLabel: 'Push to talk',
+  pushToTalkHint: 'The microphone is open only while the key is held, so hall noise never reaches the agent. Reconnects the voice session.',
+  pushToTalkKeyLabel: 'Talk key',
+  pushToTalkKeyOther: 'Other key code',
+  pushToTalkKeyCapture: 'Press a key to choose',
+  pushToTalkKeyCapturing: 'Press the key now...',
+  pushToTalkTestHeld: 'Key held',
+  pushToTalkTestIdle: 'Press the key to test it',
+  pushToTalkIdle: 'Hold the key and speak',
   settings: 'Settings',
   settingsTitle: 'Settings',
   close: 'Close',
@@ -622,6 +642,15 @@ const KO: UiStrings = {
   plannerModelStatsTitle: '이번 세션',
   plannerModelStatsAvg: '평균 {seconds}초 · {turns}턴',
   plannerModelStatsLast: '마지막 {seconds}초',
+  pushToTalkLabel: '누르는 동안만 말하기',
+  pushToTalkHint: '키를 누르고 있는 동안에만 마이크가 열려, 행사장 소음이 에이전트에게 전달되지 않습니다. 음성 연결을 다시 엽니다.',
+  pushToTalkKeyLabel: '말하기 키',
+  pushToTalkKeyOther: '다른 키 코드',
+  pushToTalkKeyCapture: '키를 눌러 선택',
+  pushToTalkKeyCapturing: '지금 키를 누르세요...',
+  pushToTalkTestHeld: '키 눌림',
+  pushToTalkTestIdle: '키를 눌러 시험해 보세요',
+  pushToTalkIdle: '키를 누르고 말하세요',
   settings: '설정',
   settingsTitle: '설정',
   close: '닫기',
@@ -871,6 +900,15 @@ const JA_OVERRIDES: Partial<UiStrings> = {
   plannerModelStatsTitle: 'このセッション',
   plannerModelStatsAvg: '平均 {seconds}秒 · {turns}ターン',
   plannerModelStatsLast: '直近 {seconds}秒',
+  pushToTalkLabel: '押している間だけ話す',
+  pushToTalkHint: 'キーを押している間だけマイクが開くので、会場の雑音がエージェントに届きません。音声接続をつなぎ直します。',
+  pushToTalkKeyLabel: '話すキー',
+  pushToTalkKeyOther: '別のキーコード',
+  pushToTalkKeyCapture: 'キーを押して選択',
+  pushToTalkKeyCapturing: '今キーを押してください...',
+  pushToTalkTestHeld: '押されています',
+  pushToTalkTestIdle: 'キーを押して試してください',
+  pushToTalkIdle: 'キーを押しながら話してください',
   settings: '設定',
   settingsTitle: '設定',
   close: '閉じる',
@@ -1108,6 +1146,15 @@ const ZH_HANS_OVERRIDES: Partial<UiStrings> = {
   plannerModelStatsTitle: '本次会话',
   plannerModelStatsAvg: '平均 {seconds} 秒 · {turns} 轮',
   plannerModelStatsLast: '最近一次 {seconds} 秒',
+  pushToTalkLabel: '按住说话',
+  pushToTalkHint: '只有按住按键时麦克风才会打开，会场噪音不会传给智能体。会重新建立语音连接。',
+  pushToTalkKeyLabel: '说话键',
+  pushToTalkKeyOther: '其他按键代码',
+  pushToTalkKeyCapture: '按下按键来选择',
+  pushToTalkKeyCapturing: '现在请按下按键...',
+  pushToTalkTestHeld: '按键已按下',
+  pushToTalkTestIdle: '按下按键试一试',
+  pushToTalkIdle: '按住按键说话',
   settings: '设置',
   settingsTitle: '设置',
   close: '关闭',
@@ -1345,6 +1392,15 @@ const ZH_HANT_OVERRIDES: Partial<UiStrings> = {
   plannerModelStatsTitle: '本次工作階段',
   plannerModelStatsAvg: '平均 {seconds} 秒 · {turns} 輪',
   plannerModelStatsLast: '最近一次 {seconds} 秒',
+  pushToTalkLabel: '按住說話',
+  pushToTalkHint: '只有按住按鍵時麥克風才會開啟，會場噪音不會傳給代理程式。會重新建立語音連線。',
+  pushToTalkKeyLabel: '說話鍵',
+  pushToTalkKeyOther: '其他按鍵代碼',
+  pushToTalkKeyCapture: '按下按鍵來選擇',
+  pushToTalkKeyCapturing: '現在請按下按鍵...',
+  pushToTalkTestHeld: '按鍵已按下',
+  pushToTalkTestIdle: '按下按鍵試一試',
+  pushToTalkIdle: '按住按鍵說話',
   settings: '設定',
   settingsTitle: '設定',
   close: '關閉',

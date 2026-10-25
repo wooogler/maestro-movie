@@ -93,11 +93,32 @@ const REALTIME_VAD_EAGERNESS = (() => {
 })();
 
 /**
+ * How the visitor's turns are cut. `vad` is everything above (the default, and
+ * the only thing a study session can get). `manual` is the booth's
+ * push-to-talk: no server turn detection at all, so nothing the hall says ever
+ * opens a turn or cuts the agent off; the browser sends
+ * `input_audio_buffer.commit` when the presenter lets go of the key, and the
+ * transcription that follows is the turn.
+ */
+type RealtimeTurnMode = 'vad' | 'manual';
+
+/**
+ * The request's `turnDetection` field. Anything but the literal `'manual'` is
+ * `vad`, so an old client, a typo or a missing body all mint exactly what they
+ * always did.
+ */
+function parseTurnMode(value: unknown): RealtimeTurnMode {
+  return value === 'manual' ? 'manual' : 'vad';
+}
+
+/**
  * The turn_detection block. server_vad is built exactly as it always was;
  * semantic_vad carries eagerness instead of threshold/padding/silence, which
- * it does not take.
+ * it does not take; manual (push-to-talk) is `null`, which is how the Realtime
+ * API spells "the client commits the buffer itself".
  */
-function buildTurnDetection(): Record<string, unknown> {
+function buildTurnDetection(turnMode: RealtimeTurnMode = 'vad'): Record<string, unknown> | null {
+  if (turnMode === 'manual') return null;
   // The tuning agent composes every reply, so the model must never answer on
   // its own; it may still cut its own speech short when the user starts
   // talking, which is what makes barge-in work.
@@ -405,14 +426,27 @@ export async function speechRoutes(fastify: FastifyInstance): Promise<void> {
       return reply.code(503).send({ error: 'OPENAI_API_KEY_MISSING' });
     }
 
-    const language = parseSessionLanguage((request.body as { language?: unknown } | null)?.language);
-    const minted = await mintRealtimeClientSecret(apiKey, language);
+    const body = request.body as { language?: unknown; turnDetection?: unknown } | null;
+    const language = parseSessionLanguage(body?.language);
+    const turnMode = parseTurnMode(body?.turnDetection);
+    // Push-to-talk is a booth option. A study session's turn detection is part
+    // of the recorded condition, so it is refused outright rather than quietly
+    // minted as VAD: a client that asked for manual turns and got VAD would
+    // sit there with a mic it believes is closed.
+    if (turnMode === 'manual' && !isDemoSessionRequest(request)) {
+      return reply.code(403).send({
+        error: 'PUSH_TO_TALK_DEMO_ONLY',
+        message: 'Push-to-talk is only available in demo sessions.',
+      });
+    }
+    const minted = await mintRealtimeClientSecret(apiKey, language, turnMode);
     if (!minted.ok) {
       return reply.code(minted.status).send({ error: minted.error, message: minted.message });
     }
 
     reply.header('cache-control', 'no-store');
-    return minted.body;
+    // Echoed only for push-to-talk, so a VAD (study) response is unchanged.
+    return turnMode === 'manual' ? { ...minted.body, turnDetection: turnMode } : minted.body;
   });
 
   /**
@@ -617,7 +651,9 @@ interface RealtimeMintFailure {
  */
 async function mintRealtimeClientSecret(
   apiKey: string,
-  language: SessionLanguage
+  language: SessionLanguage,
+  // The companion route never passes this: the phone has no push-to-talk.
+  turnMode: RealtimeTurnMode = 'vad'
 ): Promise<RealtimeMintSuccess | RealtimeMintFailure> {
     const response = await fetch(OPENAI_REALTIME_CLIENT_SECRETS_URL, {
       method: 'POST',
@@ -642,7 +678,7 @@ async function mintRealtimeClientSecret(
               ...(REALTIME_NOISE_REDUCTION
                 ? { noise_reduction: { type: REALTIME_NOISE_REDUCTION } }
                 : {}),
-              turn_detection: buildTurnDetection(),
+              turn_detection: buildTurnDetection(turnMode),
             },
             output: { voice: REALTIME_VOICE, speed: REALTIME_SPEED },
           },

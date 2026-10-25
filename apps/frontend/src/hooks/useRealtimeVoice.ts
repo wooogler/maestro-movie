@@ -1,4 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
+import { PttMachine, pttTranscriptToDeliver, type PttEffect } from '../voice/pushToTalk';
+import { usePushToTalk } from './usePushToTalk';
 
 /**
  * Voice mode over an OpenAI Realtime WebRTC session.
@@ -11,6 +13,13 @@ import { useCallback, useEffect, useRef, useState } from 'react';
  * What the session buys us over the previous transcribe/synthesize round trips
  * is barge-in: the server hears the user start talking while the agent is
  * speaking, cuts the speech off, and truncates the unplayed audio itself.
+ *
+ * Push-to-talk (booth option, `pushToTalk`): the session is minted with
+ * `turn_detection: null`, so the server opens no turns and cuts nothing. The mic
+ * track is disabled except while the key is held; a press cuts the agent off
+ * the way a barge-in does and clears the input buffer, a release commits it,
+ * and the transcription of that commit is the turn. The bookkeeping is the pure
+ * `PttMachine` (voice/pushToTalk.ts); this hook runs its effects.
  */
 
 export type VoiceInputStatus =
@@ -55,7 +64,18 @@ interface UseRealtimeVoiceOptions {
    * it tears the session down and opens a new one.
    */
   language?: string;
-  createSession: (language: string) => Promise<RealtimeVoiceCredentials>;
+  createSession: (
+    language: string,
+    options?: { turnDetection?: 'manual' }
+  ) => Promise<RealtimeVoiceCredentials>;
+  /**
+   * Booth push-to-talk. Part of the connection identity like `language`: turn
+   * detection is fixed when the session is minted, so toggling it reconnects.
+   * Off (the default) leaves every server-VAD path exactly as it was.
+   */
+  pushToTalk?: boolean;
+  /** `KeyboardEvent.code` of the push-to-talk key. */
+  pushToTalkKey?: string;
   onTranscript: (payload: { text: string; durationMs: number }) => void;
   onSpeakingItemChange?: (item: VoiceSpeakItem | null) => void;
   onPlaybackComplete?: (item: VoiceSpeakItem, info: { interrupted: boolean }) => void;
@@ -87,6 +107,9 @@ interface UseRealtimeVoiceResult {
   speak: (item: VoiceSpeakItem) => void;
   stop: () => void;
 }
+
+/** Push-to-talk idle: how often the silence a disabled track sends is cleared. */
+const PTT_IDLE_CLEAR_MS = 30_000;
 
 const REALTIME_CALLS_URL = 'https://api.openai.com/v1/realtime/calls';
 // Realtime sessions are capped at 60 minutes; renew before the cliff.
@@ -142,6 +165,8 @@ export function useRealtimeVoice({
   onPlaybackComplete,
   onLogEvent,
   audioSink,
+  pushToTalk = false,
+  pushToTalkKey = 'Space',
 }: UseRealtimeVoiceOptions): UseRealtimeVoiceResult {
   const supported = isRealtimeVoiceSupported();
 
@@ -198,6 +223,16 @@ export function useRealtimeVoice({
   const renewTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const promptTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const sentPromptRef = useRef<string | null>(null);
+
+  // Push-to-talk. `pttModeRef` is the mode of the CURRENT connection (fixed at
+  // mint), not the live prop, so a toggle mid-session cannot make this hook
+  // commit buffers on a VAD session or vice versa before the reconnect lands.
+  const pttModeRef = useRef(false);
+  const pttRef = useRef(new PttMachine());
+  const pttTimersRef = useRef<Set<ReturnType<typeof setTimeout>>>(new Set());
+  const pttEventSeqRef = useRef(0);
+  /** `seq`s of utterances a press cut before their response.created arrived. */
+  const pttCutSeqsRef = useRef<Set<string>>(new Set());
 
   const setInputStatusSafe = useCallback((next: VoiceInputStatus) => {
     if (inputStatusRef.current === next) return;
@@ -497,9 +532,132 @@ export function useRealtimeVoice({
       lastUtteranceDurationRef.current = null;
       speechStartRef.current = null;
       bargeInEventIdsRef.current.clear();
+
+      // A reconnect starts with the mic shut until the next fresh press: the
+      // new track is created disabled (see applyMicGate) and a key still held
+      // across the reconnect only auto-repeats, which never presses.
+      for (const timer of pttTimersRef.current) clearTimeout(timer);
+      pttTimersRef.current.clear();
+      pttRef.current.reset();
+      pttCutSeqsRef.current.clear();
     },
     [clearQueue, completeActive]
   );
+
+  /**
+   * The one place the mic track's `enabled` is decided. VAD: open unless
+   * suspended, exactly as before. Push-to-talk: also shut unless a press (or
+   * its release tail) is live.
+   */
+  const applyMicGate = useCallback(() => {
+    const stream = micStreamRef.current;
+    if (!stream) return;
+    const open = !suspendedRef.current && (!pttModeRef.current || pttRef.current.micOpen());
+    for (const track of stream.getAudioTracks()) track.enabled = open;
+  }, []);
+
+  /**
+   * A press while the agent is talking: the barge-in path's cancel + clear,
+   * plus an immediate interrupted completion so the agent hears
+   * `tts.playback.complete` now rather than when the server's echo lands. A
+   * response not yet created is remembered by seq and cancelled on arrival.
+   */
+  const cutSpeechForPress = useCallback(() => {
+    clearQueue('ptt-press');
+    const active = activeRef.current;
+    if (!active || active.completed) return;
+    const cancelId = `bargein-cancel-${speakSeqRef.current}`;
+    const clearId = `bargein-clear-${speakSeqRef.current}`;
+    bargeInEventIdsRef.current.clear();
+    bargeInEventIdsRef.current.add(cancelId);
+    bargeInEventIdsRef.current.add(clearId);
+    sendEvent({ type: 'response.cancel', event_id: cancelId });
+    sendEvent({ type: 'output_audio_buffer.clear', event_id: clearId });
+    if (!active.responseId) pttCutSeqsRef.current.add(String(active.seq));
+    completeActive(true, 'ptt-press');
+    setOutputStatusSafe(enabledRef.current ? 'idle' : 'off');
+  }, [clearQueue, completeActive, sendEvent, setOutputStatusSafe]);
+
+  // Timers scheduled by runPttEffects re-enter it through this ref.
+  const runPttEffectsRef = useRef<((effects: PttEffect[]) => void) | null>(null);
+
+  const runPttEffects = useCallback(
+    (effects: PttEffect[]) => {
+      const generation = generationRef.current;
+      const schedule = (ms: number, fire: () => PttEffect[]) => {
+        const timer = setTimeout(() => {
+          pttTimersRef.current.delete(timer);
+          if (generationRef.current !== generation) return;
+          runPttEffectsRef.current?.(fire());
+        }, ms);
+        pttTimersRef.current.add(timer);
+      };
+      for (const effect of effects) {
+        switch (effect.type) {
+          case 'cut-speech':
+            cutSpeechForPress();
+            break;
+          case 'clear-buffer':
+            pttEventSeqRef.current += 1;
+            sendEvent({
+              type: 'input_audio_buffer.clear',
+              event_id: `ptt-clear-${pttEventSeqRef.current}`,
+            });
+            break;
+          case 'mic':
+            applyMicGate();
+            break;
+          case 'commit':
+            sendEvent({ type: 'input_audio_buffer.commit', event_id: effect.eventId });
+            break;
+          case 'status':
+            setInputStatusSafe(suspendedRef.current ? 'suspended' : effect.status);
+            break;
+          case 'schedule-tail':
+            schedule(effect.ms, () => pttRef.current.tailElapsed());
+            break;
+          case 'schedule-timeout':
+            schedule(effect.ms, () => pttRef.current.timedOut(effect.eventId));
+            break;
+          case 'log':
+            onLogEventRef.current?.(effect.event, effect.payload);
+            break;
+        }
+      }
+    },
+    [applyMicGate, cutSpeechForPress, sendEvent, setInputStatusSafe]
+  );
+
+  useEffect(() => {
+    runPttEffectsRef.current = runPttEffects;
+  }, [runPttEffects]);
+
+  const handlePttPress = useCallback(() => {
+    if (!pttModeRef.current) return;
+    const channel = dcRef.current;
+    const active = activeRef.current;
+    runPttEffects(
+      pttRef.current.press(performance.now(), {
+        ready: Boolean(channel && channel.readyState === 'open') && !suspendedRef.current,
+        speaking: Boolean((active && !active.completed) || queueRef.current.length > 0),
+      })
+    );
+  }, [runPttEffects]);
+
+  const handlePttRelease = useCallback(
+    (reason: string) => {
+      if (!pttModeRef.current) return;
+      runPttEffects(pttRef.current.release(performance.now(), reason));
+    },
+    [runPttEffects]
+  );
+
+  usePushToTalk({
+    enabled: enabled && pushToTalk,
+    code: pushToTalkKey,
+    onPress: handlePttPress,
+    onRelease: handlePttRelease,
+  });
 
   const scheduleReconnect = useCallback(
     (reason: string) => {
@@ -550,6 +708,9 @@ export function useRealtimeVoice({
           return;
 
         case 'input_audio_buffer.speech_started': {
+          // Minted with turn_detection=null, a push-to-talk session sends no
+          // VAD events; if one ever did, it must not barge in on the agent.
+          if (pttModeRef.current) return;
           const itemId = readString(event.item_id);
           speechStartRef.current = {
             itemId,
@@ -582,6 +743,7 @@ export function useRealtimeVoice({
         }
 
         case 'input_audio_buffer.speech_stopped': {
+          if (pttModeRef.current) return;
           const itemId = readString(event.item_id);
           const started = speechStartRef.current;
           speechStartRef.current = null;
@@ -617,9 +779,60 @@ export function useRealtimeVoice({
           return;
         }
 
+        case 'input_audio_buffer.committed': {
+          // VAD sessions commit on their own and need nothing here.
+          if (!pttModeRef.current) return;
+          const itemId = readString(event.item_id);
+          if (!itemId) return;
+          const durationMs = pttRef.current.committed(itemId);
+          if (durationMs === null) return;
+          if (utteranceDurationsRef.current.size > MAX_TRACKED_UTTERANCES) {
+            const oldest = utteranceDurationsRef.current.keys().next();
+            if (!oldest.done) utteranceDurationsRef.current.delete(oldest.value);
+          }
+          utteranceDurationsRef.current.set(itemId, durationMs);
+          lastUtteranceDurationRef.current = durationMs;
+          onLogEventRef.current?.('chat.voice_input.captured', { durationMs, pushToTalk: true });
+          return;
+        }
+
         case 'conversation.item.input_audio_transcription.completed': {
           const itemId = readString(event.item_id);
           const transcript = readString(event.transcript) ?? '';
+          if (pttModeRef.current) {
+            const pttDurationMs =
+              (itemId ? utteranceDurationsRef.current.get(itemId) : undefined) ?? 0;
+            if (itemId) utteranceDurationsRef.current.delete(itemId);
+            const { known, effects } = pttRef.current.transcribed(itemId);
+            runPttEffectsRef.current?.(effects);
+            onLogEventRef.current?.('chat.voice_input.transcribed', {
+              durationMs: pttDurationMs,
+              textLength: transcript.length,
+              pushToTalk: true,
+              // Arrived after its timeout had already given up on it. Still
+              // delivered: it is what the presenter said.
+              ...(known ? {} : { late: true }),
+            });
+            const text = pttTranscriptToDeliver(transcript);
+            if (!text) {
+              onLogEventRef.current?.('chat.voice_input.ignored', {
+                durationMs: pttDurationMs,
+                reason: 'ptt_empty',
+                text: transcript,
+              });
+              return;
+            }
+            if (suspendedRef.current) {
+              onLogEventRef.current?.('chat.voice_input.ignored', {
+                durationMs: pttDurationMs,
+                reason: 'suspended',
+                text,
+              });
+              return;
+            }
+            onTranscriptRef.current({ text, durationMs: pttDurationMs });
+            return;
+          }
           const durationMs =
             (itemId ? utteranceDurationsRef.current.get(itemId) : undefined) ??
             lastUtteranceDurationRef.current ??
@@ -648,7 +861,11 @@ export function useRealtimeVoice({
         case 'conversation.item.input_audio_transcription.failed': {
           const failedItemId = readString(event.item_id);
           if (failedItemId) utteranceDurationsRef.current.delete(failedItemId);
-          setInputStatusSafe(suspendedRef.current ? 'suspended' : 'listening');
+          if (pttModeRef.current) {
+            runPttEffectsRef.current?.(pttRef.current.transcribed(failedItemId).effects);
+          } else {
+            setInputStatusSafe(suspendedRef.current ? 'suspended' : 'listening');
+          }
           onLogEventRef.current?.('chat.voice_input.error', {
             stage: 'transcription',
             message: readString((event.error as Record<string, unknown> | undefined)?.message) ?? 'Transcription failed.',
@@ -658,13 +875,27 @@ export function useRealtimeVoice({
 
         case 'response.created': {
           const response = event.response as Record<string, unknown> | undefined;
-          const active = activeRef.current;
-          if (!active || active.responseId) return;
           // Correlate by the seq we stamped into metadata rather than "the first
           // response.created wins": a late event from an earlier response would
           // otherwise bind this item to the wrong id for good.
           const metadata = response?.metadata as Record<string, unknown> | undefined;
           const seq = readString(metadata?.seq);
+          if (seq && pttCutSeqsRef.current.has(seq)) {
+            // A press cut this sentence before the server had created it, so
+            // the earlier cancel found nothing to cancel. Cancel it now.
+            pttCutSeqsRef.current.delete(seq);
+            const responseId = readString(response?.id);
+            const lateCancelId = `bargein-cancel-late-${seq}`;
+            bargeInEventIdsRef.current.add(lateCancelId);
+            sendEvent({
+              type: 'response.cancel',
+              event_id: lateCancelId,
+              ...(responseId ? { response_id: responseId } : {}),
+            });
+            return;
+          }
+          const active = activeRef.current;
+          if (!active || active.responseId) return;
           if (seq && seq !== String(active.seq)) return;
           active.responseId = readString(response?.id);
           return;
@@ -749,6 +980,19 @@ export function useRealtimeVoice({
 
         case 'error': {
           const eventId = readString(event.event_id);
+          if (eventId?.startsWith('ptt-commit-')) {
+            // Typically "buffer too small": under 100 ms of audio reached the
+            // server. Nothing was committed; back to idle.
+            onLogEventRef.current?.('chat.voice_input.ignored', {
+              reason: 'ptt_commit_rejected',
+              message:
+                readString((event.error as Record<string, unknown> | undefined)?.message) ?? null,
+            });
+            runPttEffectsRef.current?.(pttRef.current.commitRejected(eventId));
+            return;
+          }
+          // Clearing an already-empty buffer is not worth a log line.
+          if (eventId?.startsWith('ptt-clear-')) return;
           // Cancelling an already-cancelled response is expected during
           // barge-in; the server got there first.
           if (eventId && bargeInEventIdsRef.current.has(eventId)) {
@@ -830,7 +1074,10 @@ export function useRealtimeVoice({
 
       try {
         const [credentials, micStream] = await Promise.all([
-          createSessionRef.current(language),
+          createSessionRef.current(
+            language,
+            pushToTalk ? { turnDetection: 'manual' } : undefined
+          ),
           micStreamPromise,
         ]);
 
@@ -839,6 +1086,7 @@ export function useRealtimeVoice({
           return;
         }
 
+        pttModeRef.current = pushToTalk;
         micStreamRef.current = micStream;
         transcriptionModelRef.current = credentials.transcriptionModel;
         transcriptionLanguageRef.current = credentials.language || 'en';
@@ -875,7 +1123,8 @@ export function useRealtimeVoice({
 
         const [micTrack] = micStream.getAudioTracks();
         if (micTrack) {
-          micTrack.enabled = !suspendedRef.current;
+          // Push-to-talk: born disabled, and stays so until a fresh press.
+          applyMicGate();
           pc.addTrack(micTrack, micStream);
         }
 
@@ -892,6 +1141,7 @@ export function useRealtimeVoice({
           sendTranscriptionPrompt(transcriptionPromptRef.current);
           onLogEventRef.current?.('chat.voice_session.connected', {
             model: credentials.model,
+            ...(pttModeRef.current ? { turnDetection: 'manual' } : {}),
           });
           pumpQueueRef.current?.();
         };
@@ -968,6 +1218,8 @@ export function useRealtimeVoice({
     supported,
     language,
     connectNonce,
+    pushToTalk,
+    applyMicGate,
     handleServerEvent,
     scheduleReconnect,
     sendTranscriptionPrompt,
@@ -979,10 +1231,8 @@ export function useRealtimeVoice({
 
   // Keep the mic gated and the idle label honest while the session is up.
   useEffect(() => {
-    const stream = micStreamRef.current;
-    if (stream) {
-      for (const track of stream.getAudioTracks()) track.enabled = !suspended;
-    }
+    suspendedRef.current = suspended;
+    applyMicGate();
     if (!enabled || inputStatusRef.current === 'error' || inputStatusRef.current === 'unsupported') {
       return;
     }
@@ -991,7 +1241,22 @@ export function useRealtimeVoice({
     } else if (inputStatusRef.current === 'listening' && suspended) {
       setInputStatusSafe('suspended');
     }
-  }, [enabled, suspended, setInputStatusSafe]);
+  }, [enabled, suspended, applyMicGate, setInputStatusSafe]);
+
+  /*
+    Push-to-talk, idle: the disabled track still sends silence, and with no VAD
+    nothing ever drains the input buffer. Every press clears it first anyway;
+    this only keeps it from growing for the length of a 50-minute session.
+  */
+  useEffect(() => {
+    if (!enabled || !pushToTalk) return;
+    const interval = setInterval(() => {
+      if (!pttModeRef.current || pttRef.current.micOpen()) return;
+      pttEventSeqRef.current += 1;
+      sendEvent({ type: 'input_audio_buffer.clear', event_id: `ptt-clear-${pttEventSeqRef.current}` });
+    }, PTT_IDLE_CLEAR_MS);
+    return () => clearInterval(interval);
+  }, [enabled, pushToTalk, sendEvent]);
 
   // The on-screen options change as the user moves through stages; push them to
   // the transcriber so it biases toward what is actually on screen.
