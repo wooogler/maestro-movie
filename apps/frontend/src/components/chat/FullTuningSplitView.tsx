@@ -34,7 +34,6 @@ import { useMemoryPanelArrangement } from './useFullTuningLayoutMode';
 import { MemoryArrangementContext, type MemoryArrangement } from '../memory/memoryArrangement';
 import { useStageKeys, STAGE_KEYS_SCOPE_ATTR } from '../../hooks/useStageKeys';
 import { StageKeyHintsContext, type StageKeyHints } from '../../renderer/stages/stageKeyHints';
-import { isCompactViewport } from '../../utils/viewport';
 import { isCompactViewport, useMediaQuery } from '../../utils/viewport';
 
 const CLUSTER_BESIDE_STAGE_QUERY = `(min-width: ${COMPACT_CLUSTER_BESIDE_STAGE_MIN_WIDTH_PX}px)`;
