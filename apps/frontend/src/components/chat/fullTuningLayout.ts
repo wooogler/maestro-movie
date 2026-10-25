@@ -237,7 +237,13 @@ export function splitViewLayout(
    * The demo's arrangement, from `selectLayoutMode`. Absent, the `lg`
    * breakpoint decides between compact and desktop, as it always did.
    */
-  mode?: FullTuningLayoutMode
+  mode?: FullTuningLayoutMode,
+  /**
+   * Pinned compact only: the viewport is wide enough that the floating
+   * cluster sits beside a full-size card rather than under it
+   * (`floatingClusterFitsBesideStage`).
+   */
+  options: { clusterBesideStage?: boolean } = {}
 ): SplitViewLayoutClasses {
   if (!compactLayoutEnabled) {
     return {
@@ -271,7 +277,11 @@ export function splitViewLayout(
         ? PINNED_COMPACT_CONVERSATION_DOCKED
         : PINNED_COMPACT_CONVERSATION_SHEET,
       showFloatingToggle: conversationCollapsed,
-      stageViewport: conversationCollapsed ? 'pb-16' : '',
+      // The 4rem reservation keeps the stage clear of the floating cluster.
+      // A wide compact screen (a tablet in landscape) has the cluster in the
+      // empty gutter beside the card, and there the reservation is pure loss:
+      // a tenth of a 533px-tall stage.
+      stageViewport: conversationCollapsed && !options.clusterBesideStage ? 'pb-16' : '',
       floatingCluster: '',
       ...NOT_KIOSK,
     };
@@ -304,6 +314,23 @@ export function splitViewLayout(
     floatingCluster: 'lg:hidden',
     ...NOT_KIOSK,
   };
+}
+
+/**
+ * The narrowest compact viewport whose side gutter holds the floating
+ * conversation cluster next to a full-size (440px) card.
+ *
+ * The card is centred, so its right edge is at `width / 2 + 220`; the cluster
+ * (mic + "Speak" pill, about 165px, inset 12px, inside 16px of page padding)
+ * starts at `width - 193`. They clear when `width >= 826`; 860 leaves room for
+ * a longer pill label in another language. A Galaxy Tab A7 Lite in landscape
+ * is 893 wide; every phone, and every portrait tablet under the kiosk's 700,
+ * is far below it and keeps the reservation.
+ */
+export const COMPACT_CLUSTER_BESIDE_STAGE_MIN_WIDTH_PX = 860;
+
+export function floatingClusterFitsBesideStage(viewportWidth: number): boolean {
+  return Number.isFinite(viewportWidth) && viewportWidth >= COMPACT_CLUSTER_BESIDE_STAGE_MIN_WIDTH_PX;
 }
 
 /**
