@@ -157,6 +157,22 @@ async function main(): Promise<void> {
     );
   }
 
+  console.log('\n4b. a silence the repeat ledger chose is deliberate (KSEA poster session, Round 3)');
+  {
+    const planner = scripted([EMPTY_RESPOND, ASKS]);
+    const result = await planWithEmptyRespondGuard(c1vContext(), planner.plan, {
+      enabled: true,
+      userTurnAwaitingAnswer: true,
+      language: 'ko',
+      deliberateSilence: true,
+    });
+    check('one call, the empty respond accepted, no stage-question fallback', planner.seen.length === 1 && result.decision === EMPTY_RESPOND && result.fallbackText === '' && !result.replanned);
+    check(
+      'without the flag the same respond is still re-planned',
+      decideEmptyRespond({ enabled: true, decision: EMPTY_RESPOND, userTurnAwaitingAnswer: true, replanned: false, stage: 'time', deliberateSilence: false }).kind === 'replan'
+    );
+  }
+
   console.log('\n5. a stage question for every stage, in every supported language');
   {
     const languages = new Set(stageQuestionLanguages());

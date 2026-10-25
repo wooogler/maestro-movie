@@ -11,6 +11,7 @@ import {
   createTurnRepeatGuard,
   MAX_ACTIONS_PER_TURN,
 } from './core/repeatGuard';
+import { asksAboutHidden, createStageRepeatLedger, isBareAgreement } from './core/repeatLedger';
 import {
   getPlannerSystemPrompt,
   isSupportedConversationLanguage,
@@ -301,6 +302,98 @@ function resetTurnRepeatGuard(reason: string): void {
   if (hadTurn) {
     monitor.pushEvent('planner.turn_reset', { reason });
   }
+  // A hand edit to memory is the visitor doing something: the booth's
+  // nothing-new judgement about their last utterance no longer holds.
+  if (reason === 'user-edit') boothUserTurn = null;
+}
+
+/*
+  ── Booth only: noise must not become a repeated turn (Round 3, 2026-10-24) ──
+
+  `turnRepeatGuard` forgets everything on each user message, and in the KSEA
+  poster hall a third of the user messages were noise, bystanders or the
+  kiosk's own voice — each answered with the stage question or the read-back
+  again (core/repeatLedger.ts has the numbers). `repeatLedger` remembers what
+  was SAID at the current stage across those turns; `boothUserTurn` records
+  whether the visitor's latest turn changed anything. Text only: these never
+  change which action runs. Cleared on stage change, session reset, language
+  switch. A study session (isDemoMode false) never touches either.
+*/
+const repeatLedger = createStageRepeatLedger();
+
+interface BoothUserTurn {
+  agreement: boolean;
+  askedAboutHidden: boolean;
+  /** 'unknown' when no extraction ran (CP memory off) or it failed. */
+  extraction: 'pending' | 'unchanged' | 'changed' | 'unknown';
+  /** The ledger dropped everything a planner step wanted to say this turn. */
+  ledgerSilenced: boolean;
+}
+let boothUserTurn: BoothUserTurn | null = null;
+
+function preferenceFingerprint(): string {
+  return JSON.stringify(
+    memory
+      .getPreferences()
+      .map((p) => [p.id, p.description, p.strength])
+      .sort()
+  );
+}
+
+/** Wraps the user-message extraction so the turn learns whether it changed memory. */
+function trackBoothExtraction(extraction: Promise<void>): Promise<void> {
+  const turn = boothUserTurn;
+  if (!isDemoMode || !turn) return extraction;
+  const before = preferenceFingerprint();
+  return extraction.then(
+    () => {
+      turn.extraction = preferenceFingerprint() === before ? 'unchanged' : 'changed';
+    },
+    (error: unknown) => {
+      turn.extraction = 'unknown';
+      throw error;
+    }
+  );
+}
+
+function boothTurnNothingNew(): boolean {
+  const turn = boothUserTurn;
+  return isDemoMode && turn !== null && turn.extraction === 'unchanged';
+}
+
+/**
+ * The sentence a planner step wants to say, minus what the ledger drops.
+ * Returns the text unchanged outside the booth. '' means stay silent.
+ */
+function boothLedgerText(context: PerceivedContext, text: string, trigger: string): string {
+  if (!isDemoMode || !text.trim()) return text;
+  const nothingNew = boothTurnNothingNew();
+  const result = repeatLedger.filter({
+    stage: context.stage ?? null,
+    text,
+    nothingNew,
+    agreement: boothUserTurn?.agreement ?? false,
+    askedAboutHidden: boothUserTurn?.askedAboutHidden ?? false,
+    keepIfEmptied: !nothingNew && userTurnAwaitingAnswer,
+  });
+  if (result.droppedHidden.length > 0 || result.droppedRepeats.length > 0) {
+    monitor.pushEvent('assistant_message.ledger_filtered', {
+      trigger,
+      stage: context.stage ?? null,
+      text: text.trim(),
+      spoken: result.text,
+      droppedHidden: result.droppedHidden,
+      droppedRepeats: result.droppedRepeats,
+      nothingNew,
+    });
+  }
+  if (result.silenced && boothUserTurn) boothUserTurn.ledgerSilenced = true;
+  return result.text;
+}
+
+function noteBoothSpoken(context: PerceivedContext, text: string): void {
+  if (!isDemoMode || !text.trim()) return;
+  repeatLedger.noteSpoken(context.stage ?? null, text);
 }
 
 const RETRY_DELAY_MS = 1200;
@@ -1119,6 +1212,15 @@ function getToolName(action: import('./types').PlannedAction): string {
   return typeof action.payload.toolName === 'string' ? action.payload.toolName : 'tool.call';
 }
 
+/** filter, or a clearModification that can remove one: what is hidden changes. */
+function changesHiddenCount(toolName: string, action: import('./types').PlannedAction): boolean {
+  if (toolName === 'filter') return true;
+  if (toolName !== 'clearModification') return false;
+  const params = action.payload.params as Record<string, unknown> | undefined;
+  const type = typeof params?.type === 'string' ? params.type : '';
+  return type === '' || type === 'filter' || type === 'all';
+}
+
 function buildActionFingerprint(action: import('./types').PlannedAction, stage: string | null): string {
   if (action.type === 'tool.call') {
     const toolName = typeof action.payload.toolName === 'string' ? action.payload.toolName : '';
@@ -1476,6 +1578,8 @@ async function maybePlanAndExecute(trigger: string): Promise<void> {
         enabled: isDemoMode,
         userTurnAwaitingAnswer,
         language: conversationLanguage,
+        // Booth: the repeat ledger already chose silence for this turn.
+        ...(boothUserTurn?.ledgerSilenced ? { deliberateSilence: true } : {}),
         onStep: (step, stepDecision, replanned) => {
           if (step.kind === 'accept') return;
           monitor.pushEvent(step.kind === 'replan' ? 'planner.empty_respond_replan' : 'planner.empty_respond_fallback', {
@@ -1539,14 +1643,25 @@ async function maybePlanAndExecute(trigger: string): Promise<void> {
         already drops an exact repeat within a turn; this is the same rule for
         the respond. A study session speaks it as before.
       */
-      if (isDemoMode && decisionExplainText.trim() && turnRepeatGuard.hasSpoken(decisionExplainText)) {
+      // Booth: the cross-turn ledger first (Round 3), then the in-turn dedupe
+      // on what is left. Identity outside the booth.
+      const respondText = boothLedgerText(planningContext, decisionExplainText, trigger);
+      if (
+        isDemoMode &&
+        respondText.trim() &&
+        (turnRepeatGuard.hasSpoken(decisionExplainText) || turnRepeatGuard.hasSpoken(respondText))
+      ) {
         monitor.pushEvent('assistant_message.repeat_suppressed', {
           trigger,
           text: decisionExplainText.trim(),
         });
-      } else if (decisionExplainText.trim()) {
-        await maybeSendAssistantMessage(planningContext, decisionExplainText, 'respond');
-        if (isDemoMode) turnRepeatGuard.noteSpoken(decisionExplainText);
+      } else if (respondText.trim()) {
+        await maybeSendAssistantMessage(planningContext, respondText, 'respond');
+        if (isDemoMode) {
+          turnRepeatGuard.noteSpoken(decisionExplainText);
+          turnRepeatGuard.noteSpoken(respondText);
+          noteBoothSpoken(planningContext, respondText);
+        }
       }
       monitor.pushEvent('planner.no_action', {
         source: decision.source,
@@ -1609,10 +1724,12 @@ async function maybePlanAndExecute(trigger: string): Promise<void> {
         your 10:00 PM start and 3D requirements", spoken five times, is what
         this dedupe is for.
       */
-      if (guardVerdict.speak && decisionExplainText.trim()) {
+      const suppressedText = guardVerdict.speak ? boothLedgerText(planningContext, decisionExplainText, trigger) : '';
+      if (guardVerdict.speak && suppressedText.trim()) {
         if (readingDelayPromise) await readingDelayPromise;
-        await maybeSendAssistantMessage(planningContext, decisionExplainText, 'respond');
+        await maybeSendAssistantMessage(planningContext, suppressedText, 'respond');
         turnRepeatGuard.noteSpoken(decisionExplainText);
+        noteBoothSpoken(planningContext, suppressedText);
       }
       monitor.pushEvent(
         guardVerdict.kind === 'repeat' ? 'planner.repeat_suppressed' : 'planner.turn_budget_exhausted',
@@ -1683,18 +1800,24 @@ async function maybePlanAndExecute(trigger: string): Promise<void> {
       const missingMessageFallback = planningContext.spokenBrevity
         ? ''
         : `I will run ${getToolName(action)} next. Reason: ${action.reason}`;
-      const spokenText = decisionExplainText || missingMessageFallback;
+      const plannedText = decisionExplainText || missingMessageFallback;
+      // Booth: a filter step changes what is hidden, so the count it states is
+      // new; then the cross-turn ledger (Round 3). Identity outside the booth.
+      if (isDemoMode && changesHiddenCount(toolName, action)) repeatLedger.noteFilterChanged();
+      const spokenText = boothLedgerText(planningContext, plannedText, trigger);
       // Same dedupe as the suppression path, for the actions that DO run: two
       // different tool calls narrated with one identical sentence are one
       // sentence, not two.
-      if (spokenText.trim() && turnRepeatGuard.hasSpoken(spokenText)) {
+      if (spokenText.trim() && (turnRepeatGuard.hasSpoken(plannedText) || turnRepeatGuard.hasSpoken(spokenText))) {
         monitor.pushEvent('assistant_message.repeat_suppressed', {
           trigger,
           text: spokenText.trim(),
         });
       } else {
         await maybeSendAssistantMessage(planningContext, spokenText, toolName || 'respond');
-        turnRepeatGuard.noteSpoken(spokenText);
+        turnRepeatGuard.noteSpoken(plannedText);
+        if (spokenText !== plannedText) turnRepeatGuard.noteSpoken(spokenText);
+        noteBoothSpoken(planningContext, spokenText);
       }
     }
 
@@ -2014,6 +2137,8 @@ function resetRuntimeState(): void {
   lastActionAt = 0;
   userTurnAwaitingAnswer = false;
   turnRepeatGuard.reset('session-reset');
+  repeatLedger.clear('session-reset');
+  boothUserTurn = null;
   // A barrier or reading delay left armed from the previous trial would
   // otherwise leak into the next one — the study resets between trials.
   pendingReadingDelayUntil = 0;
@@ -2286,8 +2411,12 @@ async function handleInbound(envelope: RelayEnvelope): Promise<void> {
         // A new stage is a new screen: nothing in the ledger describes it any
         // more, and a tool that repeats here is repeating against new options.
         resetTurnRepeatGuard('stage-change');
+        // Booth: what was said at the old stage says nothing about this one
+        // (forward or back). A tap that moved the stage is the visitor acting.
+        repeatLedger.clear('stage-change');
         const stageChangeOriginTool = lastAgentToolName;
         if (userDrivenSelectionTransition || userDrivenNavigationTransition) {
+          boothUserTurn = null;
           lastAgentToolName = null;
           if (activeBacktrackContinuation) {
             setActiveBacktrackContinuation(null, 'user-driven-stage-change', {
@@ -2366,6 +2495,17 @@ async function handleInbound(envelope: RelayEnvelope): Promise<void> {
       userTurnAwaitingAnswer = true;
       lastAgentToolName = null;
       resetTurnRepeatGuard('user-message');
+      // Booth: what this turn is, for the repeat ledger. Extraction fills in
+      // whether it changed memory (trackBoothExtraction below).
+      if (isDemoMode) repeatLedger.beginTurn();
+      boothUserTurn = isDemoMode
+        ? {
+            agreement: isBareAgreement(userMessage.text),
+            askedAboutHidden: asksAboutHidden(userMessage.text),
+            extraction: 'unknown',
+            ledgerSilenced: false,
+          }
+        : null;
       if (activeBacktrackContinuation) {
         setActiveBacktrackContinuation(null, 'user-message', {
           stage: current.stage,
@@ -2390,7 +2530,8 @@ async function handleInbound(envelope: RelayEnvelope): Promise<void> {
       if (!cpMemoryEnabled) {
         return;
       }
-      const extractionPromise = runPreferenceExtractionFromUserMessage(next, userMessage.text);
+      if (boothUserTurn) boothUserTurn.extraction = 'pending';
+      const extractionPromise = trackBoothExtraction(runPreferenceExtractionFromUserMessage(next, userMessage.text));
       userPreferenceExtractionInFlight = extractionPromise.finally(() => {
         if (userPreferenceExtractionInFlight === extractionPromise) {
           userPreferenceExtractionInFlight = null;
@@ -2419,6 +2560,8 @@ async function handleInbound(envelope: RelayEnvelope): Promise<void> {
       // an unrecognised language yields no prompt section, so the agent would
       // silently keep speaking English anyway. Better that it be explicit.
       conversationLanguage = isSupportedConversationLanguage(next) ? next : 'en';
+      // Booth ledger compares within one language only.
+      repeatLedger.clear('language-change');
       monitor.pushEvent('conversation.language', { language: conversationLanguage });
       return;
     }

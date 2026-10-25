@@ -21,6 +21,10 @@
  *      question itself, in the session language (never the English
  *      "I will run <tool> next" fallback, which is a voice-off study sentence).
  *
+ * An empty respond is also left alone when the repeat ledger silenced this
+ * visitor turn on purpose (KSEA poster session: noise answered with the same
+ * question); see `deliberateSilence`.
+ *
  * An empty respond is left alone when the visitor has already heard something
  * since they last spoke. Then the question was asked on an earlier step of the
  * same turn ("어느 극장으로 할까요?" on the select before `next`), and asking
@@ -53,6 +57,15 @@ export interface EmptyRespondInput {
   replanned: boolean;
   stage: string | null;
   language?: string;
+  /**
+   * The repeat ledger (core/repeatLedger.ts) already chose silence for this
+   * visitor turn: it changed nothing, and everything the planner wanted to say
+   * had been said at this stage. An empty respond after that is the same
+   * decision, not a failure to answer, so it is accepted — re-planning would
+   * only fetch the stage question the ledger just dropped. Booth only, absent
+   * elsewhere.
+   */
+  deliberateSilence?: boolean;
 }
 
 export function isEmptyRespond(decision: Pick<PlanDecision, 'action' | 'explainText' | 'source'>): boolean {
@@ -63,6 +76,7 @@ export function decideEmptyRespond(input: EmptyRespondInput): EmptyRespondStep {
   if (!input.enabled) return { kind: 'accept' };
   if (!isEmptyRespond(input.decision)) return { kind: 'accept' };
   if (!input.userTurnAwaitingAnswer) return { kind: 'accept' };
+  if (input.deliberateSilence === true) return { kind: 'accept' };
   if (!input.replanned) return { kind: 'replan' };
   return { kind: 'fallback', text: stageQuestion(input.stage, input.language) };
 }
@@ -195,6 +209,8 @@ export interface EmptyRespondGuardOptions {
   enabled: boolean;
   userTurnAwaitingAnswer: boolean;
   language?: string;
+  /** See `EmptyRespondInput.deliberateSilence`. */
+  deliberateSilence?: boolean;
   /** Told about each step, for the monitor. */
   onStep?: (step: EmptyRespondStep, decision: PlanDecision, replanned: boolean) => void;
 }
@@ -223,6 +239,7 @@ export async function planWithEmptyRespondGuard(
       replanned,
       stage: context.stage,
       language: options.language,
+      ...(options.deliberateSilence ? { deliberateSilence: true } : {}),
     });
     options.onStep?.(verdict, decision, replanned);
     return verdict;
