@@ -24,7 +24,21 @@ import {
   sanitizeSetupStudyMode,
   type StudyModeId,
 } from './pages/studyOptions';
-import { api, describeApiErrorCode, STUDY_SESSION_INVALID_EVENT } from './api/client';
+import {
+  api,
+  describeApiErrorCode,
+  STUDY_SESSION_INVALID_EVENT,
+  type StudySessionInvalidDetail,
+} from './api/client';
+import {
+  clearTabletActivity,
+  finishStudySessionByToken,
+  getTabletProfile,
+  stampTabletActivity,
+} from './study/tabletProfileStorage';
+import type { TabletResetRequest } from './components/tablet/TabletSessionControls';
+import { useScreenWakeLock } from './hooks/useScreenWakeLock';
+import { TabletStartScreen } from './components/tablet/TabletStartScreen';
 import type { VoiceOutputTarget } from './hooks/useVoiceCompanionHost';
 import {
   clearStoredStudySession,
@@ -123,8 +137,20 @@ function App() {
   const [demoMode, setDemoMode] = useState<boolean>(() => {
     const session = getStoredStudySession();
     if (session) return isDemoStudyMode(session.studyMode);
+    // A booth tablet is a demo device; its one-tap screen has no way out of it.
+    if (getTabletProfile()) return true;
     return getStoredDemoModePreference() ?? true;
   });
+  /*
+    The booth tablet profile, read once (bootTabletProfile in main.tsx has
+    already applied any profile URL). Demo only: a study condition on the same
+    device runs exactly as it would without one.
+  */
+  const [tabletProfile] = useState(getTabletProfile);
+  const tabletActive = Boolean(tabletProfile) && demoMode;
+  // An unattended tablet must not dim between visitors, nor mid-sentence.
+  // Best effort: Android's "stay awake while charging" is the real guarantee.
+  useScreenWakeLock(tabletActive);
   const [apiKey, setApiKey] = useState<string>(() => getStoredApiKey());
   // Both credentials persist across a relaunch (see sessionStorage.ts for the
   // PWA reason). Access codes are reusable by design -- one code runs a whole
@@ -323,6 +349,8 @@ function App() {
   */
   const companionMintedForRef = useRef<string | null>(null);
   useEffect(() => {
+    // A tablet never shows the pairing QR, so it has nothing to mint.
+    if (tabletActive) return;
     if (!demoSessionId || companionMintedForRef.current === demoSessionId) return;
     companionMintedForRef.current = demoSessionId;
     api
@@ -336,7 +364,7 @@ function App() {
           companionMintedForRef.current = null;
         }
       });
-  }, [demoSessionId]);
+  }, [demoSessionId, tabletActive]);
 
   useEffect(() => {
     document.documentElement.dataset.theme = theme;
@@ -421,8 +449,18 @@ function App() {
     setQuickDemoCard(null);
   }, []);
 
+  // The current session's token, for telling a stale rejection apart from a
+  // live one (see StudySessionInvalidDetail).
+  const currentStudyTokenRef = useRef<string | null>(studySession?.studyToken ?? null);
+  currentStudyTokenRef.current = studySession?.studyToken ?? null;
+
   useEffect(() => {
-    const handleSessionInvalid = () => {
+    const handleSessionInvalid = (event: Event) => {
+      const rejected = (event as CustomEvent<StudySessionInvalidDetail | undefined>).detail?.studyToken ?? null;
+      // A late request from a session that already ended — a tablet's previous
+      // visitor, finished on purpose a moment ago — says nothing about the
+      // session running now.
+      if (rejected && rejected !== currentStudyTokenRef.current) return;
       handleStaleStudySession();
     };
     window.addEventListener(STUDY_SESSION_INVALID_EVENT, handleSessionInvalid);
@@ -430,6 +468,42 @@ function App() {
       window.removeEventListener(STUDY_SESSION_INVALID_EVENT, handleSessionInvalid);
     };
   }, [handleStaleStudySession]);
+
+  /*
+    A booth tablet starting over: the visitor pressed "Start over", walked
+    away (idle reset), or finished their booking.
+
+    The record leaves storage first and synchronously, so an installed-PWA
+    relaunch from here on finds nothing to resume. Setting the session to null
+    is what sends /booking back to `/`: ChatPage unmounts, and its own cleanup
+    tears down the Realtime voice session and closes the relay socket. The
+    backend is told last, with the token captured here — the stored record is
+    already gone — and after the booking page's last log line, or two seconds,
+    whichever comes first. A finish that fails is not retried: the server's own
+    idle reaper still ends the session.
+  */
+  const handleTabletStartOver = useCallback((request: TabletResetRequest) => {
+    const token = currentStudyTokenRef.current;
+    clearStoredStudySession({ keepCredentials: true });
+    clearTabletActivity();
+    handleStudyReset();
+    if (!token) return;
+    const settled = new Promise<void>((resolve) => window.setTimeout(resolve, 2000));
+    void Promise.race([request.beforeFinish.catch(() => {}), settled]).then(() =>
+      finishStudySessionByToken(token).then((ok) => {
+        console.info(`[tablet] start over (${request.reason}): session finish ${ok ? 'ok' : 'failed'}`);
+      })
+    );
+    // handleStudyReset is a plain function that only sets state; it is stable
+    // in behaviour, so it is deliberately not a dependency.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const handleTabletSessionStarted = useCallback((session: StudySessionState) => {
+    stampTabletActivity(Date.now(), true);
+    handleStudySessionCreated(session);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const handleEnterDemoMode = useCallback(() => {
     setDemoMode(true);
@@ -553,11 +627,20 @@ function App() {
               <Routes>
                 <Route
                   path="/"
-                  element={restoringSession ? (
+                  element={restoringSession || (tabletActive && studySession) ? (
                     // The PWA's start URL. A relaunch mid-session lands here,
                     // and the visitor's booking is the only sensible place to
-                    // be; /booking decides whether it is still live.
+                    // be; /booking decides whether it is still live. On a
+                    // booth tablet the same holds for a Back gesture: the
+                    // one-tap screen with a session still running would let a
+                    // second Start strand the first. Start over is the way out.
                     <Navigate to="/booking" replace />
+                  ) : tabletActive && tabletProfile ? (
+                    // A booth tablet: one line, the language, one button.
+                    <TabletStartScreen
+                      profile={tabletProfile}
+                      onSessionStarted={handleTabletSessionStarted}
+                    />
                   ) : (
                     <StudyStartPage
                       theme={theme}
@@ -637,9 +720,11 @@ function App() {
                     <ChatPage
                       studyModePreset={effectiveStudyMode}
                       studySession={studySession}
-                      preferenceProfile={preferenceProfile}
-                      companionToken={companionToken}
-                      voiceTargetPreference={voiceTargetPreference}
+                      // A tablet visitor starts empty: the preset picker is
+                      // not on its start screen.
+                      preferenceProfile={tabletActive ? null : preferenceProfile}
+                      companionToken={tabletActive ? null : companionToken}
+                      voiceTargetPreference={tabletActive ? 'kiosk' : voiceTargetPreference}
                       quickStartCard={quickDemoCard}
                       // A card visitor tapped "start and talk" one screen ago;
                       // making them find the mic button would undo the point.
@@ -652,6 +737,8 @@ function App() {
                       // asked for the opposite, so that one starts with voice
                       // off and the composer ready to type.
                       startWithVoice={quickDemoCard ? quickDemoCardVoice : demoMode}
+                      tabletProfile={tabletActive ? tabletProfile : null}
+                      onTabletStartOver={handleTabletStartOver}
                     />
                   ) : (
                     <Navigate to="/" replace />

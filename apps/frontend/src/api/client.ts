@@ -117,11 +117,23 @@ async function parseErrorResponse(response: Response): Promise<ParsedApiError> {
   return { message: `${defaultMessage}: ${text.slice(0, 120)}`, code: null };
 }
 
-function toApiError(response: Response, parsed: ParsedApiError): ApiError {
+export interface StudySessionInvalidDetail {
+  /**
+   * The token the rejected request carried, when known. A late request from a
+   * session that was already finished on purpose (a booth tablet starting
+   * over) must not end the NEXT visitor's session, so the shell compares it
+   * with the current one.
+   */
+  studyToken: string | null;
+}
+
+function toApiError(response: Response, parsed: ParsedApiError, studyToken: string | null = null): ApiError {
   if (parsed.code === STUDY_SESSION_UNAUTHORIZED && typeof window !== 'undefined') {
     // Let the app shell reset to the start page instead of leaving the user
     // stuck on a screen backed by a session the backend no longer knows about.
-    window.dispatchEvent(new CustomEvent(STUDY_SESSION_INVALID_EVENT));
+    window.dispatchEvent(
+      new CustomEvent<StudySessionInvalidDetail>(STUDY_SESSION_INVALID_EVENT, { detail: { studyToken } })
+    );
   }
   return new ApiError(parsed.message, response.status, parsed.code);
 }
@@ -193,7 +205,7 @@ async function fetchApiResponse(endpoint: string, options?: FetchApiOptions): Pr
   }
 
   if (!response.ok) {
-    throw toApiError(response, await parseErrorResponse(response));
+    throw toApiError(response, await parseErrorResponse(response), headers['x-study-session-token'] ?? null);
   }
 
   return response;

@@ -56,6 +56,15 @@ import {
 import type { AgentMemorySnapshot, AgentPreference } from '../agent/protocol';
 import { PreferenceBriefingCard } from '../components/memory/PreferenceBriefingCard';
 import { CompanionPairingCard } from '../components/companion/CompanionPairingCard';
+import {
+  TabletCompleteNotice,
+  TabletIdleWarning,
+  TabletStartOverButton,
+  useTabletIdleReset,
+  type TabletResetReason,
+  type TabletResetRequest,
+} from '../components/tablet/TabletSessionControls';
+import type { TabletProfile } from '../study/tabletProfile';
 import { DeviceRosterCard } from '../components/companion/DeviceRosterCard';
 import { useDevicePresence } from '../hooks/useDevicePresence';
 import { SettingsModal } from '../components/settings/SettingsModal';
@@ -93,7 +102,7 @@ import {
 import type { Movie, Theater, Showing, Booking } from '../types';
 import { formatScenarioTitle, formatTime12Hour } from '../utils/displayFormats';
 import { formatLocalDate, resolveScenarioToday } from '../utils/studyDate';
-import { isCompactViewport } from '../utils/viewport';
+import { isCompactViewport, useMediaQuery } from '../utils/viewport';
 import { useFullTuningLayoutMode } from '../components/chat/useFullTuningLayoutMode';
 import {
   buildTranscriptionPrompt,
@@ -152,6 +161,14 @@ interface ChatPageProps {
    * else voice stays off until the mic button is pressed.
    */
   startWithVoice?: boolean;
+  /**
+   * The booth tablet profile, when this device is one (demo only). Hides the
+   * phone pairing, replaces Reset/Finish with Start over, and runs the idle
+   * reset. Null everywhere else, and then nothing below changes.
+   */
+  tabletProfile?: TabletProfile | null;
+  /** Ends this session and returns the tablet to its one-tap screen. */
+  onTabletStartOver?: (request: TabletResetRequest) => void;
 }
 
 const stageInteractionTools: Record<Stage, string[]> = {
@@ -211,6 +228,9 @@ const SCENARIO_BRIEFING_VISIBLE_STORAGE_KEY = 'tuning-movie-side-panel-visible-v
 // no way to get them back.
 const HEADER_COLLAPSED_STORAGE_KEY = 'tuning-movie-header-collapsed';
 const HEADER_HEIGHT_PX = 44;
+// A booth tablet's toolbar holds 44px targets, so its strip is a little taller.
+const TABLET_HEADER_HEIGHT_PX = 56;
+const TABLET_SHORT_LANDSCAPE_QUERY = '(orientation: landscape) and (max-height: 600px)';
 const MAX_STT_HINT_OPTIONS = 15;
 const MAX_STT_HINT_TEXT_LENGTH = 300;
 const RESTORED_SELECTION_META_KEY = 'selectionRestored';
@@ -698,6 +718,8 @@ export function ChatPage({
   voiceTargetPreference = 'kiosk',
   quickStartCard = null,
   startWithVoice = false,
+  tabletProfile = null,
+  onTabletStartOver,
 }: ChatPageProps) {
   const navigate = useNavigate();
 
@@ -886,6 +908,8 @@ export function ChatPage({
   // Preference memory and workflow navigation are surfaced in the demo only.
   // Study conditions C1-C4 must keep the interface the paper describes.
   const showMemoryPanel = normalizedStudyModePreset === 'demo';
+  // Demo only, like everything the booth adds; a study condition never sees it.
+  const tabletActive = Boolean(tabletProfile) && showMemoryPanel;
   // The memory panel as a full-screen sheet, which is its form below `lg`.
   // Declared here rather than with the other side-panel derivations because the
   // effect that makes the header inert behind it sits above them.
@@ -893,6 +917,7 @@ export function ChatPage({
   // Demo only: compact, desktop or the portrait kiosk (`fullTuningLayout.ts`).
   // `null` in the study conditions, whose layout stays on the `lg` breakpoint.
   const layoutMode = useFullTuningLayoutMode(normalizedStudyModePreset === 'demo');
+  const tabletShortLandscape = useMediaQuery(TABLET_SHORT_LANDSCAPE_QUERY);
   const voiceModeAvailable = studyModeConfig?.voiceModeAvailable ?? false;
 
   const scenarioTitle = studySession?.scenario.title
@@ -2711,6 +2736,37 @@ export function ChatPage({
   const isAgentTyping = hasLiveAgentSession && effectiveAgentActivityPhase !== 'idle';
   const interactionLocked = loading || isAgentTyping;
 
+  /*
+    The booth tablet starting over for the next visitor. The page's own
+    teardown (voice, relay, timers) runs when App drops the session and this
+    page unmounts; all this does first is cut the audio at once and write the
+    log line, which the finish request then waits for.
+  */
+  const tabletResetFiredRef = useRef(false);
+  const handleTabletStartOver = useCallback(
+    (reason: TabletResetReason) => {
+      if (!onTabletStartOver || tabletResetFiredRef.current) return;
+      tabletResetFiredRef.current = true;
+      stopAgentSpeech();
+      const beforeFinish = logStudyEventNow('study.control.tablet_reset', {
+        source: reason === 'idle' || reason === 'booking-complete' ? 'system' : 'participant',
+        reason,
+        stage: currentStage,
+      }).catch(() => {});
+      // The chat store is global and outlives this page: without this the
+      // next visitor's booking page opens on this visitor's conversation.
+      // The same teardown Finish does, minus the end screen.
+      resetChat();
+      setBooking(null);
+      setError(null);
+      setAwaitingAgentResponse(false);
+      setUiSpec(null);
+      sendSessionResetToAgent('host-tablet-start-over');
+      onTabletStartOver({ reason, beforeFinish });
+    },
+    [currentStage, logStudyEventNow, onTabletStartOver, resetChat, sendSessionResetToAgent, setUiSpec, stopAgentSpeech]
+  );
+
   useEffect(() => {
     if (!hasLiveAgentSession) {
       setAwaitingAgentResponse(false);
@@ -3154,6 +3210,42 @@ export function ChatPage({
   const highlightVoiceToggle =
     voiceModeAvailable && !voiceModeEnabled && effectiveChatInputPlaceholder === ui.tapMicForVoice;
 
+  // The booth tablet's idle reset. Inert (no listeners, no timer) everywhere else.
+  // The signal counts every change to the conversation or the screen: a
+  // message, a stage, any agent GUI action (the store hands out a new spec
+  // only when something changed), a sentence starting to play.
+  const tabletActivityCounterRef = useRef(0);
+  const tabletActivitySignal = useMemo(
+    () => (tabletActivityCounterRef.current += 1),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [messages.length, activeSpec, currentStage, speakingMessageId]
+  );
+  const tabletBookingInProgress =
+    !isFinishTaskStep &&
+    (currentStage !== 'movie' || messages.some((message) => message.type === 'user'));
+  const tabletIdle = useTabletIdleReset({
+    enabled: tabletActive && Boolean(onTabletStartOver),
+    idleSeconds: tabletProfile?.idleSeconds ?? 0,
+    busy:
+      loading ||
+      isAgentTyping ||
+      awaitingAgentResponse ||
+      voiceOutputStatus === 'synthesizing' ||
+      voiceOutputStatus === 'playing' ||
+      voiceInputStatus === 'capturing' ||
+      voiceInputStatus === 'transcribing',
+    activitySignal: tabletActivitySignal,
+    bookingComplete: isFinishTaskStep,
+    onReset: handleTabletStartOver,
+  });
+  const finishTaskHandler = useCallback(() => {
+    if (tabletActive && onTabletStartOver) {
+      handleTabletStartOver('finish');
+      return;
+    }
+    void handleFinishStudy();
+  }, [handleFinishStudy, handleTabletStartOver, onTabletStartOver, tabletActive]);
+
   const stageSpecMap = useMemo(() => {
     const map = new Map<Stage, UISpec>();
     for (const message of messages) {
@@ -3276,7 +3368,9 @@ export function ChatPage({
       pendingPreferenceIds={pendingPreferenceIds}
     />
   ) : null;
-  const memoryRailDevices = studySession?.viewToken ? (
+  // Not on a booth tablet: there is no phone to pair, and "use my phone as the
+  // mic" would only invite a visitor to scan something.
+  const memoryRailDevices = studySession?.viewToken && !tabletActive ? (
     <>
       <DeviceRosterCard roster={deviceRoster?.roster ?? null} phone={phonePresence} />
       <CompanionPairingCard
@@ -3284,6 +3378,51 @@ export function ChatPage({
         target={voiceOutputTarget}
         onTargetChange={setVoiceOutputTarget}
         companionActive={companionActive}
+      />
+    </>
+  ) : null;
+
+  /*
+    The booth tablet's toolbar: Memory, Settings and Start over, each a 44px
+    target. Trace, Reset, Finish and the collapse chevron are the presenter's,
+    and an unattended tablet has no presenter; Start over is its one way out,
+    and the next visitor's way in. In a header in portrait, and down the empty
+    left gutter in landscape, where the header's height is stage scale.
+  */
+  const tabletSideControls = tabletActive && layoutMode === 'compact' && tabletShortLandscape;
+  const tabletToolbar = tabletActive ? (
+    <>
+      {tabletIdle.state.phase === 'complete' ? (
+        <TabletCompleteNotice
+          deadlineMs={tabletIdle.state.deadlineMs}
+          className={tabletSideControls ? 'order-last w-28' : 'max-w-[11rem]'}
+        />
+      ) : null}
+      {sidePanelAvailable && layoutMode !== 'kiosk' ? (
+        <button
+          type="button"
+          onClick={handleScenarioBriefingToggle}
+          aria-pressed={sidePanelVisible}
+          title={sidePanelToggleTitle}
+          className={`h-11 rounded-xl border px-4 text-sm font-medium transition-colors ${
+            sidePanelVisible
+              ? 'border-primary bg-primary/12 text-primary-text'
+              : 'border-dark-border bg-dark text-fg hover:border-primary hover:text-fg-strong'
+          }`}
+        >
+          {sidePanelToggleLabel}
+        </button>
+      ) : null}
+      <button
+        type="button"
+        onClick={() => setSettingsOpen(true)}
+        className="h-11 rounded-xl border border-dark-border bg-dark px-4 text-sm font-medium text-fg hover:border-primary hover:text-fg-strong"
+      >
+        {ui.settings}
+      </button>
+      <TabletStartOverButton
+        needsConfirm={tabletBookingInProgress}
+        onStartOver={() => handleTabletStartOver('start-over')}
       />
     </>
   ) : null;
@@ -3370,7 +3509,7 @@ export function ChatPage({
           the screen, and a strip of buttons that is only needed occasionally
           should not be permanently parked above it.
         */}
-        {headerCollapsed ? (
+        {headerCollapsed && !tabletActive ? (
           <button
             type="button"
             onClick={() => setHeaderCollapsed(false)}
@@ -3383,16 +3522,22 @@ export function ChatPage({
             </svg>
           </button>
         ) : null}
+        {tabletSideControls ? (
+          // A landscape tablet: the toolbar moves into the empty gutter beside
+          // the card, and the stage gets the header's 52px back.
+          <div className="absolute left-6 top-5 z-40 flex flex-col items-stretch gap-2">{tabletToolbar}</div>
+        ) : null}
         <header
           ref={headerRef}
           className={`relative shrink-0 border-b border-dark-border bg-dark px-4 overflow-hidden ${
-            headerCollapsed ? 'hidden' : ''
+            (headerCollapsed && !tabletActive) || tabletSideControls ? 'hidden' : ''
           }`}
-          style={{ height: `${HEADER_HEIGHT_PX}px` }}
+          style={{ height: `${tabletActive ? TABLET_HEADER_HEIGHT_PX : HEADER_HEIGHT_PX}px` }}
         >
           <div className="mx-auto flex h-full w-full items-center justify-end gap-2 overflow-x-auto whitespace-nowrap [&>*]:shrink-0">
+            {tabletActive ? tabletToolbar : null}
             {/* The kiosk's memory column is always on screen; there is nothing to toggle. */}
-            {sidePanelAvailable && layoutMode !== 'kiosk' ? (
+            {!tabletActive && sidePanelAvailable && layoutMode !== 'kiosk' ? (
               <button
                 type="button"
                 onClick={handleScenarioBriefingToggle}
@@ -3407,55 +3552,59 @@ export function ChatPage({
                 {sidePanelToggleLabel}
               </button>
             ) : null}
-            <button
-              type="button"
-              onClick={() => setSettingsOpen(true)}
-              className="rounded border border-dark-border px-3 py-1 text-xs text-fg hover:border-primary hover:text-fg-strong"
-            >
-              {ui.settings}
-            </button>
             {/*
               One download, not two. The interaction log and the LLM trace
               overlapped enough that two buttons in a strip this narrow was
               noise; the trace is the one that is actually used for tuning, and
               the interaction log is still downloadable from the end page.
             */}
-            <button
-              type="button"
-              onClick={handleDownloadTrace}
-              disabled={!canDownloadTrace || downloadingTrace}
-              title={canDownloadTrace ? 'Download the current JSONL LLM trace log' : ui.traceUnavailable}
-              className="rounded border border-dark-border px-3 py-1 text-xs text-fg hover:border-primary hover:text-fg-strong disabled:cursor-not-allowed disabled:opacity-50"
-            >
-              {downloadingTrace ? ui.downloadingTrace : ui.trace}
-            </button>
-            <button
-              type="button"
-              onClick={handleManualReset}
-              disabled={loading}
-              className="rounded border border-dark-border px-3 py-1 text-xs text-fg hover:border-primary hover:text-fg-strong disabled:cursor-not-allowed disabled:opacity-50"
-            >
-              {ui.reset}
-            </button>
-            <button
-              type="button"
-              onClick={handleFinishStudy}
-              disabled={loading}
-              className="rounded border border-primary/70 px-3 py-1 text-xs text-primary-text hover:bg-primary/10 disabled:cursor-not-allowed disabled:opacity-50"
-            >
-              {ui.finish}
-            </button>
-            <button
-              type="button"
-              onClick={() => setHeaderCollapsed(true)}
-              aria-label={ui.collapseHeader}
-              title={ui.collapseHeader}
-              className="flex h-7 w-7 items-center justify-center rounded border border-dark-border text-fg hover:border-primary hover:text-fg-strong"
-            >
-              <svg className="h-4 w-4" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true">
-                <path d="M5 12l5-5 5 5" strokeLinecap="round" strokeLinejoin="round" />
-              </svg>
-            </button>
+            {tabletActive ? null : (
+              <>
+                <button
+                  type="button"
+                  onClick={() => setSettingsOpen(true)}
+                  className="rounded border border-dark-border px-3 py-1 text-xs text-fg hover:border-primary hover:text-fg-strong"
+                >
+                  {ui.settings}
+                </button>
+                <button
+                  type="button"
+                  onClick={handleDownloadTrace}
+                  disabled={!canDownloadTrace || downloadingTrace}
+                  title={canDownloadTrace ? 'Download the current JSONL LLM trace log' : ui.traceUnavailable}
+                  className="rounded border border-dark-border px-3 py-1 text-xs text-fg hover:border-primary hover:text-fg-strong disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  {downloadingTrace ? ui.downloadingTrace : ui.trace}
+                </button>
+                <button
+                  type="button"
+                  onClick={handleManualReset}
+                  disabled={loading}
+                  className="rounded border border-dark-border px-3 py-1 text-xs text-fg hover:border-primary hover:text-fg-strong disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  {ui.reset}
+                </button>
+                <button
+                  type="button"
+                  onClick={handleFinishStudy}
+                  disabled={loading}
+                  className="rounded border border-primary/70 px-3 py-1 text-xs text-primary-text hover:bg-primary/10 disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  {ui.finish}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setHeaderCollapsed(true)}
+                  aria-label={ui.collapseHeader}
+                  title={ui.collapseHeader}
+                  className="flex h-7 w-7 items-center justify-center rounded border border-dark-border text-fg hover:border-primary hover:text-fg-strong"
+                >
+                  <svg className="h-4 w-4" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true">
+                    <path d="M5 12l5-5 5 5" strokeLinecap="round" strokeLinejoin="round" />
+                  </svg>
+                </button>
+              </>
+            )}
           </div>
         </header>
 
@@ -3495,7 +3644,7 @@ export function ChatPage({
                 currentStage={currentStage}
                 showHeading={false}
               />
-              {studySession?.viewToken ? (
+              {studySession?.viewToken && !tabletActive ? (
                 <div className="mt-4 space-y-4">
                   <DeviceRosterCard roster={deviceRoster?.roster ?? null} phone={phonePresence} compact />
                   <CompanionPairingCard
@@ -3559,7 +3708,7 @@ export function ChatPage({
               onToggle={handleToggle}
               onRevealHidden={handleRevealHidden}
               onNext={handleNext}
-              onFinishTask={handleFinishStudy}
+              onFinishTask={finishTaskHandler}
               onBack={handleBack}
               onConfirm={handleConfirm}
             />
@@ -3575,7 +3724,7 @@ export function ChatPage({
             onToggle={handleToggle}
             onRevealHidden={handleRevealHidden}
             onNext={handleNext}
-            onFinishTask={handleFinishStudy}
+            onFinishTask={finishTaskHandler}
             onBack={handleBack}
             onConfirm={handleConfirm}
             chatWidthPx={chatWidthPx}
@@ -3654,7 +3803,7 @@ export function ChatPage({
                             onRevealHidden={handleRevealHidden}
                             onNext={() => {
                               if (isBookingCompleteSpec(activeSpec)) {
-                                void handleFinishStudy();
+                                finishTaskHandler();
                                 return;
                               }
                               void handleNext();
@@ -3742,13 +3891,20 @@ export function ChatPage({
           onCategoryChange={handleVerbosityCategoryChange}
           onSmartSkipChange={handleVerbositySmartSkipChange}
           voiceGateStats={voiceGateStats}
-          plannerModelAvailable={plannerModelAvailable}
           plannerModel={plannerModelSetting.model}
           onPlannerModelChange={plannerModelSetting.handleChange}
           plannerTurnStats={plannerTurnStats}
-          pushToTalkAvailable={plannerModelAvailable && voiceModeAvailable}
-          layoutOverrideAvailable={layoutMode !== null}
+          // A tablet visitor gets the language and the voice; the model, the
+          // turn-taking and the layout outlive them, so they stay with the
+          // profile URL (see docs/scenarios/booth-tablet-setup.md).
+          plannerModelAvailable={plannerModelAvailable && !tabletActive}
+          pushToTalkAvailable={plannerModelAvailable && voiceModeAvailable && !tabletActive}
+          layoutOverrideAvailable={layoutMode !== null && !tabletActive}
         />
+      ) : null}
+
+      {tabletActive && tabletIdle.state.phase === 'warning' ? (
+        <TabletIdleWarning deadlineMs={tabletIdle.state.deadlineMs} onStay={tabletIdle.stay} />
       ) : null}
     </div>
   );

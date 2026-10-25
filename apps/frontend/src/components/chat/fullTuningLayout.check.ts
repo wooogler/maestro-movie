@@ -14,7 +14,9 @@
  * Exit code 0 means every case passed.
  */
 import {
+  COMPACT_CLUSTER_BESIDE_STAGE_MIN_WIDTH_PX,
   DESKTOP_MIN_WIDTH_PX,
+  floatingClusterFitsBesideStage,
   guiStageFitScale,
   KIOSK_BOTTOM_FR,
   KIOSK_GUI_CARD_WIDTH_PX,
@@ -513,6 +515,31 @@ section('13. kiosk: the stage is scaled UP to fill its band, and never past it')
     'an unmeasurable width falls back to the height-only rule',
     guiStageFitScale(300, 600, { availableWidth: 0, naturalWidth: 520, maxScale: 2 }) ===
       guiStageFitScale(300, 600)
+  );
+}
+
+section('14. the floating cluster beside the card on a landscape tablet');
+{
+  // Galaxy Tab A7 Lite: 893x533 landscape, 533x893 portrait (CSS px).
+  check('a landscape A7 Lite has the cluster beside the card', floatingClusterFitsBesideStage(893));
+  check('a portrait A7 Lite keeps the reservation under it', !floatingClusterFitsBesideStage(533));
+  check('a phone keeps the reservation', !floatingClusterFitsBesideStage(430));
+  check('an unmeasurable width keeps the reservation', !floatingClusterFitsBesideStage(Number.NaN));
+  // Card right edge (w/2 + 220) against the cluster's left (w - 16 - 12 - 165).
+  const w = COMPACT_CLUSTER_BESIDE_STAGE_MIN_WIDTH_PX;
+  check('at the threshold a full-size card clears the cluster', w / 2 + 220 <= w - 16 - 12 - 165);
+  check('the threshold sits under the desktop line', w < DESKTOP_MIN_WIDTH_PX);
+  const beside = splitViewLayout(true, true, 'compact', 'tabs', { clusterBesideStage: true });
+  const under = splitViewLayout(true, true, 'compact');
+  check('beside: no bottom reservation', beside.stageViewport === '');
+  check('under: the 4rem reservation stays', under.stageViewport === 'pb-16');
+  check('beside: the cluster is still shown', beside.showFloatingToggle);
+  check(
+    'the option changes nothing outside the pinned compact',
+    splitViewLayout(true, true, 'desktop', 'tabs', { clusterBesideStage: true }).stageViewport ===
+      splitViewLayout(true, true, 'desktop').stageViewport &&
+      splitViewLayout(true, false, undefined, 'tabs', { clusterBesideStage: true }).stageViewport ===
+        splitViewLayout(true, false).stageViewport
   );
 }
 

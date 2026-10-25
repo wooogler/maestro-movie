@@ -23,6 +23,7 @@ import {
   transcriptText,
 } from './voiceTranscript';
 import {
+  COMPACT_CLUSTER_BESIDE_STAGE_MIN_WIDTH_PX,
   guiStageFitScale,
   KIOSK_GUI_CARD_WIDTH_PX,
   KIOSK_GUI_MAX_SCALE,
@@ -34,6 +35,9 @@ import { MemoryArrangementContext, type MemoryArrangement } from '../memory/memo
 import { useStageKeys, STAGE_KEYS_SCOPE_ATTR } from '../../hooks/useStageKeys';
 import { StageKeyHintsContext, type StageKeyHints } from '../../renderer/stages/stageKeyHints';
 import { isCompactViewport } from '../../utils/viewport';
+import { isCompactViewport, useMediaQuery } from '../../utils/viewport';
+
+const CLUSTER_BESIDE_STAGE_QUERY = `(min-width: ${COMPACT_CLUSTER_BESIDE_STAGE_MIN_WIDTH_PX}px)`;
 import { useLanguage } from '../../i18n';
 import type { AgentPreference } from '../../agent/protocol';
 import type { AgentStepKey, UiStrings } from '../../i18n/strings';
@@ -876,6 +880,9 @@ export function FullTuningSplitView({
     hasAutoScrolledRef.current = true;
   }, [conversationCollapsed, latestTimelineRow?.id]);
 
+  // A landscape tablet: the floating cluster fits in the gutter beside the card.
+  const clusterBesideStage = useMediaQuery(CLUSTER_BESIDE_STAGE_QUERY);
+  const shortViewport = useMediaQuery('(max-height: 600px)');
   const collapsedConversationStatus = getCollapsedConversationStatus({
     voiceModeAvailable,
     voiceModeEnabled,
@@ -900,7 +907,8 @@ export function FullTuningSplitView({
     conversationCollapsed,
     compactLayoutEnabled,
     compactLayoutEnabled ? layoutMode : undefined,
-    memorySideBySide ? 'side-by-side' : 'tabs'
+    memorySideBySide ? 'side-by-side' : 'tabs',
+    { clusterBesideStage }
   );
   /*
     Ids to rail words, rebuilt only when memory changes. Unknown ids are
@@ -1268,7 +1276,12 @@ export function FullTuningSplitView({
   }, [hasActiveSnapshot]);
 
   return (
-    <div className="min-h-0 flex-1 overflow-hidden px-2 py-2 sm:px-4 sm:py-4">
+    <div
+      className={`min-h-0 flex-1 overflow-hidden px-2 py-2 sm:px-4 ${
+        // A landscape tablet is ~533px tall; every row of padding is stage scale.
+        compactLayoutEnabled && shortViewport ? '' : 'sm:py-4'
+      }`}
+    >
       <div className={containerClass} data-layout={kioskLayout ? 'kiosk' : undefined}>
         <section
           className={`relative min-h-0 overflow-hidden rounded-2xl border border-dark-border bg-dark px-4 py-1 ${stageSectionClass}`}

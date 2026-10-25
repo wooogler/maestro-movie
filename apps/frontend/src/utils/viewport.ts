@@ -1,3 +1,5 @@
+import { useCallback, useSyncExternalStore } from 'react';
+
 /**
  * Whether the screen is below Tailwind's `lg` breakpoint — the same line the
  * booking layout switches on.
@@ -17,4 +19,30 @@ export function isCompactViewport(): boolean {
   } catch {
     return false;
   }
+}
+
+function matches(query: string): boolean {
+  if (typeof window === 'undefined' || typeof window.matchMedia !== 'function') return false;
+  try {
+    return window.matchMedia(query).matches;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * A media query, live. Its caller re-renders only when the answer flips,
+ * never on an ordinary resize.
+ */
+export function useMediaQuery(query: string): boolean {
+  const subscribe = useCallback(
+    (onChange: () => void) => {
+      if (typeof window === 'undefined' || typeof window.matchMedia !== 'function') return () => {};
+      const list = window.matchMedia(query);
+      list.addEventListener('change', onChange);
+      return () => list.removeEventListener('change', onChange);
+    },
+    [query]
+  );
+  return useSyncExternalStore(subscribe, () => matches(query), () => false);
 }
