@@ -12,6 +12,8 @@ import {
   MAX_ACTIONS_PER_TURN,
 } from './core/repeatGuard';
 import { asksAboutHidden, createStageRepeatLedger, isBareAgreement } from './core/repeatLedger';
+import { decideAutoNext, isPurePick } from './core/autoNext';
+import { getSelectedId, getSelectedListIds, toUISpecLike } from './core/uiModel';
 import {
   getPlannerSystemPrompt,
   isSupportedConversationLanguage,
@@ -305,6 +307,8 @@ function resetTurnRepeatGuard(reason: string): void {
   // A hand edit to memory is the visitor doing something: the booth's
   // nothing-new judgement about their last utterance no longer holds.
   if (reason === 'user-edit') boothUserTurn = null;
+  // Booth: a next decided for the turn that just closed is not this turn's.
+  boothAutoNext = null;
 }
 
 /*
@@ -330,6 +334,22 @@ interface BoothUserTurn {
   ledgerSilenced: boolean;
 }
 let boothUserTurn: BoothUserTurn | null = null;
+
+/*
+  ── Booth only: a shorter chain (Round 3, 2026-10-24) ──
+
+  core/autoNext.ts has the numbers. `boothAutoNext` is a `next` the runtime
+  runs itself in place of the planner call after a committed select; it is
+  consumed by the very next cycle, and any turn boundary (user message, stage
+  change, hand edit, session reset) drops it. `boothOverlappedExtraction` is a
+  pure-pick turn's extraction, running beside the first planner call instead of
+  in front of it; the cycle that consumes it waits for it before executing
+  anything and plans again if it changed memory. `boothPrevInTurn` marks a
+  prev-driven flow, where the planner keeps the wheel.
+*/
+let boothAutoNext: { stage: string; rule: string; reason: string } | null = null;
+let boothOverlappedExtraction: Promise<void> | null = null;
+let boothPrevInTurn = false;
 
 function preferenceFingerprint(): string {
   return JSON.stringify(
@@ -1548,23 +1568,31 @@ async function maybePlanAndExecute(trigger: string): Promise<void> {
   sendAgentStatus('planning', { stage: context.stage, trigger });
 
   try {
-    const planningContext = memory.getContext() ?? context;
+    let planningContext = memory.getContext() ?? context;
     const suppressNavigationTools = suppressNavigationToolsOnce;
+    // Booth (core/autoNext.ts): read before the planner's action clears them.
+    const backtrackAtPlan = activeBacktrackContinuation !== null || pendingBacktrackConflict !== null;
+    const autoNext =
+      isDemoMode && boothAutoNext && boothAutoNext.stage === (planningContext.stage ?? null) ? boothAutoNext : null;
+    boothAutoNext = null;
+    const overlappedExtraction = isDemoMode && !autoNext ? boothOverlappedExtraction : null;
+    // Whole preferences, scopes included: a scope change re-plans too.
+    const preferencesAtPlan = overlappedExtraction ? JSON.stringify(memory.getPreferences()) : '';
     if (suppressNavigationToolsOnce) {
       setSuppressNavigationToolsOnce(false, 'consumed-by-planning', {
         trigger,
         stage: planningContext.stage,
       });
     }
-    const plannerStartedAt = Date.now();
+    let plannerStartedAt = Date.now();
     /*
       Booth only: an empty respond is never how the visitor's turn ends (KSEA
       run C1v, 90 s of silence). Planned once more with a note, and if that is
       empty too, the stage's question in the session language stands in for
       it. A study session plans exactly once, as before.
     */
-    const guarded = await planWithEmptyRespondGuard(
-      planningContext,
+    const planGuarded = (planFrom: PerceivedContext) => planWithEmptyRespondGuard(
+      planFrom,
       (context) =>
         planNextAction(
           context,
@@ -1592,6 +1620,62 @@ async function maybePlanAndExecute(trigger: string): Promise<void> {
         },
       }
     );
+    let guarded: Awaited<ReturnType<typeof planGuarded>>;
+    if (autoNext) {
+      /*
+        Booth: the deterministic next after a committed select. The same
+        tool.call a planned next is ({toolName: 'next', params: {}, reason}
+        opening with the select's rule tag), with nothing to say — DECISIVE_
+        SELECTION_RULES has the planned one say nothing too — so the host's
+        annotation and the history later planner calls read are the same.
+      */
+      guarded = {
+        decision: {
+          action: {
+            type: 'tool.call',
+            reason: autoNext.reason,
+            payload: { toolName: 'next', params: {}, reason: autoNext.reason },
+          },
+          backtrackContinuation: null,
+          actionPreferenceIds: null,
+          actionHighlightCoverage: null,
+          source: 'rule',
+        },
+        fallbackText: '',
+        replanned: false,
+      };
+      monitor.pushEvent('planner.auto_next_executed', {
+        trigger,
+        stage: planningContext.stage ?? null,
+        rule: autoNext.rule,
+      });
+    } else {
+      guarded = await planGuarded(planningContext);
+    }
+    if (overlappedExtraction) {
+      /*
+        Booth: a pure-pick turn planned beside its extraction. Nothing has run
+        or been said yet; wait for the extraction (usually done by now — 0.9 s
+        against the planner's 1.5 s), so the repeat ledger reads its final
+        verdict, and plan again if it changed memory after all.
+      */
+      const waitStartedAt = Date.now();
+      await overlappedExtraction;
+      if (boothOverlappedExtraction === overlappedExtraction) boothOverlappedExtraction = null;
+      const changed = JSON.stringify(memory.getPreferences()) !== preferencesAtPlan;
+      monitor.pushEvent('planner.overlapped_extraction_reconciled', {
+        trigger,
+        stage: planningContext.stage ?? null,
+        waitedMs: Date.now() - waitStartedAt,
+        memoryChanged: changed,
+        replanned: changed,
+      });
+      if (changed) {
+        planningContext = memory.getContext() ?? planningContext;
+        plannerStartedAt = Date.now();
+        guarded = await planGuarded(planningContext);
+      }
+    }
     const decision: PlanDecision = guarded.decision;
     lastPlannerTiming =
       decision.source === 'llm'
@@ -1797,7 +1881,7 @@ async function maybePlanAndExecute(trigger: string): Promise<void> {
         credit is issued. That is the one thing the frontend gate cannot do: its
         silent path has to hand a credit back.
       */
-      const missingMessageFallback = planningContext.spokenBrevity
+      const missingMessageFallback = planningContext.spokenBrevity || autoNext
         ? ''
         : `I will run ${getToolName(action)} next. Reason: ${action.reason}`;
       const plannedText = decisionExplainText || missingMessageFallback;
@@ -1875,6 +1959,7 @@ async function maybePlanAndExecute(trigger: string): Promise<void> {
     }
 
     if (outcome.ok && action.type === 'tool.call' && plannedToolName === 'prev') {
+      if (isDemoMode) boothPrevInTurn = true;
       if (decision.backtrackContinuation) {
         setActiveBacktrackContinuation(decision.backtrackContinuation, 'prev-action-committed', {
           trigger,
@@ -2042,6 +2127,44 @@ async function maybePlanAndExecute(trigger: string): Promise<void> {
       await relay.request('snapshot.get', {});
     }
 
+    /*
+      Booth: a committed select whose proceed rule now holds is followed by a
+      next the runtime runs itself (core/autoNext.ts), instead of a planner
+      call that is offered nothing but next. Queued like the deferred replan
+      the resync's snapshot already asks for, so the speech barrier, the turn
+      guard and the safety policy see it exactly as a planned one.
+    */
+    if (isDemoMode && action.type === 'tool.call' && (toolName === 'select' || toolName === 'selectMultiple')) {
+      const after = memory.getContext() ?? planningContext;
+      const afterSpec = toUISpecLike(after.uiSpec);
+      const verdict = decideAutoNext({
+        demo: isDemoMode,
+        stage: planningContext.stage ?? null,
+        stageNow: after.stage ?? null,
+        toolName,
+        ok: outcome.ok,
+        reason: action.reason ?? '',
+        assistantMessage: decisionExplainText,
+        userTurn: boothUserTurn !== null,
+        agreementTurn: boothUserTurn?.agreement ?? false,
+        nextOffered: after.toolSchema.some((tool) => tool.name === 'next'),
+        suppressNavigation: suppressNavigationTools || suppressNavigationToolsOnce,
+        backtrackActive: backtrackAtPlan || activeBacktrackContinuation !== null || pendingBacktrackConflict !== null,
+        prevInTurn: boothPrevInTurn || previousLastAgentToolName === 'prev',
+        selectedId: afterSpec ? getSelectedId(afterSpec) : null,
+        selectedListCount: afterSpec ? getSelectedListIds(afterSpec).length : 0,
+      });
+      monitor.pushEvent('planner.auto_next_decision', {
+        trigger,
+        stage: planningContext.stage ?? null,
+        ...(verdict.run ? { run: true, rule: verdict.rule } : { run: false, why: verdict.why }),
+      });
+      if (verdict.run && planningContext.stage) {
+        boothAutoNext = { stage: planningContext.stage, rule: verdict.rule, reason: verdict.reason };
+        requestDeferredReplan('auto-next');
+      }
+    }
+
     if (decisionExplainText.trim()) {
       pendingReadingDelayUntil = Date.now() + computeReadingDelay(decisionExplainText);
     }
@@ -2139,6 +2262,9 @@ function resetRuntimeState(): void {
   turnRepeatGuard.reset('session-reset');
   repeatLedger.clear('session-reset');
   boothUserTurn = null;
+  boothAutoNext = null;
+  boothOverlappedExtraction = null;
+  boothPrevInTurn = false;
   // A barrier or reading delay left armed from the previous trial would
   // otherwise leak into the next one — the study resets between trials.
   pendingReadingDelayUntil = 0;
@@ -2386,7 +2512,13 @@ async function handleInbound(envelope: RelayEnvelope): Promise<void> {
 
       if (userTurnAwaitingStateUpdate) {
         userTurnAwaitingStateUpdate = false;
-        if (cpMemoryEnabled && userPreferenceExtractionInFlight) {
+        if (cpMemoryEnabled && userPreferenceExtractionInFlight && boothOverlappedExtraction) {
+          // Booth, pure pick: the planner starts now and reconciles with the
+          // extraction before it executes anything (maybePlanAndExecute).
+          monitor.pushEvent('planner.overlapping_preference_extraction', {
+            trigger: 'state.updated:user-message',
+          });
+        } else if (cpMemoryEnabled && userPreferenceExtractionInFlight) {
           monitor.pushEvent('planner.waiting_preference_extraction', {
             trigger: 'state.updated:user-message',
           });
@@ -2495,6 +2627,8 @@ async function handleInbound(envelope: RelayEnvelope): Promise<void> {
       userTurnAwaitingAnswer = true;
       lastAgentToolName = null;
       resetTurnRepeatGuard('user-message');
+      boothPrevInTurn = false;
+      boothOverlappedExtraction = null;
       // Booth: what this turn is, for the repeat ledger. Extraction fills in
       // whether it changed memory (trackBoothExtraction below).
       if (isDemoMode) repeatLedger.beginTurn();
@@ -2537,6 +2671,14 @@ async function handleInbound(envelope: RelayEnvelope): Promise<void> {
           userPreferenceExtractionInFlight = null;
         }
       });
+      // Booth: a bare agreement or pure pick does not hold the first planner
+      // call back (core/autoNext.ts). trackBoothExtraction still records the
+      // verdict the repeat ledger reads; the planning cycle waits for it
+      // before acting. Everything else stays extraction-first.
+      if (isDemoMode && isPurePick(userMessage.text)) {
+        boothOverlappedExtraction = userPreferenceExtractionInFlight.catch(() => undefined);
+        monitor.pushEvent('extraction.overlapped', { stage: userMessage.stage ?? null });
+      }
       await userPreferenceExtractionInFlight;
       return;
     }

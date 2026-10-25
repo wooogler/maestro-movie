@@ -508,6 +508,55 @@ The prompt alone removes the restatement; the ledger catches what the prompt mis
 - After a silenced noise turn the visitor hears nothing, which is the point; if a barge-in had cut the question being repeated, they also never hear it in full. The question stays on screen.
 - The driver used to find ChatInput by walking up from the textarea's fiber, which can be the stale alternate (it read a long-enabled composer as disabled after a silent turn and aborted four noise runs). It now walks the root's current fiber tree.
 
+### Round 3: shorter chain (24 Oct 2026)
+
+Item 2 of the poster analysis's "what to do next": the chain of planner calls is what scales the wait. Live, the first spoken word came a median 3.8 s after the visitor stopped (p90 7.4 s). Planner calls were 56% of the silent wait and the extractor 21%. A turn that advanced a stage took a median 6.0 s, against 3.1 s for an answer-only turn. On top of `realtime-voice` @ `65e04ac`. Both changes are booth only (`isDemoMode`). No prompt changed, so a study session's planner prompt, tool schema and runtime loop are as before.
+
+| Change | Where | Gate |
+|---|---|---|
+| **Deterministic `next` after a committed select.** After a select, the planner is offered one tool (`next`). In the 58 booth traces on disk it called `next` after every select: 75 of 75 tagged ones on 24 Oct. The runtime now runs that `next` itself, with no planner call, when all of these hold: the reason tag is `[named-option]`, `[single-viable]` or `[superlative]`; or it is `[seat-recommend]` at the seat stage; or it is `[other]` on a bare-agreement turn. The stage is not confirm (a `next` there books). The select's sentence asks nothing. No backtrack continuation or pending conflict is open. `suppressNavigationToolsOnce` is off. No `prev` has run since the visitor spoke. The host offers `next`. The proceed rule holds after the select (`selectedId`, or `selectedListCount > 0` at the seat stage). The `next` is queued like the deferred replan, so the speech barrier, the turn guard and the safety policy treat it exactly like a planned one. Its tool call has the same shape (`{toolName: 'next', params: {}, reason}`, with the reason opening with the select's tag) and it says nothing. The host does not annotate a `next` in history, so later planner calls see an identical history. The stage-entry planning after it runs as before. | `core/autoNext.ts` (`decideAutoNext`), `index.ts` (after the select's resync; consumed at the top of `maybePlanAndExecute`) | `isDemoMode` |
+| **No extractor wait on a pure pick.** A user message that is only agreement, a deictic or positional pick, and commit words starts the first planner call at once, beside the extraction, instead of after it. Examples: «네», «그걸로 할게요», «첫 번째 걸로», «상관없어요, 첫 번째 걸로 할게요», "yes", "that one", "I'll take the second one". Before anything is executed or said, the cycle waits for the extraction, so the repeat ledger reads its final verdict through `trackBoothExtraction` as before. If the extraction changed memory (whole preference list compared, scopes included), the decision is discarded and planned again. Anything else, including a lone «상관없어요», keeps extraction first. `repeatLedger.isBareAgreement` is deliberately not used here: it matches any sentence ending in «할게요», which includes «8시 이후로 할게요». | `core/autoNext.ts` (`isPurePick`), `index.ts` (`user.message`, the `state.updated:user-message` gate, the reconcile in `maybePlanAndExecute`) | `isDemoMode` |
+| Offline check | `core/autoNext.check.ts` (every refusal case, 30 pure picks and non-picks), in the root `check` line | — |
+
+**Measured** on an isolated stack from the worktree (backend :3100 with `NODE_ENV=development`, Vite :5273). BEFORE is a `git archive` of `65e04ac` on :3110/:5283, so both sides ran the same evening against the same OpenAI latency. Both used `--voice` and planner `gpt-5.6-terra`. The runs were two at a time, 20 s apart: cards A, B and C twice each, W once (`--max-followups=12`) and quick card `theater` once, all per batch. BEFORE was run in two batches (16 runs). AFTER-final, the code as committed, is one batch of 8. An earlier AFTER batch of 8 lacked the `[seat-recommend]` commit and is pooled below.
+
+The driver's seconds run from a line being submitted to the first `agent.message` frame and to the last frame. There is no STT and no VAD tail, so these are longer than live only where the chain is. A turn is stage-advancing when the stage after it is later than the stage before it.
+
+| | BEFORE (16 runs) | AFTER-final (8 runs) | AFTER pooled (16 runs) |
+|---|---|---|---|
+| stage-advancing turns: first reply, median / p90 / max | **6.7** / 10.5 / 15.7 s (n = 54) | **4.4** / 8.6 / 10.1 s (n = 28) | 4.5 / 8.1 / 10.3 s (n = 56) |
+| …of them pure picks («첫 번째 걸로 할게요», «네, 좋아요») | 6.7 s (n = 29) | 4.4 s (n = 16) | 4.3 s (n = 31) |
+| …of them content lines (the card's own lines) | 6.3 s (n = 25) | 4.3 s (n = 12) | 5.7 s (n = 25) |
+| stage-advancing: settle, median / max | 9.7 / 23.1 s | 8.5 / 16.7 s | 8.8 / 21.4 s |
+| stage-advancing: planner calls per turn, mean (before the first reply) | 3.9 (2.9) | 2.8 (2.2) | 3.0 (2.2) |
+| answer-only turns: first reply, median / max | 6.3 / 36.4 s (n = 37) | 6.3 / 9.7 s (n = 22) | 6.2 / 36.3 s (n = 42) |
+| answer-only: planner calls per turn, mean (before the first reply) | 2.2 (1.7) | 2.5 (1.9) | 2.4 (1.8) |
+| full cards booked | 10 / 12 | **6 / 6** | 12 / 12 |
+| W booked | 0 / 2 | 0 / 1 | 0 / 2 |
+| questions spoken again at a stage (≥ 0.8, all runs) | 8 | 2 | 8 |
+
+- The target was a median first reply of ≤ 4.5 s on stage-advancing turns. It was met: 4.4 s with the final code, 4.5 s pooled. A full chain on a pure pick now looks like this (W, final code): select at +1.3–1.6 s, `next` 0.2–0.4 s after it, and the next stage's question at +3.1–4.6 s. Before, the same turn put select at +2.2–3.5 s, `next` at +3.5–5.3 s and the question at +5.4–7.6 s.
+- Answer-only turns did not change (6.3 s), as expected. They are content lines, so extraction still goes first, and they have no `next` to skip. The 36 s outliers (one BEFORE card B turn, one AFTER card C turn) were each a planner request whose first fetch attempt hit the 30 s attempt timeout and was retried.
+- In AFTER-final the runtime ran 34 `next` calls itself and refused none. By rule: `[named-option]` 26, `[seat-recommend]` 6, `[single-viable]` 2. No select was paired with a question in these runs, so the refusal paths are covered only by the offline check. There were 24 overlapped extractions. 2 of them changed memory and were re-planned: card B's «첫 번째 걸로 할게요» answering the IMAX-or-15-miles question, where the extractor drops IMAX (`cardB.regress.ts` extract-relax). Both runs then booked a nearby cinema without IMAX, as the card intends.
+- Bookings: every full card booked after the change. The two BEFORE failures are silent stalls: a «네, 좋아요» or «첫 번째 걸로 할게요» to an open question ended in silence, and the driver gave up after 90 s. W fails the same way on both sides. At the seat stage it delegates twice without a party size, and the second delegation gets silence instead of the one seat that SEAT_CHOICE_RULES asks for. That is a Round-3 ledger/seat interaction this change does not touch (open, below).
+- Repeated questions: 8 in 16 runs before, 8 in 16 after (2 in the final 8). They are the same kind on both sides: the stage's which-one question asked again after a turn that DID change memory (a filter, the conflict being resolved), which rule 1 of the ledger leaves alone. None followed an auto `next` or an overlapped extraction.
+- Quick card `theater` (one line, no follow-ups, never booked by design): first reply 6.8 and 10.1 s before, 7.3 and 7.1 s after. Its line is a content line with no select, so neither shortcut applies. Its planner counts come from `agent.status` frames, because a quick card leaves no trace.
+
+**Replay harnesses**, default modes. None of them imports `index.ts` or `core/autoNext.ts`, and no prompt changed, so they exercise code identical to BEFORE. They were run once, on the worktree:
+
+| Harness | Earlier (Rounds 2–3) | Now |
+|---|---|---|
+| `statedDay.regress.ts --since 20261024` | 25 / 30 commit | 33 / 36 commit on the named day, 0 on another day. 12 sessions now qualify, against 10 then. `prf-control` asks 36 / 36 |
+| `cardB.regress.ts` | theater-limit 9 / 9 | theater-limit 9 / 9 (BEFORE 0 / 9); time-deadend 9 / 9; theater-relaxed 9 / 9 and 8 / 9 |
+| `noiseRepeat.regress.ts` (offline) | exact 28 / 32 silenced | 28 / 32; near 3 silenced and 4 trimmed; hidden 7 / 7; 0 repeated yes/no questions dropped on agreements |
+| `decisiveSelection.regress.ts` (offline: scores what was logged) | — | named → commit 82% (47 / 57). This mode scores logs, not this code |
+
+**Still open.**
+- The 36 s outliers are the planner fetch's 30 s per-attempt timeout (`resilientFetch.ts`) before its retry. A planner call's median is 1.5 s, so a much shorter first attempt would cap them. Not changed here: it applies to study sessions too.
+- The W seat-stage stall above. A second delegation with no party size should book one seat; instead it is silenced as nothing new.
+- After a spoken select (`[single-viable]`, `[superlative]`, `[seat-recommend]`), the auto `next` still waits for that sentence to finish playing, as a planned one did. Running it during playback would save the remaining overlap, but the host's speech/GUI sync holds GUI steps anyway (`next` 3.9 s in the poster logs), so it was not tried unmeasured.
+- Live booth latency (STT, the 0.9 s VAD tail, Realtime first audio) is not in these numbers. The saving per stage-advancing turn, about 2 s here (one planner call, plus about 0.9 s of extraction on a pure pick), should carry over, because it is chain time.
+
 ## Traces and raw run data
 
 The trace files are in the main checkout's `logs/demo/trace/` (gitignored), one per full-card run:
