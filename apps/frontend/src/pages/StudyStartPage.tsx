@@ -1,5 +1,5 @@
 import { useNavigate } from 'react-router-dom';
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   api,
   describeApiErrorCode,
@@ -21,8 +21,18 @@ import { LanguageSelect } from '../components/settings/LanguageSelect';
 import { usePlannerModelSetting, useVoiceVerbositySettings } from '../hooks';
 import { defaultVerbosityFor } from '../voice';
 import { SettingsModal } from '../components/settings/SettingsModal';
-import { PreferencePresetPicker } from '../components/memory';
-import type { StudyScenarioDetail } from '../study/sessionStorage';
+import { PreferencePresetPicker, useMemoryViewer } from '../components/memory';
+import type { StudyScenarioDetail, StudySessionState } from '../study/sessionStorage';
+import { DemoStartQrCodes } from '../components/demo/DemoStartQrCodes';
+import { DeviceRosterCard } from '../components/companion/DeviceRosterCard';
+import { useDevicePresence } from '../hooks/useDevicePresence';
+import { useBoothResetSettings } from '../hooks/useBoothResetSettings';
+import {
+  takeStandby,
+  useDemoStandbySession,
+  type StandbyRequest,
+} from '../study/demoStandbySession';
+import { unlockVoiceAudioElement } from '../study/voiceAudioUnlock';
 import { formatScenarioTitle, isHardTaskScenario } from '../utils/displayFormats';
 import {
   clearPendingStudyLogEvents,
@@ -68,6 +78,21 @@ interface StudyStartPageProps {
   onResearchConsentChange: (consented: boolean) => void;
   sessionNotice?: string | null;
   onDismissSessionNotice?: () => void;
+  /**
+   * Demo only: the phone-pairing token for the start screen's standby session,
+   * minted by App (the one owner — see App.tsx) once the standby is reported
+   * through `onStandbySessionChange`.
+   */
+  companionToken?: string | null;
+  onStandbySessionChange?: (session: StudySessionState | null) => void;
+  /** Demo only: Start promoted the standby; App stores it, this page navigates. */
+  onDemoSessionStarted?: (session: StudySessionState) => void;
+  /**
+   * Demo only: the start screen sat untouched for the kiosk's idle window with
+   * a visitor's choices still on it. App puts the language, the preset and the
+   * consent box back to the defaults the next visitor should meet.
+   */
+  onResetVisitorDefaults?: () => void;
 }
 
 function deriveSetLabel(scenarioId: string | null): string | null {
@@ -117,9 +142,16 @@ export function StudyStartPage({
   onResearchConsentChange,
   sessionNotice = null,
   onDismissSessionNotice,
+  companionToken = null,
+  onStandbySessionChange,
+  onDemoSessionStarted,
+  onResetVisitorDefaults,
 }: StudyStartPageProps) {
   const navigate = useNavigate();
-  const { s: ui } = useLanguage();
+  const { s: ui, language: renderLanguage } = useLanguage();
+  // What the visitor-defaults idle reset compares against; App holds the
+  // booth's real default (the language the page was loaded in).
+  const bootLanguageRef = useRef(renderLanguage);
   const [loadingScenarios, setLoadingScenarios] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [scenarios, setScenarios] = useState<StudyScenarioDetail[]>([]);
@@ -223,6 +255,98 @@ export function StudyStartPage({
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
   }, [credentialOpen]);
+  /*
+    The demo's standby session: created while this screen is up and a
+    credential is stored, so the phone-pairing QR exists before Start and Start
+    is instant. See `study/demoStandbySession.ts` for its whole life.
+  */
+  const trimmedAccessCode = accessCode.trim();
+  const trimmedApiKey = apiKey.trim();
+  const standbyRequest = useMemo<StandbyRequest | null>(() => {
+    if (!demoMode) return null;
+    const credential = usingAccessCode
+      ? trimmedAccessCode
+        ? { accessCode: trimmedAccessCode }
+        : null
+      : trimmedApiKey
+      ? { apiKey: trimmedApiKey }
+      : null;
+    return credential ? { credential, researchConsent } : null;
+  }, [demoMode, researchConsent, trimmedAccessCode, trimmedApiKey, usingAccessCode]);
+  const standby = useDemoStandbySession(standbyRequest);
+  const standbySession = standby.status === 'ready' ? standby.session : null;
+  useEffect(() => {
+    onStandbySessionChange?.(standbySession);
+  }, [onStandbySessionChange, standbySession]);
+
+  /*
+    Watched read-only, purely to answer "did my phone actually connect?" where
+    the visitor is scanning — a viewer socket, never a host one (the host slot
+    is newest-wins, and ChatPage joins as host the moment Start is pressed).
+  */
+  const standbyViewer = useMemoryViewer(standbySession?.viewToken ?? null);
+  const standbyPhonePresence = useDevicePresence({
+    pairable: Boolean(companionToken),
+    linked: standbyViewer.status === 'watching',
+    endedMessage: null,
+    roster: standbyViewer.devices?.roster ?? null,
+    rosterAtMs: standbyViewer.devices?.atMs ?? null,
+  });
+
+  // The code/key dialog opens by itself only when there is nothing to start
+  // with; with a code stored, the small "Code ready · Change" chip is all.
+  const credentialAutoOpenedRef = useRef(false);
+  useEffect(() => {
+    if (!demoMode || credentialAutoOpenedRef.current || !apiKeyMissing) return;
+    credentialAutoOpenedRef.current = true;
+    setCredentialDraft('');
+    setCredentialDraftMode(demoCredentialMode);
+    setCredentialOpen(true);
+  }, [apiKeyMissing, demoCredentialMode, demoMode]);
+
+  /*
+    A visitor who changed the language, a preset or the box here and walked
+    away leaves them for the next one: put them back after the kiosk's idle
+    window without a touch. Only when something is off its default, so an
+    untouched screen never churns its standby session.
+  */
+  const kioskReset = useBoothResetSettings();
+  const visitorChangedSomething =
+    preferencePresetId !== null || !researchConsent || renderLanguage !== bootLanguageRef.current;
+  useEffect(() => {
+    if (!demoMode || !onResetVisitorDefaults || kioskReset.idleMinutes === null || !visitorChangedSomething) return;
+    let timer = 0;
+    const arm = () => {
+      window.clearTimeout(timer);
+      timer = window.setTimeout(onResetVisitorDefaults, (kioskReset.idleMinutes ?? 10) * 60_000);
+    };
+    arm();
+    const options: AddEventListenerOptions = { capture: true, passive: true };
+    window.addEventListener('pointerdown', arm, options);
+    window.addEventListener('keydown', arm, options);
+    return () => {
+      window.clearTimeout(timer);
+      window.removeEventListener('pointerdown', arm, options);
+      window.removeEventListener('keydown', arm, options);
+    };
+  }, [demoMode, kioskReset.idleMinutes, onResetVisitorDefaults, visitorChangedSomething]);
+
+  // The bottom Start appears only when the page is taller than the screen.
+  const mainRef = useRef<HTMLElement | null>(null);
+  const [pageOverflows, setPageOverflows] = useState(false);
+  useEffect(() => {
+    const element = mainRef.current;
+    if (!element || typeof ResizeObserver === 'undefined') return;
+    const measure = () => setPageOverflows(element.scrollHeight > element.clientHeight + 24);
+    const observer = new ResizeObserver(measure);
+    observer.observe(element);
+    if (element.firstElementChild) observer.observe(element.firstElementChild);
+    measure();
+    return () => observer.disconnect();
+  }, [demoMode]);
+
+  const [demoStarting, setDemoStarting] = useState(false);
+  const [consentDetailsOpen, setConsentDetailsOpen] = useState(false);
   const tutorialSelected = selectedScenarioId === TUTORIAL_SCENARIO_ID;
   const perTrialSurveyEnabled = isHardTaskScenario({ scenarioId: selectedScenarioId });
   const conditionCode = CONDITION_SELECTION_OPTIONS.find((o) => o.id === selectedConditionMode)?.code ?? selectedConditionMode;
@@ -326,17 +450,38 @@ export function StudyStartPage({
   }, [micCheckStatus, speakerCheckStatus]);
 
   const navigateToTaskReview = () => {
-    // A demo visitor picks nothing: there is one world, and the printed card in
-    // their hand is the scenario. Selecting it here lets the review page start
-    // the session immediately instead of showing a briefing nobody reads.
-    if (demoMode) {
-      onScenarioChange(DEMO_SCENARIO_ID);
-      navigate('/task-review');
-      return;
-    }
     if (!selectedScenarioId) return;
     navigate('/task-review');
   };
+
+  /*
+    The demo goes straight to the booking page — no review page, no pairing
+    stop. The pairing QR is already on this screen (its standby session is the
+    one promoted here), and this tap is the user gesture the booking page's
+    voice needs: the shared audio element is unlocked FIRST, before any await,
+    exactly as the quick-card face does, or the agent's first sentence is
+    silent on a browser that gates play() on a gesture.
+  */
+  const startDemoSession = useCallback(async () => {
+    if (demoStarting || !standbyRequest) return;
+    unlockVoiceAudioElement();
+    setDemoStarting(true);
+    setError(null);
+    try {
+      // A visitor who declined: nothing queued may reach the session.
+      if (!standbyRequest.researchConsent) clearPendingStudyLogEvents();
+      onScenarioChange(DEMO_SCENARIO_ID);
+      const session = await takeStandby(standbyRequest);
+      onDemoSessionStarted?.(session);
+      navigate('/booking');
+    } catch (err) {
+      setDemoStarting(false);
+      setError(
+        describeApiErrorCode(getApiErrorCode(err)) ??
+          (err instanceof Error && err.message ? err.message : ui.startScreenStandbyFailed)
+      );
+    }
+  }, [demoStarting, navigate, onDemoSessionStarted, onScenarioChange, standbyRequest, ui.startScreenStandbyFailed]);
 
   const resetVoiceSample = () => {
     if (previewAudioRef.current) {
@@ -350,7 +495,7 @@ export function StudyStartPage({
   };
 
   const handleStartTask = () => {
-    if (!selectedScenarioId) return;
+    if (!demoMode && !selectedScenarioId) return;
     if (demoMode && apiKeyMissing) {
       setError(
         usingAccessCode
@@ -370,6 +515,10 @@ export function StudyStartPage({
         clientTimestamp: new Date().toISOString(),
         payload: { location: 'study-setup', studyMode: DEMO_STUDY_MODE, byDefault: true },
       });
+    }
+    if (demoMode) {
+      void startDemoSession();
+      return;
     }
     navigateToTaskReview();
   };
@@ -562,45 +711,214 @@ export function StudyStartPage({
     }
   };
 
+  const quietChipClass =
+    'inline-flex h-9 items-center gap-1.5 rounded-lg border border-dark-border bg-dark px-3 text-xs font-medium text-fg-muted transition-colors hover:border-primary hover:text-fg-strong';
+  const demoStartButton = (
+    <button
+      type="button"
+      onClick={handleStartTask}
+      disabled={apiKeyMissing || demoStarting}
+      data-testid="demo-start"
+      className="h-16 w-full rounded-2xl bg-primary px-6 text-xl font-semibold text-primary-fg shadow-sm transition-colors hover:bg-primary-hover disabled:cursor-not-allowed disabled:opacity-60"
+    >
+      {demoStarting ? ui.startScreenStarting : ui.startDemo}
+    </button>
+  );
+
+  /*
+    The demo start screen, top to bottom: the title and a quiet row of the
+    presenter's controls; the language and one large Start; the preference
+    memory (three presets, the rest behind "More presets"); the consent as one
+    line with its details folded; Start again when the page is taller than the
+    screen; and the two QR codes. Every visitor-facing choice resets for the
+    next visitor (App's booth reset), so nothing here is persisted.
+  */
+  const demoBody = (
+    <div className="mx-auto flex min-h-full w-full max-w-3xl flex-col justify-center">
+      <div className="w-full rounded-2xl border border-dark-border bg-dark-light p-5 sm:p-8">
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <div className="min-w-0">
+            <h1 className="text-3xl font-semibold text-fg-strong">{ui.demoSetupTitle}</h1>
+            <p className="mt-1.5 text-base leading-relaxed text-fg-muted">
+              {apiKeyMissing ? ui.demoSetupSubtitle : ui.tabletInvite}
+            </p>
+            <button
+              type="button"
+              onClick={() => navigate('/about')}
+              className="mt-1.5 text-sm font-medium text-primary-text underline underline-offset-2 transition-colors hover:text-primary-hover"
+            >
+              {ui.aboutDemoLink}
+            </button>
+          </div>
+          {/* The presenter's controls, quiet: a visitor needs none of them. */}
+          <div className="flex flex-wrap items-center justify-end gap-2">
+            <button
+              type="button"
+              onClick={() => handleDemoModeToggle(false)}
+              aria-pressed
+              className={quietChipClass}
+            >
+              {ui.demoModeOn}
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                queueSetupGuiAction('openSettings');
+                setSettingsOpen(true);
+              }}
+              className={quietChipClass}
+            >
+              {ui.settings}
+            </button>
+            {/* Only the state of the credential, never its value. */}
+            <button
+              type="button"
+              onClick={openCredentialDialog}
+              aria-haspopup="dialog"
+              aria-expanded={credentialOpen}
+              className={
+                apiKeyMissing
+                  ? 'inline-flex h-9 items-center gap-1.5 rounded-lg border border-danger bg-danger/10 px-3 text-xs font-semibold text-danger-text hover:bg-danger/15'
+                  : quietChipClass
+              }
+            >
+              {credentialPresent ? (
+                <span aria-hidden="true" className="text-primary-text">
+                  ✓
+                </span>
+              ) : null}
+              <span>{credentialStatusLabel}</span>
+              {credentialPresent ? <span className="text-fg-faint">· {ui.credentialChange}</span> : null}
+            </button>
+          </div>
+        </div>
+
+        {/*
+          The language first, before anything a visitor has to read: the stored
+          choice is what the booking page, the transcription and the agent's
+          replies all read when the host joins, so it needs no further wiring.
+        */}
+        <div className="mt-6 grid gap-3 sm:grid-cols-[minmax(0,2fr)_minmax(0,3fr)] sm:items-stretch">
+          <LanguageSelect id="start-language" label={ui.languagePickerLabel} />
+          <div className="flex flex-col justify-end">{demoStartButton}</div>
+        </div>
+        <div className="mt-2 flex justify-end">
+          <button
+            type="button"
+            onClick={() => {
+              queueSetupGuiAction('openVoiceCheck');
+              setVoiceCheckError(null);
+              setVoiceCheckOpen(true);
+            }}
+            title="Check microphone permission and speaker output"
+            className="text-xs font-medium text-fg-muted underline underline-offset-2 hover:text-fg-strong"
+          >
+            {ui.micCheck}
+          </button>
+        </div>
+
+        {sessionNotice ? (
+          <div className="mt-4 flex items-start justify-between gap-3 rounded-lg border border-accent-line/40 bg-accent/10 px-3 py-2 text-sm text-accent-text">
+            <span>{sessionNotice}</span>
+            {onDismissSessionNotice ? (
+              <button
+                type="button"
+                onClick={onDismissSessionNotice}
+                className="shrink-0 text-xs font-semibold uppercase tracking-wide text-accent-text transition-colors hover:text-accent-text"
+              >
+                Dismiss
+              </button>
+            ) : null}
+          </div>
+        ) : null}
+        {error ? (
+          <div className="mt-4 rounded-lg border border-danger bg-danger/10 px-3 py-2 text-sm text-danger-text">
+            {error}
+          </div>
+        ) : null}
+
+        {/*
+          Preference memory the session starts with. Nothing is stored between
+          visitors — the point is to simulate an agent that already knows
+          something, not to remember anyone.
+        */}
+        <section className="mt-6 space-y-3">
+          <div>
+            <h2 className="text-sm font-semibold uppercase tracking-wide text-fg-muted">
+              {ui.preferenceMemoryTitle}
+            </h2>
+            <p className="mt-1 text-sm leading-relaxed text-fg-muted">{ui.preferenceMemoryBody}</p>
+          </div>
+          <PreferencePresetPicker selectedPresetId={preferencePresetId} onSelect={onPreferencePresetChange} />
+        </section>
+
+        {/*
+          The consent, as one line. Asked here because this is the last screen
+          before the session: afterwards "record nothing" would mean deleting a
+          file rather than never writing one. The standby session is re-created
+          with the answer the moment it changes (see demoStandbySession.ts).
+        */}
+        <section className="mt-6 rounded-xl border border-dark-border bg-dark px-4 py-3" aria-label={ui.consentTitle}>
+          <div className="flex items-center gap-3">
+            <label className="flex min-w-0 flex-1 cursor-pointer items-center gap-3">
+              <input
+                type="checkbox"
+                className="h-5 w-5 shrink-0 accent-primary"
+                checked={researchConsent}
+                onChange={(event) => handleResearchConsentChange(event.target.checked)}
+                data-testid="demo-consent"
+              />
+              <span className="text-sm font-medium text-fg-strong">{ui.consentCheckboxLabel}</span>
+            </label>
+            <button
+              type="button"
+              aria-expanded={consentDetailsOpen}
+              onClick={() => setConsentDetailsOpen((open) => !open)}
+              className="shrink-0 text-xs font-medium text-primary-text underline underline-offset-2 hover:text-primary-hover"
+            >
+              {consentDetailsOpen ? ui.consentDetailsHide : ui.consentDetailsShow}
+            </button>
+          </div>
+          {consentDetailsOpen ? (
+            <div className="mt-2 pl-8">
+              <p className="text-sm leading-relaxed text-fg-muted">{ui.consentBody}</p>
+              <p className="mt-1.5 text-xs leading-relaxed text-fg-faint">{ui.consentOptOutNote}</p>
+            </div>
+          ) : null}
+        </section>
+
+        {pageOverflows ? <div className="mt-6">{demoStartButton}</div> : null}
+
+        <DemoStartQrCodes
+          className="mt-8"
+          companionToken={companionToken}
+          accessCode={usingAccessCode && trimmedAccessCode ? trimmedAccessCode : null}
+          standbyFailed={standby.status === 'error'}
+        >
+          {companionToken ? (
+            <DeviceRosterCard roster={standbyViewer.devices?.roster ?? null} phone={standbyPhonePresence} />
+          ) : null}
+        </DemoStartQrCodes>
+      </div>
+    </div>
+  );
+
   return (
-    <main className="h-full overflow-y-auto bg-dark px-3 py-4 sm:px-4 sm:py-5">
+    <main ref={mainRef} className="h-full overflow-y-auto bg-dark px-3 py-4 sm:px-4 sm:py-5">
+      {/* The study setup. Its few remaining `demoMode` branches are the shared
+          header controls' labels; the demo has its own body above. */}
+      {demoMode ? demoBody : (
       <div className="mx-auto flex min-h-full w-full max-w-5xl flex-col justify-center">
         <div className="w-full rounded-2xl border border-dark-border bg-dark-light p-5 sm:p-6">
           <div className="mb-5 flex flex-col items-stretch gap-4 sm:flex-row sm:flex-wrap sm:items-start sm:justify-between sm:gap-3">
             <div>
               <h1 className="text-3xl font-semibold text-fg-strong sm:text-2xl">
-                {demoMode ? ui.demoSetupTitle : 'User Study Setup'}
+                User Study Setup
               </h1>
               <p className="mt-2 text-base leading-relaxed text-fg-muted sm:mt-1 sm:text-sm">
-                {demoMode
-                  ? ui.demoSetupSubtitle
-                  : 'Select your assigned condition and one scenario before starting.'}
+                Select your assigned condition and one scenario before starting.
               </p>
-              {demoMode ? (
-                <button
-                  type="button"
-                  onClick={() => navigate('/about')}
-                  className="mt-2 text-sm font-medium text-primary-text underline underline-offset-2 transition-colors hover:text-primary-hover"
-                >
-                  {ui.aboutDemoLink}
-                </button>
-              ) : null}
-              {/*
-                The language first, before any step a visitor has to read. The
-                stored choice is what every later screen, the transcription and
-                the agent's replies read, so picking it here re-renders this
-                page in that language at once and needs no further wiring. The
-                settings modal keeps its own switch for a mid-session change.
-                Demo only: a study participant's language is not theirs to pick.
-              */}
-              {demoMode ? (
-                <LanguageSelect
-                  id="start-language"
-                  className="mt-4 sm:max-w-sm"
-                  label={ui.languagePickerLabel}
-                  hint={ui.languagePickerHint}
-                />
-              ) : null}
+              {/* No language picker: a study participant's language is not theirs to pick. */}
             </div>
             {/*
               A phone gets one control per row at a comfortable height. On a
@@ -758,68 +1076,7 @@ export function StudyStartPage({
           ) : null}
 
           <div className="space-y-4">
-            {demoMode ? (
-              <>
-              {/*
-                The consent box. It is asked here rather than on the way out
-                because this is the last screen that exists before the session:
-                afterwards, "record nothing" would mean deleting a file rather
-                than never writing one.
-              */}
-              <section className="space-y-3">
-                <h2 className="text-sm font-semibold uppercase tracking-wide text-fg-muted">
-                  {ui.consentTitle}
-                </h2>
-                <label
-                  className={`flex cursor-pointer items-start gap-3 rounded-xl border px-4 py-3 transition-colors ${
-                    researchConsent
-                      ? 'border-primary/70 bg-primary/10'
-                      : 'border-dark-border bg-dark hover:border-dark-lighter'
-                  }`}
-                >
-                  <input
-                    type="checkbox"
-                    className="mt-1 h-5 w-5 shrink-0 accent-primary"
-                    checked={researchConsent}
-                    onChange={(event) => handleResearchConsentChange(event.target.checked)}
-                  />
-                  <div className="min-w-0">
-                    <div className="text-sm font-semibold text-fg-strong">
-                      {ui.consentCheckboxLabel}
-                    </div>
-                    <p className="mt-1.5 text-sm leading-relaxed text-fg-muted">
-                      {ui.consentBody}
-                    </p>
-                    <p className="mt-1.5 text-xs leading-relaxed text-fg-faint">
-                      {ui.consentOptOutNote}
-                    </p>
-                  </div>
-                </label>
-              </section>
-
-              {/*
-                Preference memory the session starts with.
-
-                Here because this is the only screen that exists before a
-                session: /task-review fires the session POST on mount, so a
-                picker there would race it. Nothing is stored between visitors —
-                the point is to simulate an agent that already knows something,
-                not to remember anyone.
-              */}
-              <section className="space-y-3">
-                <h2 className="text-sm font-semibold uppercase tracking-wide text-fg-muted">
-                  {ui.preferenceMemoryTitle}
-                </h2>
-                <p className="text-sm leading-relaxed text-fg-muted">
-                  {ui.preferenceMemoryBody}
-                </p>
-                <PreferencePresetPicker
-                  selectedPresetId={preferencePresetId}
-                  onSelect={onPreferencePresetChange}
-                />
-              </section>
-              </>
-            ) : (
+            {(
             <section className="space-y-3">
               <h2 className="text-sm font-semibold uppercase tracking-wide text-fg-muted">
                 Condition
@@ -888,7 +1145,7 @@ export function StudyStartPage({
             </section>
             )}
 
-            {!demoMode && (
+            {(
             <section className="space-y-3">
               <h2 className="text-sm font-semibold uppercase tracking-wide text-fg-muted">
                 Scenario
@@ -944,20 +1201,15 @@ export function StudyStartPage({
             <button
               type="button"
               onClick={handleStartTask}
-              disabled={
-                demoMode
-                  // The demo has no participant ID and nothing to choose: the
-                  // access code (or the visitor's own key) is the whole setup.
-                  ? apiKeyMissing
-                  : loadingScenarios || !selectedScenarioId || pidMissing
-              }
+              disabled={loadingScenarios || !selectedScenarioId || pidMissing}
               className="w-full rounded-xl bg-primary px-4 py-4 text-base font-semibold text-primary-fg transition-colors hover:bg-primary-hover disabled:cursor-not-allowed disabled:opacity-60 sm:w-auto sm:rounded-lg sm:py-2 sm:text-sm sm:font-medium"
             >
-              {demoMode ? ui.startDemo : 'Start Task'}
+              Start Task
             </button>
           </div>
         </div>
       </div>
+      )}
 
       {settingsOpen ? (
         <SettingsModal
@@ -972,6 +1224,7 @@ export function StudyStartPage({
           onPlannerModelChange={plannerModelSetting.handleChange}
           pushToTalkAvailable={demoMode}
           layoutOverrideAvailable={demoMode}
+          boothResetAvailable={demoMode}
         />
       ) : null}
 

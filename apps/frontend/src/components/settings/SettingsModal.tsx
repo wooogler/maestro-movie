@@ -16,6 +16,7 @@ import { useEffect, useRef } from 'react';
 import { LANGUAGES, LANGUAGE_LABELS, languagePack, useLanguage } from '../../i18n';
 import { VoiceVerbosityPanel } from '../voice/VoiceVerbosityPanel';
 import { PushToTalkSettings } from './PushToTalkSettings';
+import { BoothResetSettings } from './BoothResetSettings';
 import type { FullTuningLayoutMode } from '../chat/fullTuningLayout';
 import {
   setFullTuningLayoutOverride,
@@ -64,6 +65,11 @@ interface SettingsModalProps {
    * be detected. The study conditions have one layout and nothing to pick.
    */
   layoutOverrideAvailable?: boolean;
+  /**
+   * The kiosk/desktop demo's return-to-start and idle reset. Not on the booth
+   * tablet (its profile URL sets them) and never in a study condition.
+   */
+  boothResetAvailable?: boolean;
 }
 
 const LAYOUT_CHOICES: ReadonlyArray<{
@@ -90,6 +96,7 @@ export function SettingsModal({
   plannerTurnStats = [],
   pushToTalkAvailable = false,
   layoutOverrideAvailable = false,
+  boothResetAvailable = false,
 }: SettingsModalProps) {
   const { language, setLanguage, s } = useLanguage();
   const layoutOverride = useFullTuningLayoutOverride();
@@ -290,6 +297,8 @@ export function SettingsModal({
         ) : null}
 
         {pushToTalkAvailable ? <PushToTalkSettings /> : null}
+
+        {boothResetAvailable ? <BoothResetSettings /> : null}
 
         {voiceSettingsAvailable ? (
           <VoiceVerbosityPanel

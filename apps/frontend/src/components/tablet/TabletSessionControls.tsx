@@ -1,9 +1,11 @@
 /**
- * The booth tablet's in-session controls: the idle-reset clock, the "still
- * there?" countdown, the booking-complete countdown, and the Start over button.
+ * The booth's in-session controls: the idle-reset clock, the "still there?"
+ * countdown, the booking-complete countdown, and the tablet's Start over button.
  *
- * The decisions are `decideTabletIdle` in `study/tabletProfile.ts`; this file
- * only feeds it and draws what it says. Every countdown ticks inside its own
+ * Both booths use the clock — the booth tablet with its profile's numbers, the
+ * kiosk/desktop demo with the ones in Settings. The decisions are
+ * `decideBoothIdle` in `study/boothReset.ts`; this file only feeds it and draws
+ * what it says. Every countdown ticks inside its own
  * small component, so the 3,700-line booking page re-renders when the phase
  * changes and never once a second (on a slow tablet CPU that tick is the
  * difference between idle and busy; see the 2026-10-17 tablet profile).
@@ -13,19 +15,42 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { useLanguage } from '../../i18n';
 import {
-  TABLET_BOOKING_COMPLETE_RESET_MS,
-  decideTabletIdle,
-  parseIdleSeconds,
-  tabletBusyHolds,
-} from '../../study/tabletProfile';
+  boothBusyHolds,
+  boothCompleteDeadlineMs,
+  decideBoothIdle,
+  parseBoothIdleSeconds,
+} from '../../study/boothReset';
 import { stampTabletActivity } from '../../study/tabletProfileStorage';
 
-export type TabletResetReason = 'idle' | 'booking-complete' | 'start-over' | 'finish';
+export type BoothResetReason = 'idle' | 'booking-complete' | 'start-over' | 'finish';
 
-export interface TabletResetRequest {
-  reason: TabletResetReason;
+export interface BoothResetRequest {
+  reason: BoothResetReason;
   /** Settles once the booking page's last log line is written; the finish waits for it. */
   beforeFinish: Promise<unknown>;
+}
+
+/**
+ * What the booking page needs to run a booth's reset. Present on the booth
+ * tablet and in the kiosk/desktop demo; absent in a study condition and for a
+ * quick-card visitor on their own phone, whose session simply ends.
+ */
+export interface BoothResetConfig {
+  /** No touch, input or agent activity for this long resets; null = never. */
+  idleSeconds: number | null;
+  /** After the completion line has finished, how long until the booth starts over. */
+  completeResetMs: number;
+  /**
+   * Ends this session and returns the booth to its start screen. App owns the
+   * finish request and the start screen's defaults; the page clears its own
+   * state first.
+   */
+  onReset: (request: BoothResetRequest) => void;
+  /**
+   * The tablet stamps its activity so a relaunch can tell "the same visitor"
+   * from "nobody for ten minutes". The kiosk has no relaunch rule, so no stamp.
+   */
+  persistActivity?: boolean;
 }
 
 type IdlePhase =
@@ -35,9 +60,10 @@ type IdlePhase =
 
 const ACTIVITY_EVENTS = ['pointerdown', 'keydown', 'wheel', 'touchstart'] as const;
 
-export interface TabletIdleOptions {
+export interface BoothIdleOptions {
   enabled: boolean;
-  idleSeconds: number;
+  /** Null: no idle reset (the kiosk's "Off"); the completion reset still runs. */
+  idleSeconds: number | null;
   /** The agent is planning or speaking, the visitor is mid-utterance, a stage is loading. */
   busy: boolean;
   /**
@@ -45,18 +71,27 @@ export interface TabletIdleOptions {
    * stage, a highlight. Any change counts as activity.
    */
   activitySignal: unknown;
-  bookingComplete: boolean;
+  /**
+   * When the booking-complete countdown may start — the moment the spoken
+   * completion line finished (or the chime played) — or null while the
+   * booking is not complete or the line is still playing.
+   */
+  bookingCompleteAtMs: number | null;
+  completeResetMs: number;
+  persistActivity: boolean;
   onReset: (reason: 'idle' | 'booking-complete') => void;
 }
 
-export function useTabletIdleReset({
+export function useBoothIdleReset({
   enabled,
   idleSeconds,
   busy,
   activitySignal,
-  bookingComplete,
+  bookingCompleteAtMs,
+  completeResetMs,
+  persistActivity,
   onReset,
-}: TabletIdleOptions): { state: IdlePhase; stay: () => void } {
+}: BoothIdleOptions): { state: IdlePhase; stay: () => void } {
   const lastActivityRef = useRef(Date.now());
   const completeSinceRef = useRef<number | null>(null);
   const busySinceRef = useRef<number | null>(null);
@@ -72,18 +107,19 @@ export function useTabletIdleReset({
     const nowMs = Date.now();
     if (!busyRef.current) busySinceRef.current = null;
     else if (busySinceRef.current === null) busySinceRef.current = nowMs;
-    // Busy holds the clock, but not forever: see TABLET_BUSY_HOLD_MAX_MS.
-    const holding = tabletBusyHolds({ busy: busyRef.current, busySinceMs: busySinceRef.current, nowMs });
+    // Busy holds the clock, but not forever: see BOOTH_BUSY_HOLD_MAX_MS.
+    const holding = boothBusyHolds({ busy: busyRef.current, busySinceMs: busySinceRef.current, nowMs });
     if (holding) {
       lastActivityRef.current = nowMs;
-      stampTabletActivity(nowMs);
+      if (persistActivity) stampTabletActivity(nowMs);
     }
-    const verdict = decideTabletIdle({
+    const verdict = decideBoothIdle({
       nowMs,
       lastActivityMs: lastActivityRef.current,
       busy: holding,
       idleSeconds,
       bookingCompleteSinceMs: completeSinceRef.current,
+      completeResetMs,
     });
     if (verdict.kind === 'reset') {
       firedRef.current = true;
@@ -91,11 +127,17 @@ export function useTabletIdleReset({
       return;
     }
     let next: IdlePhase;
-    if (verdict.kind === 'warning') {
-      next = { phase: 'warning', deadlineMs: lastActivityRef.current + parseIdleSeconds(idleSeconds) * 1000 };
+    if (verdict.kind === 'warning' && idleSeconds !== null) {
+      next = { phase: 'warning', deadlineMs: lastActivityRef.current + parseBoothIdleSeconds(idleSeconds) * 1000 };
     } else if (verdict.kind === 'complete-countdown') {
-      const since = Math.max(completeSinceRef.current ?? nowMs, lastActivityRef.current);
-      next = { phase: 'complete', deadlineMs: since + TABLET_BOOKING_COMPLETE_RESET_MS };
+      next = {
+        phase: 'complete',
+        deadlineMs: boothCompleteDeadlineMs({
+          bookingCompleteSinceMs: completeSinceRef.current ?? nowMs,
+          lastActivityMs: lastActivityRef.current,
+          completeResetMs,
+        }),
+      };
     } else {
       next = { phase: 'active' };
     }
@@ -105,16 +147,16 @@ export function useTabletIdleReset({
         ? previous
         : next
     );
-  }, [enabled, idleSeconds]);
+  }, [completeResetMs, enabled, idleSeconds, persistActivity]);
 
   const bump = useCallback(() => {
     const nowMs = Date.now();
     lastActivityRef.current = nowMs;
     // Real activity: a busy stretch that is still going starts its hold over.
     if (busySinceRef.current !== null) busySinceRef.current = nowMs;
-    stampTabletActivity(nowMs);
+    if (persistActivity) stampTabletActivity(nowMs);
     evaluate();
-  }, [evaluate]);
+  }, [evaluate, persistActivity]);
 
   // Touch, keys, scrolling: anything a person does to the glass.
   useEffect(() => {
@@ -137,9 +179,9 @@ export function useTabletIdleReset({
   }, [activitySignal, bump]);
 
   useEffect(() => {
-    completeSinceRef.current = bookingComplete ? Date.now() : null;
+    completeSinceRef.current = bookingCompleteAtMs;
     evaluate();
-  }, [bookingComplete, evaluate]);
+  }, [bookingCompleteAtMs, evaluate]);
 
   useEffect(() => {
     evaluate();

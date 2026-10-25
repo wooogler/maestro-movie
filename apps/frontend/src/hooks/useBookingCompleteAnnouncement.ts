@@ -50,6 +50,14 @@ interface UseBookingCompleteAnnouncementResult {
   holdVoiceOn: boolean;
   /** For the page's playback-completion handler, for ids `isHostUtteranceId` accepts. */
   handleHostPlaybackResolved: (item: VoiceSpeakItem, info: { interrupted: boolean }) => void;
+  /**
+   * When the completion cue finished — the sentence played out (or was
+   * interrupted, or hit the cap), or the chime played — and null before that
+   * or while the complete screen is not up. The booth reset counts its
+   * return-to-start delay from here, so the countdown never runs under the
+   * sentence that announces it. Always reached: the cap ends the sentence.
+   */
+  settledAtMs: number | null;
 }
 
 /*
@@ -117,6 +125,7 @@ export function useBookingCompleteAnnouncement({
 }: UseBookingCompleteAnnouncementOptions): UseBookingCompleteAnnouncementResult {
   /** The hold for this complete screen has ended (played, interrupted, or capped). */
   const [released, setReleased] = useState(false);
+  const [settledAtMs, setSettledAtMs] = useState<number | null>(null);
   const announcedRef = useRef(false);
   const pendingIdRef = useRef<string | null>(null);
   const capTimerRef = useRef<number | null>(null);
@@ -144,6 +153,7 @@ export function useBookingCompleteAnnouncement({
     const id = pendingIdRef.current;
     pendingIdRef.current = null;
     setReleased(true);
+    setSettledAtMs(Date.now());
     markDocument('data-booking-complete-voice-off', reason);
     onLogEventRef.current?.('chat.voice_mode.booking_complete_released', { reason, utteranceId: id });
   }, []);
@@ -154,6 +164,7 @@ export function useBookingCompleteAnnouncement({
       // Armed again for the next booking (Reset, then another run).
       announcedRef.current = false;
       setReleased(false);
+      setSettledAtMs(null);
       return;
     }
     const cue = bookingCompleteCue({
@@ -161,12 +172,15 @@ export function useBookingCompleteAnnouncement({
       voiceModeEnabled: voiceModeEnabledRef.current,
       alreadyAnnounced: announcedRef.current,
     });
+    // Already announced for this screen: whatever settled it still stands.
     if (cue === 'none') return;
     announcedRef.current = true;
     const text = bookingCompleteSentence(language);
     markDocument('data-booking-complete-cue', cue);
     if (cue === 'chime') {
       const played = playChime();
+      // The chime is under a second and needs no hold: settled at once.
+      setSettledAtMs(Date.now());
       onLogEventRef.current?.('chat.voice_mode.booking_complete_announced', { cue, played });
       return;
     }
@@ -221,5 +235,5 @@ export function useBookingCompleteAnnouncement({
     [release]
   );
 
-  return { holdVoiceOn, handleHostPlaybackResolved };
+  return { holdVoiceOn, handleHostPlaybackResolved, settledAtMs };
 }

@@ -88,7 +88,9 @@ export function CompanionPairingCard({
   if (!companionToken) return null;
 
   return (
-    <div className="rounded-xl border border-dark-border bg-dark p-3">
+    // `data-qr-url` lets a browser check confirm this is the token the start
+    // screen showed; the link is never printed as text.
+    <div className="rounded-xl border border-dark-border bg-dark p-3" data-qr-url={svg ? buildCompanionUrl(companionToken) : ''}>
       <div className="mb-2 text-xs font-semibold uppercase tracking-wide text-fg-muted">
         {s.pairVoiceTitle}
       </div>
