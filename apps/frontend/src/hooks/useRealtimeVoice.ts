@@ -980,7 +980,11 @@ export function useRealtimeVoice({
 
         case 'error': {
           const eventId = readString(event.event_id);
-          if (eventId?.startsWith('ptt-commit-')) {
+          // The id of the CLIENT event that failed is `error.event_id`;
+          // `event.event_id` is the server's own id for this error event.
+          const clientEventId =
+            readString((event.error as Record<string, unknown> | undefined)?.event_id) ?? eventId;
+          if (clientEventId?.startsWith('ptt-commit-')) {
             // Typically "buffer too small": under 100 ms of audio reached the
             // server. Nothing was committed; back to idle.
             onLogEventRef.current?.('chat.voice_input.ignored', {
@@ -988,11 +992,17 @@ export function useRealtimeVoice({
               message:
                 readString((event.error as Record<string, unknown> | undefined)?.message) ?? null,
             });
-            runPttEffectsRef.current?.(pttRef.current.commitRejected(eventId));
+            runPttEffectsRef.current?.(pttRef.current.commitRejected(clientEventId));
             return;
           }
           // Clearing an already-empty buffer is not worth a log line.
-          if (eventId?.startsWith('ptt-clear-')) return;
+          if (clientEventId?.startsWith('ptt-clear-')) return;
+          // A press's own cancel finding nothing to cancel (the server got
+          // there first). Push-to-talk only; the VAD path below is unchanged.
+          if (pttModeRef.current && clientEventId && bargeInEventIdsRef.current.has(clientEventId)) {
+            bargeInEventIdsRef.current.delete(clientEventId);
+            return;
+          }
           // Cancelling an already-cancelled response is expected during
           // barge-in; the server got there first.
           if (eventId && bargeInEventIdsRef.current.has(eventId)) {

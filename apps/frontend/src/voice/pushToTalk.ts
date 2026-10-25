@@ -29,10 +29,16 @@ export const PTT_KEY_PRESETS = ['Space', 'F13', 'ControlLeft', 'ShiftLeft'] as c
 
 /**
  * Shorter than this is a tap, not speech: the buffer is cleared rather than
- * committed. A 100 ms tap plus the release tail is ~300 ms of whatever the
- * room was saying, which the transcriber happily turns into a word.
+ * committed, so nothing is transcribed.
+ *
+ * 300 ms, not the 150 first planned. Measured with the fake mic (2026-10-24):
+ * a 234 ms press over looping speech — ~430 ms of audio with the release tail
+ * — came back as "그걸로 할게요." ("I'll take that one"), a sentence that was
+ * never in the audio, and went through every noise gate as a turn. A press
+ * that is meant to carry words is longer: the key goes down before the first
+ * syllable and up after the last, so even a bare "네" is held for ~400 ms+.
  */
-export const PTT_MIN_PRESS_MS = 150;
+export const PTT_MIN_PRESS_MS = 300;
 
 /**
  * The mic stays open this long after the key comes up. People let go on their

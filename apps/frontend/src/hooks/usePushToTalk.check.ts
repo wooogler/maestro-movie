@@ -162,8 +162,9 @@ section('5. edge cases');
 // -----------------------------------------------------------------------------
 {
   const machine = new PttMachine();
+  check('the measured 234 ms press that hallucinated "그걸로 할게요." counts as a tap', 234 < PTT_MIN_PRESS_MS);
   machine.press(0, { ready: true, speaking: false });
-  const tap = machine.release(PTT_MIN_PRESS_MS - 50, 'key-up');
+  const tap = machine.release(100, 'key-up');
   check('a 100 ms tap clears instead of committing', commits(tap).length === 0 && types(tap).includes('clear-buffer') && !types(tap).includes('schedule-tail'));
   check('…and is logged as ignored', tap.some((effect) => effect.type === 'log' && effect.payload.reason === 'ptt_tap'));
   check('…back to idle, mic shut', statusOf(tap) === 'listening' && !machine.micOpen());
