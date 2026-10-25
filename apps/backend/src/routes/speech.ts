@@ -77,6 +77,47 @@ const REALTIME_VAD_THRESHOLD = readEnvNumber('OPENAI_REALTIME_VAD_THRESHOLD', 0.
 const REALTIME_VAD_SILENCE_MS = readEnvNumber('OPENAI_REALTIME_VAD_SILENCE_MS', 900, 100, 5000);
 const REALTIME_VAD_PREFIX_MS = readEnvNumber('OPENAI_REALTIME_VAD_PREFIX_MS', 300, 0, 2000);
 const REALTIME_TOKEN_TTL_SECONDS = readEnvNumber('REALTIME_TOKEN_TTL_SECONDS', 600, 60, 3600);
+/**
+ * `server_vad` (the default, and what every study session ran) or
+ * `semantic_vad`, which decides a turn has ended from what was said rather than
+ * from silence and has no threshold. Off unless OPENAI_REALTIME_VAD_TYPE says
+ * so. KSEA poster hall, 2026-10-24: 40 of 128 agent sentences were cut by a
+ * VAD barge-in on hall noise (.env.example has the recommendation).
+ */
+const REALTIME_VAD_TYPE: 'server_vad' | 'semantic_vad' =
+  (process.env.OPENAI_REALTIME_VAD_TYPE || '').trim() === 'semantic_vad' ? 'semantic_vad' : 'server_vad';
+/** semantic_vad only: low | medium | high | auto. */
+const REALTIME_VAD_EAGERNESS = (() => {
+  const raw = (process.env.OPENAI_REALTIME_VAD_EAGERNESS || 'auto').trim();
+  return raw === 'low' || raw === 'medium' || raw === 'high' ? raw : 'auto';
+})();
+
+/**
+ * The turn_detection block. server_vad is built exactly as it always was;
+ * semantic_vad carries eagerness instead of threshold/padding/silence, which
+ * it does not take.
+ */
+function buildTurnDetection(): Record<string, unknown> {
+  // The tuning agent composes every reply, so the model must never answer on
+  // its own; it may still cut its own speech short when the user starts
+  // talking, which is what makes barge-in work.
+  if (REALTIME_VAD_TYPE === 'semantic_vad') {
+    return {
+      type: 'semantic_vad',
+      eagerness: REALTIME_VAD_EAGERNESS,
+      create_response: false,
+      interrupt_response: true,
+    };
+  }
+  return {
+    type: 'server_vad',
+    threshold: REALTIME_VAD_THRESHOLD,
+    prefix_padding_ms: REALTIME_VAD_PREFIX_MS,
+    silence_duration_ms: REALTIME_VAD_SILENCE_MS,
+    create_response: false,
+    interrupt_response: true,
+  };
+}
 
 // The realtime model is a voice I/O layer, not the assistant: the tuning agent
 // composes every utterance and drives every GUI action. The session is minted
@@ -601,17 +642,7 @@ async function mintRealtimeClientSecret(
               ...(REALTIME_NOISE_REDUCTION
                 ? { noise_reduction: { type: REALTIME_NOISE_REDUCTION } }
                 : {}),
-              turn_detection: {
-                type: 'server_vad',
-                threshold: REALTIME_VAD_THRESHOLD,
-                prefix_padding_ms: REALTIME_VAD_PREFIX_MS,
-                silence_duration_ms: REALTIME_VAD_SILENCE_MS,
-                // The tuning agent composes every reply, so the model must never
-                // answer on its own; it may still cut its own speech short when
-                // the user starts talking, which is what makes barge-in work.
-                create_response: false,
-                interrupt_response: true,
-              },
+              turn_detection: buildTurnDetection(),
             },
             output: { voice: REALTIME_VOICE, speed: REALTIME_SPEED },
           },
