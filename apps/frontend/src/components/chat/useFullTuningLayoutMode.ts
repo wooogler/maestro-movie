@@ -19,10 +19,13 @@ import { useSyncExternalStore } from 'react';
 import {
   DESKTOP_MIN_WIDTH_PX,
   KIOSK_MIN_WIDTH_PX,
+  KIOSK_SIDE_BY_SIDE_MIN_WIDTH_PX,
   parseLayoutOverride,
   readLayoutOverrideFromSearch,
   selectLayoutMode,
+  selectMemoryPanelArrangement,
   type FullTuningLayoutMode,
+  type MemoryPanelArrangement,
 } from './fullTuningLayout';
 
 const OVERRIDE_STORAGE_KEY = 'tuning-movie-layout-override';
@@ -146,4 +149,33 @@ export function useFullTuningLayoutMode(enabled: boolean): FullTuningLayoutMode 
 /** The presenter's pinned arrangement, `null` meaning "detect". */
 export function useFullTuningLayoutOverride(): FullTuningLayoutMode | null {
   return useSyncExternalStore(subscribe, getOverrideSnapshot, () => null);
+}
+
+/*
+  The memory panel's arrangement inside the kiosk band. Its own tiny store:
+  the only line it draws is `KIOSK_SIDE_BY_SIDE_MIN_WIDTH_PX`, so it listens to
+  that one query and nothing else.
+*/
+const SIDE_BY_SIDE_QUERY = `(min-width: ${KIOSK_SIDE_BY_SIDE_MIN_WIDTH_PX}px)`;
+
+function subscribeSideBySideWidth(listener: Listener): () => void {
+  if (typeof window === 'undefined' || typeof window.matchMedia !== 'function') return () => {};
+  const list = window.matchMedia(SIDE_BY_SIDE_QUERY);
+  list.addEventListener('change', listener);
+  return () => list.removeEventListener('change', listener);
+}
+
+function getViewportWidthBucket(): number {
+  // A bucket, not the width: a resize inside one side of the line must not
+  // re-render anything.
+  if (typeof window === 'undefined' || typeof window.matchMedia !== 'function') return 0;
+  return window.matchMedia(SIDE_BY_SIDE_QUERY).matches ? KIOSK_SIDE_BY_SIDE_MIN_WIDTH_PX : 0;
+}
+
+/** `selectMemoryPanelArrangement` for the live viewport. Tabs outside the kiosk. */
+export function useMemoryPanelArrangement(
+  mode: FullTuningLayoutMode | null | undefined
+): MemoryPanelArrangement {
+  const width = useSyncExternalStore(subscribeSideBySideWidth, getViewportWidthBucket, () => 0);
+  return selectMemoryPanelArrangement(mode, width);
 }
