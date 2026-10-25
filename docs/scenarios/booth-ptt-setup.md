@@ -121,7 +121,29 @@ tap under 300 ms, which is discarded (see section 6).
   shut. A key still held across the reconnect does nothing until it is released
   and pressed again.
 
-## 7. Turning it off
+## 7. Keys
+
+| Key | Does |
+|---|---|
+| **Space** (hold) | Talk (push-to-talk, the key from section 4) |
+| **Enter** or **→** | Next: presses the stage's Continue, or Confirm Booking on the confirm step, or Finish on the booking-complete screen |
+| **←** | Back: presses the stage's Back |
+
+Enter, → and ← press the stage's own button, so they do exactly what a click
+does, and nothing when the button is disabled (for example Continue on the seat
+map before a seat is picked) or the agent is working. They work in the kiosk
+and desktop layouts of a demo session, not on a phone and not in study
+sessions. In the kiosk the buttons show the key ("Enter ⏎", "←").
+
+They are ignored while focus is in a text field (Enter there sends the
+message), while a dialog is open (Settings, the phone-pairing panel), with Cmd,
+Ctrl, Alt or Shift held, and while a key is held down (auto-repeat): one press
+is one stage. A second press within 0.7 s of the last one is dropped too, so a
+double tap does not skip a stage. If you reached a button with Tab, Enter
+presses that button, as usual; after a click on a seat or an option, Enter is
+Continue.
+
+## 8. Turning it off
 
 Switch **Push to talk** off in Settings. The next voice connection is the
 default server VAD, which is exactly what the study ran. Server VAD settings

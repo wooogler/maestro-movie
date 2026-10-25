@@ -226,6 +226,53 @@ const KIOSK_MEMORY =
 
 const NOT_KIOSK = { stageSection: '', memorySection: '', conversationCollapsible: true } as const;
 
+/*
+  Kiosk, wide enough: preferences and workflow side by side, not behind tabs.
+
+  Behind tabs, half of what the agent remembers is always hidden, and at a booth
+  nobody taps a tab to find it: the visitor talks, the presenter points, and the
+  half that moved is the half nobody can see. So on a portrait monitor the
+  memory area is two panels at once, and the bottom band reads conversation |
+  preferences | workflow.
+
+  The memory area takes the wider share now (it holds two panels), so the
+  conversation narrows from 3/5 to 2/5 of the band. Both stay readable at the
+  kiosk zoom: at 1440px the transcript is ~410 CSS px after zoom and each memory
+  panel ~300; at 1080px, ~350 and ~260.
+
+  Below `KIOSK_SIDE_BY_SIDE_MIN_WIDTH_PX` (a portrait tablet) two memory panels
+  would be ~150px each, so a tablet keeps the tabbed column it had.
+*/
+export type MemoryPanelArrangement = 'tabs' | 'side-by-side';
+
+/** The narrowest kiosk that splits the memory column; under it, tabs. */
+export const KIOSK_SIDE_BY_SIDE_MIN_WIDTH_PX = 1000;
+
+/**
+ * How the memory panel lays out its two halves.
+ *
+ * Only the kiosk ever gets `side-by-side`. Desktop keeps the rail and the phone
+ * keeps its sheet, both tabbed; the study conditions have no mode at all.
+ */
+export function selectMemoryPanelArrangement(
+  mode: FullTuningLayoutMode | null | undefined,
+  viewportWidth: number
+): MemoryPanelArrangement {
+  if (mode !== 'kiosk') return 'tabs';
+  if (!Number.isFinite(viewportWidth)) return 'tabs';
+  return viewportWidth >= KIOSK_SIDE_BY_SIDE_MIN_WIDTH_PX ? 'side-by-side' : 'tabs';
+}
+
+const KIOSK_CONTAINER_SIDE_BY_SIDE = [
+  'relative mx-auto grid h-full w-full max-w-[1400px] min-h-0 gap-3',
+  'grid-cols-[minmax(0,2fr)_minmax(0,3fr)] grid-rows-[minmax(0,65fr)_minmax(0,35fr)]',
+].join(' ');
+/**
+ * No border or fill of its own: the two panels inside are each a card, so the
+ * band reads as three columns. The devices button sits under both.
+ */
+const KIOSK_MEMORY_SIDE_BY_SIDE = 'kiosk-touch relative min-h-0 flex flex-col gap-3';
+
 export function splitViewLayout(
   conversationCollapsed: boolean,
   /**
@@ -237,7 +284,9 @@ export function splitViewLayout(
    * The demo's arrangement, from `selectLayoutMode`. Absent, the `lg`
    * breakpoint decides between compact and desktop, as it always did.
    */
-  mode?: FullTuningLayoutMode
+  mode?: FullTuningLayoutMode,
+  /** Kiosk only: `selectMemoryPanelArrangement`. Tabs (the default) is the original band. */
+  memoryArrangement: MemoryPanelArrangement = 'tabs'
 ): SplitViewLayoutClasses {
   if (!compactLayoutEnabled) {
     return {
@@ -251,15 +300,16 @@ export function splitViewLayout(
   }
 
   if (mode === 'kiosk') {
+    const sideBySide = memoryArrangement === 'side-by-side';
     return {
-      container: KIOSK_CONTAINER,
+      container: sideBySide ? KIOSK_CONTAINER_SIDE_BY_SIDE : KIOSK_CONTAINER,
       conversationSection: KIOSK_CONVERSATION,
       // The conversation is always on screen, so nothing has to float.
       showFloatingToggle: false,
       stageViewport: '',
       floatingCluster: '',
       stageSection: KIOSK_STAGE_SECTION,
-      memorySection: KIOSK_MEMORY,
+      memorySection: sideBySide ? KIOSK_MEMORY_SIDE_BY_SIDE : KIOSK_MEMORY,
       conversationCollapsible: false,
     };
   }

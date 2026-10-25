@@ -52,6 +52,10 @@ export interface UiStrings {
   bookingConfirmed: string;
   noPreviousStage: string;
   noNextStageYet: string;
+  /** Key cap on Continue in the kiosk. The key itself is labelled "Enter" on every keyboard. */
+  keyHintNext: string;
+  /** Tooltip on the kiosk's Continue/Back: which keys do what. */
+  keyHintTitle: string;
 
   // Confirm-stage summary rows
   summaryMovie: string;
@@ -323,6 +327,8 @@ const EN: UiStrings = {
   bookingConfirmed: 'Booking Confirmed!',
   noPreviousStage: 'No previous stage',
   noNextStageYet: 'No next stage yet',
+  keyHintNext: 'Enter ⏎',
+  keyHintTitle: 'Keyboard: Enter or → continues, ← goes back',
 
   summaryMovie: 'Movie',
   summaryTheater: 'Theater',
@@ -572,6 +578,8 @@ const KO: UiStrings = {
   bookingConfirmed: '예매가 확정되었습니다!',
   noPreviousStage: '이전 단계가 없습니다',
   noNextStageYet: '아직 다음 단계가 없습니다',
+  keyHintNext: 'Enter ⏎ 키',
+  keyHintTitle: '키보드: Enter 또는 → 키로 다음, ← 키로 이전',
 
   summaryMovie: '영화',
   summaryTheater: '극장',
@@ -837,6 +845,8 @@ const JA_OVERRIDES: Partial<UiStrings> = {
   bookingConfirmed: '予約が確定しました！',
   noPreviousStage: '前のステップはありません',
   noNextStageYet: '次のステップはまだありません',
+  keyHintNext: 'Enter キー ⏎',
+  keyHintTitle: 'キーボード：Enter か → で次へ、← で戻る',
 
   summaryMovie: '映画',
   summaryTheater: '映画館',
@@ -1091,6 +1101,8 @@ const ZH_HANS_OVERRIDES: Partial<UiStrings> = {
   bookingConfirmed: '订票已确认！',
   noPreviousStage: '没有上一步',
   noNextStageYet: '暂无下一步',
+  keyHintNext: '回车键 ⏎',
+  keyHintTitle: '键盘：按 Enter 或 → 继续，按 ← 返回',
 
   summaryMovie: '电影',
   summaryTheater: '影院',
@@ -1343,6 +1355,8 @@ const ZH_HANT_OVERRIDES: Partial<UiStrings> = {
   bookingConfirmed: '訂票成功！',
   noPreviousStage: '沒有上一步',
   noNextStageYet: '還沒有下一步',
+  keyHintNext: 'Enter 鍵 ⏎',
+  keyHintTitle: '鍵盤：按 Enter 或 → 繼續，按 ← 返回',
 
   summaryMovie: '電影',
   summaryTheater: '戲院',

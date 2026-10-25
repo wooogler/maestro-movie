@@ -29,6 +29,10 @@ import {
   splitViewLayout,
   type FullTuningLayoutMode,
 } from './fullTuningLayout';
+import { useMemoryPanelArrangement } from './useFullTuningLayoutMode';
+import { MemoryArrangementContext, type MemoryArrangement } from '../memory/memoryArrangement';
+import { useStageKeys, STAGE_KEYS_SCOPE_ATTR } from '../../hooks/useStageKeys';
+import { StageKeyHintsContext, type StageKeyHints } from '../../renderer/stages/stageKeyHints';
 import { isCompactViewport } from '../../utils/viewport';
 import { useLanguage } from '../../i18n';
 import type { AgentPreference } from '../../agent/protocol';
@@ -471,6 +475,38 @@ export function FullTuningSplitView({
   const conversationCollapsed = kioskLayout ? false : conversationCollapsedState;
   const guiCardWidthPx = kioskLayout ? KIOSK_GUI_CARD_WIDTH_PX : GUI_CARD_BASE_WIDTH_PX;
   const [devicesOpen, setDevicesOpen] = useState(false);
+  const memoryArrangement = useMemoryPanelArrangement(kioskLayout ? 'kiosk' : null);
+  /*
+    Enter / → press the stage's Continue and ← its Back (`useStageKeys`), in the
+    demo's kiosk and desktop arrangements. Not on a phone, which has no keyboard
+    worth the name, and not in the study conditions (`compactLayoutEnabled` is
+    the demo's flag). The kiosk also draws the keys on the buttons.
+  */
+  const stageKeysEnabled = compactLayoutEnabled && (layoutMode === 'kiosk' || layoutMode === 'desktop');
+  useStageKeys({ enabled: stageKeysEnabled });
+  const stageKeyHints = useMemo<StageKeyHints>(
+    () => ({ shortcuts: stageKeysEnabled, hints: stageKeysEnabled && kioskLayout }),
+    [stageKeysEnabled, kioskLayout]
+  );
+  const memorySideBySide = kioskLayout && memoryArrangement === 'side-by-side';
+  /*
+    Side by side, each memory panel is a card of its own, framed exactly like
+    the conversation beside it, so the band reads as three peers. (One card
+    with a divider down the middle was tried too: at 1440 and 1080 it looked
+    the same but for the frame, and the phone-pairing button then sat inside
+    the card under one half only.)
+  */
+  const memoryArrangementValue = useMemo<MemoryArrangement>(
+    () =>
+      memorySideBySide
+        ? {
+            arrangement: 'side-by-side',
+            panelClassName: 'rounded-2xl border border-dark-border bg-dark-light',
+            contentClassName: 'kiosk-readable',
+          }
+        : { arrangement: 'tabs' },
+    [memorySideBySide]
+  );
 
   /*
     One pass, because snapshots and timeline rows are now interleaved: a stage
@@ -860,7 +896,12 @@ export function FullTuningSplitView({
     stageSection: stageSectionClass,
     memorySection: memorySectionClass,
     conversationCollapsible,
-  } = splitViewLayout(conversationCollapsed, compactLayoutEnabled, compactLayoutEnabled ? layoutMode : undefined);
+  } = splitViewLayout(
+    conversationCollapsed,
+    compactLayoutEnabled,
+    compactLayoutEnabled ? layoutMode : undefined,
+    memorySideBySide ? 'side-by-side' : 'tabs'
+  );
   /*
     Ids to rail words, rebuilt only when memory changes. Unknown ids are
     dropped rather than printed: an id is the agent's, not the visitor's.
@@ -1251,6 +1292,7 @@ export function FullTuningSplitView({
               className={`flex-1 overflow-hidden flex items-center justify-center px-2 sm:px-4 ${stageViewportClass}`}
             >
               {activeSnapshot ? (
+                <StageKeyHintsContext.Provider value={stageKeyHints}>
                 <div
                   ref={guiContentRef}
                   // The fit pass owns this node's `transform` and its
@@ -1337,6 +1379,7 @@ export function FullTuningSplitView({
                     />
                   </div>
                 </div>
+                </StageKeyHintsContext.Provider>
               ) : (
                 <div className="text-center text-sm text-fg-muted">Loading GUI history...</div>
               )}
@@ -1516,7 +1559,11 @@ export function FullTuningSplitView({
                 session could not be advanced from there at all.
               */}
               {onSubmitInput ? (
-                <div className={`shrink-0 border-t border-dark-border ${kioskLayout ? 'kiosk-readable' : ''}`}>
+                <div
+                  className={`shrink-0 border-t border-dark-border ${kioskLayout ? 'kiosk-readable' : ''} ${
+                    memorySideBySide ? 'kiosk-composer-stacked' : ''
+                  }`}
+                >
                   <ChatInput
                     chatWidthPx={null}
                     disabled={inputDisabled}
@@ -1546,12 +1593,37 @@ export function FullTuningSplitView({
           scrolls out of reach exactly when a visitor reaches for their phone.
         */}
         {kioskLayout && memoryPanel ? (
-          <aside className={memorySectionClass} aria-label={s.memory} data-testid="kiosk-memory-column">
-            <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-4 py-3">
-              <div className="kiosk-readable">{memoryPanel}</div>
-            </div>
+          <aside
+            className={memorySectionClass}
+            aria-label={s.memory}
+            data-testid="kiosk-memory-column"
+            data-memory-arrangement={memoryArrangement}
+          >
+            {memorySideBySide ? (
+              /*
+                Side by side: the two panels each scroll on their own, so this
+                box is a definite height and does not scroll itself. The zoom
+                is applied inside each panel (`contentClassName`), not here: a
+                zoomed `h-full` box would be laid out 1.35 times too tall.
+              */
+              <div className="min-h-0 flex-1">
+                <MemoryArrangementContext.Provider value={memoryArrangementValue}>
+                  {memoryPanel}
+                </MemoryArrangementContext.Provider>
+              </div>
+            ) : (
+              <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-4 py-3">
+                <div className="kiosk-readable">{memoryPanel}</div>
+              </div>
+            )}
             {devicesPanel ? (
-              <div className="kiosk-readable shrink-0 border-t border-dark-border p-2">
+              <div
+                className={`kiosk-readable shrink-0 p-2 ${
+                  memorySideBySide
+                    ? 'rounded-2xl border border-dark-border bg-dark-light'
+                    : 'border-t border-dark-border'
+                }`}
+              >
                 <button
                   type="button"
                   onClick={() => setDevicesOpen(true)}
@@ -1669,7 +1741,13 @@ const GuiSnapshotCard = memo(function GuiSnapshotCard({
       : () => {};
 
   return (
-    <div className="w-full max-w-full" style={{ width: `${cardWidthPx}px` }} data-testid="gui-snapshot-card">
+    <div
+      className="w-full max-w-full"
+      style={{ width: `${cardWidthPx}px` }}
+      data-testid="gui-snapshot-card"
+      // The only card whose Continue/Back the keyboard may press (`useStageKeys`).
+      {...(interactive ? { [STAGE_KEYS_SCOPE_ATTR]: '' } : null)}
+    >
       <SelectionBreadcrumb spec={snapshot.spec} stage={snapshot.stage} subdued={!interactive} />
       <div
         className={`rounded-2xl border bg-dark p-4 transition-colors ${frameClass}`}

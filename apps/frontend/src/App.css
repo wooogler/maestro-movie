@@ -456,6 +456,16 @@
   }
 }
 
+/*
+  Kiosk with the memory panels side by side: the conversation column is two
+  fifths of the band, and the composer's one-row layout left the text box about
+  170px wide, the placeholder wrapped onto three lines. Stacked, the box gets
+  the full row and the mic, send and verbosity controls sit under it.
+*/
+.kiosk-composer-stacked textarea {
+  flex-basis: 100%;
+}
+
 .kiosk-touch button::after {
   content: '';
   position: absolute;

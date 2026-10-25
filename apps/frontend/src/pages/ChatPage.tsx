@@ -81,6 +81,8 @@ import {
 import type { VoiceSpeakItem } from '../hooks/useRealtimeVoice';
 import { useVoiceCompanionHost, type VoiceOutputTarget } from '../hooks/useVoiceCompanionHost';
 import { usePushToTalkSetting } from '../hooks/usePushToTalk';
+import { useBookingCompleteAnnouncement } from '../hooks/useBookingCompleteAnnouncement';
+import { isHostUtteranceId } from '../voice/bookingCompleteAnnouncement';
 import { agentTools, type ToolDefinition } from '../agent/tools';
 import {
   DEMO_STUDY_MODE,
@@ -2668,14 +2670,27 @@ export function ChatPage({
     setVoiceModeEnabled(false);
   }, [voiceModeAvailable]);
 
+  // Demo only: the host's "booking complete" sentence, spoken before the
+  // voice-off below, which waits on `holdVoiceOn` (at most 6 s).
+  const { holdVoiceOn: holdVoiceForCompletion, handleHostPlaybackResolved } =
+    useBookingCompleteAnnouncement({
+      enabled: showMemoryPanel,
+      bookingComplete: isBookingCompleteSpec(activeSpec),
+      voiceModeEnabled,
+      language,
+      speak: speakAgentMessage,
+      onLogEvent: logStudyEvent,
+    });
+
   useEffect(() => {
     if (!voiceModeEnabled || !isBookingCompleteSpec(activeSpec)) return;
+    if (holdVoiceForCompletion) return;
     logStudyEvent('chat.voice_mode.auto_disabled', {
       reason: 'finish_task_step',
       stage: activeSpec?.stage ?? currentStage,
     });
     setVoiceModeEnabled(false);
-  }, [activeSpec, currentStage, logStudyEvent, voiceModeEnabled]);
+  }, [activeSpec, currentStage, holdVoiceForCompletion, logStudyEvent, voiceModeEnabled]);
 
   const currentStep = STAGE_ORDER.indexOf(currentStage) + 1;
   const previousStage = getPrevStage(currentStage);
@@ -2855,6 +2870,12 @@ export function ChatPage({
         completion is a no-op: the start already did it.
       */
       releasePendingSpeech('playback-complete');
+      // The host's own sentences (booking complete) were never the agent's:
+      // no `agent.message`, no barrier credit, so no completion for it either.
+      if (isHostUtteranceId(item.id)) {
+        handleHostPlaybackResolved(item, { interrupted });
+        return;
+      }
       // A replay is the host's own doing: the agent issued no `agent.message`
       // for it and armed no barrier credit, so reporting a completion here
       // would spend a credit belonging to some other utterance and let the
@@ -2865,7 +2886,7 @@ export function ChatPage({
       }
       ttsCompleteRef.current?.({ interrupted, messageId: item.id });
     },
-    [releasePendingSpeech]
+    [handleHostPlaybackResolved, releasePendingSpeech]
   );
 
   const {
