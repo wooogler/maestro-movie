@@ -220,6 +220,23 @@ export function decideTabletIdle(input: TabletIdleInput): TabletIdleVerdict {
 }
 
 /**
+ * How long "busy" may hold off the idle clock with nothing else happening.
+ *
+ * Busy means the agent is planning or speaking or the visitor is mid-utterance,
+ * and none of those lasts a minute and a half on its own. A flag that stays up
+ * longer is stuck — a planner request that hung, a voice status that never
+ * came back — and an unattended tablet must still reach its next visitor.
+ * Any real activity (a touch, a message, a screen change) starts the hold over.
+ */
+export const TABLET_BUSY_HOLD_MAX_MS = 90_000;
+
+export function tabletBusyHolds(input: { busy: boolean; busySinceMs: number | null; nowMs: number }): boolean {
+  if (!input.busy) return false;
+  if (input.busySinceMs === null) return true;
+  return input.nowMs - input.busySinceMs < TABLET_BUSY_HOLD_MAX_MS;
+}
+
+/**
  * Whether a session record found at launch should be finished rather than
  * resumed. The installed PWA resumes a running session after a relaunch; on a
  * booth tablet that is only right if the same visitor is still there, which is

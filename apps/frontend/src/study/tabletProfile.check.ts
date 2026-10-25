@@ -16,6 +16,7 @@ import {
   MAX_TABLET_IDLE_SECONDS,
   MIN_TABLET_IDLE_SECONDS,
   TABLET_BOOKING_COMPLETE_RESET_MS,
+  TABLET_BUSY_HOLD_MAX_MS,
   TABLET_IDLE_WARNING_MS,
   createTabletProfile,
   decideTabletIdle,
@@ -24,6 +25,7 @@ import {
   serializeTabletProfile,
   shouldDiscardRestoredTabletSession,
   stripTabletProfileFromUrl,
+  tabletBusyHolds,
   type TabletIdleInput,
 } from './tabletProfile';
 import { readLanguageFromUrl, stripLanguageFromUrl } from '../i18n/language';
@@ -176,6 +178,24 @@ section('5. the idle reset');
   check(
     'the complete reset does not wait for the full idle window',
     shown(21, { idleSeconds: MAX_TABLET_IDLE_SECONDS }).kind === 'reset'
+  );
+}
+
+// -----------------------------------------------------------------------------
+section('5b. a stuck busy flag cannot hold the tablet forever');
+// -----------------------------------------------------------------------------
+{
+  const now = 2_000_000;
+  check('not busy never holds', !tabletBusyHolds({ busy: false, busySinceMs: now - 1000, nowMs: now }));
+  check('a fresh busy stretch holds', tabletBusyHolds({ busy: true, busySinceMs: now - 5_000, nowMs: now }));
+  check('a long answer (60 s) still holds', tabletBusyHolds({ busy: true, busySinceMs: now - 60_000, nowMs: now }));
+  check(
+    `busy for ${TABLET_BUSY_HOLD_MAX_MS / 1000} s with nothing else happening stops holding`,
+    !tabletBusyHolds({ busy: true, busySinceMs: now - TABLET_BUSY_HOLD_MAX_MS, nowMs: now })
+  );
+  check(
+    'and the idle clock then runs: a hung planner still reaches the next visitor',
+    TABLET_BUSY_HOLD_MAX_MS + DEFAULT_TABLET_IDLE_SECONDS * 1000 < 15 * 60 * 1000
   );
 }
 

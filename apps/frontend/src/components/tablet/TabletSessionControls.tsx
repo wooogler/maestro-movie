@@ -16,6 +16,7 @@ import {
   TABLET_BOOKING_COMPLETE_RESET_MS,
   decideTabletIdle,
   parseIdleSeconds,
+  tabletBusyHolds,
 } from '../../study/tabletProfile';
 import { stampTabletActivity } from '../../study/tabletProfileStorage';
 
@@ -58,6 +59,7 @@ export function useTabletIdleReset({
 }: TabletIdleOptions): { state: IdlePhase; stay: () => void } {
   const lastActivityRef = useRef(Date.now());
   const completeSinceRef = useRef<number | null>(null);
+  const busySinceRef = useRef<number | null>(null);
   const firedRef = useRef(false);
   const busyRef = useRef(busy);
   busyRef.current = busy;
@@ -68,14 +70,18 @@ export function useTabletIdleReset({
   const evaluate = useCallback(() => {
     if (!enabled || firedRef.current) return;
     const nowMs = Date.now();
-    if (busyRef.current) {
+    if (!busyRef.current) busySinceRef.current = null;
+    else if (busySinceRef.current === null) busySinceRef.current = nowMs;
+    // Busy holds the clock, but not forever: see TABLET_BUSY_HOLD_MAX_MS.
+    const holding = tabletBusyHolds({ busy: busyRef.current, busySinceMs: busySinceRef.current, nowMs });
+    if (holding) {
       lastActivityRef.current = nowMs;
       stampTabletActivity(nowMs);
     }
     const verdict = decideTabletIdle({
       nowMs,
       lastActivityMs: lastActivityRef.current,
-      busy: busyRef.current,
+      busy: holding,
       idleSeconds,
       bookingCompleteSinceMs: completeSinceRef.current,
     });
@@ -104,6 +110,8 @@ export function useTabletIdleReset({
   const bump = useCallback(() => {
     const nowMs = Date.now();
     lastActivityRef.current = nowMs;
+    // Real activity: a busy stretch that is still going starts its hold over.
+    if (busySinceRef.current !== null) busySinceRef.current = nowMs;
     stampTabletActivity(nowMs);
     evaluate();
   }, [evaluate]);

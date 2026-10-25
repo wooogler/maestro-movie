@@ -75,7 +75,9 @@ agent activity and no touch, a **Still there?** card counts down 15 seconds.
 Any touch cancels it. At `idle` seconds the session is finished and the tablet
 is back on the start screen, in the profile's language, with the box ticked
 again. "Agent activity" includes the agent planning, the agent speaking and the
-visitor mid-utterance, so a long answer never triggers it.
+visitor mid-utterance, so a long answer never triggers it. That hold lasts at
+most 90 seconds with nothing else happening, so a planner request that hangs
+still ends in a reset (90 s + `idle`) rather than a tablet stuck mid-booking.
 
 **When the booking is done.** The confirmation stays up for 20 seconds after
 the agent stops talking, with "All done! Starting over for the next visitor in
