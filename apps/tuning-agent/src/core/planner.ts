@@ -1105,6 +1105,7 @@ export async function planNextAction(
             requirementConflicts: true,
             openingQuestions: true,
             seatChoices: true,
+            hiddenCountOnce: true,
           }
         : {}),
     };

@@ -83,6 +83,7 @@ const DECISIVE_MARKER = 'Deciding for the visitor (booth demo)';
 const CONFLICT_MARKER = 'Two requirements that rule each other out (booth demo)';
 const OPENING_MARKER = 'Opening a stage (booth demo)';
 const SEAT_MARKER = 'Seats (booth demo)';
+const HIDDEN_ONCE_MARKER = 'Hidden options, said once (booth demo)';
 
 /*
   The prompt the recorded study ran against, pinned by content.
@@ -178,6 +179,14 @@ for (const config of STUDY_CONFIGS) {
   check(`${key}: ...and neither does leaving it undefined`, before === seatsUndefined);
   check(`${key}: ...nor asking for it outside a demo session`, before === seatsWithoutDemo);
   check(`${key}: no seat-choice section appears`, !before.includes(SEAT_MARKER));
+
+  const hiddenOff = buildSystemPrompt(wf, STAGE_META, config.language, false, false, false, false, false, false, false, false, false);
+  const hiddenUndefined = buildSystemPrompt(wf, STAGE_META, config.language, false, false, false, false, false, false, false, false, undefined);
+  const hiddenWithoutDemo = buildSystemPrompt(wf, STAGE_META, config.language, false, false, false, false, false, false, false, false, true);
+  check(`${key}: the hidden-count-once flag off changes nothing`, before === hiddenOff);
+  check(`${key}: ...and neither does leaving it undefined`, before === hiddenUndefined);
+  check(`${key}: ...nor asking for it outside a demo session`, before === hiddenWithoutDemo);
+  check(`${key}: no hidden-count-once section appears`, !before.includes(HIDDEN_ONCE_MARKER));
 }
 check(
   'the style rule the narration section would override is still there, untouched',
@@ -425,6 +434,8 @@ const PINNED_BOOTH_SECTIONS: Record<string, string> = {
   [DECISIVE_MARKER]: 'cface6aed128cd7e',
   [OPENING_MARKER]: 'c8c8a3a878a2ab86',
   [SEAT_MARKER]: 'caf0d17d0a680b41',
+  // Round 3 (2026-10-24): measured with noiseRepeat.regress.ts.
+  [HIDDEN_ONCE_MARKER]: '14586fdcee64e58c',
 };
 
 /** One section of a built prompt: from its marker up to the next blank-free section header. */
@@ -437,7 +448,7 @@ function sectionText(prompt: string, marker: string): string {
 }
 
 function fullBoothPrompt(language: string): string {
-  return buildSystemPrompt(workflow(true, true), STAGE_META, language, false, true, false, true, true, true, true, true);
+  return buildSystemPrompt(workflow(true, true), STAGE_META, language, false, true, false, true, true, true, true, true, true);
 }
 
 console.log('\n13. a booth demo session gets the opening-question section, after decisive selection');
@@ -498,6 +509,36 @@ console.log('\n14. a booth demo session gets the seat-choice section, after the 
   const withAgain = buildSystemPrompt(workflow(true), STAGE_META, 'en', false, false, false, true, true, false, false, true);
   check('the memo keys on the flag: off after on is off', !withoutAfter.includes(SEAT_MARKER));
   check('and on after off is on again', withAgain.includes(SEAT_MARKER) && withFirst === withAgain);
+}
+
+console.log('\n14b. a booth demo session gets the hidden-count-once section, after the seat section');
+{
+  const off = buildSystemPrompt(workflow(true, true), STAGE_META, 'ko', false, true, false, true, true, true, true, true, false);
+  const on = buildSystemPrompt(workflow(true, true), STAGE_META, 'ko', false, true, false, true, true, true, true, true, true);
+  check('the section is appended', on.includes(HIDDEN_ONCE_MARKER));
+  check('it only adds — every line of the off prompt is still there', off.split('\n').every((line) => on.includes(line)));
+  check(
+    'it sits after the decisive and seat sections and before the conflict and language sections',
+    on.indexOf(HIDDEN_ONCE_MARKER) > on.indexOf(DECISIVE_MARKER) &&
+      on.indexOf(HIDDEN_ONCE_MARKER) > on.indexOf(SEAT_MARKER) &&
+      on.indexOf(HIDDEN_ONCE_MARKER) < on.indexOf(CONFLICT_MARKER) &&
+      on.indexOf(HIDDEN_ONCE_MARKER) < on.indexOf('Language:')
+  );
+  check('the Filtered stages rule it narrows is still there, byte for byte', on.includes('Whenever hiddenByFilterCount is present, say it'));
+  const text = sectionText(on, HIDDEN_ONCE_MARKER);
+  check('it is said once per filter, in the turn that changes it', /once per filter/.test(text) && /applies, changes or removes a filter/.test(text));
+  check('or when the visitor asks', /when the visitor asks what is hidden/.test(text));
+  check('never again at the stage unless the count changed', /unless the count has changed/.test(text));
+  check('it overrides the Filtered stages rule and rule (4)', /this section wins/.test(text) && /rule \(4\)/.test(text));
+  check('its examples are English, left to the language section to translate', !/[가-힣]/.test(text));
+  const noGui = buildSystemPrompt(workflow(false, true), STAGE_META, 'en', false, false, false, true, true, true, true, false, false);
+  const noGuiAsked = buildSystemPrompt(workflow(false, true), STAGE_META, 'en', false, false, false, true, true, true, true, false, true);
+  check('without GUI adaptation there is no Filtered stages rule, so nothing is added', noGui === noGuiAsked);
+  const withFirst = buildSystemPrompt(workflow(true), STAGE_META, 'en', false, false, false, true, true, false, false, false, true);
+  const withoutAfter = buildSystemPrompt(workflow(true), STAGE_META, 'en', false, false, false, true, true, false, false, false, false);
+  const withAgain = buildSystemPrompt(workflow(true), STAGE_META, 'en', false, false, false, true, true, false, false, false, true);
+  check('the memo keys on the flag: off after on is off', !withoutAfter.includes(HIDDEN_ONCE_MARKER));
+  check('and on after off is on again', withAgain.includes(HIDDEN_ONCE_MARKER) && withFirst === withAgain);
 }
 
 console.log('\n15. the booth sections, pinned by content');

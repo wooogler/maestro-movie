@@ -106,6 +106,13 @@ interface PlannerInput {
    * leaves the prompt exactly as it was. See SEAT_CHOICE_RULES.
    */
   seatChoices?: boolean;
+  /**
+   * Booth demo only: say how many options a filter hides once per filter, not
+   * on every turn at the stage. Absent or false leaves the prompt exactly as it
+   * was. See HIDDEN_COUNT_ONCE_RULES; its own flag so `noiseRepeat.regress.ts`
+   * can replay a turn with and without it against the same demo prompt.
+   */
+  hiddenCountOnce?: boolean;
 }
 
 interface PlannerAction {
@@ -799,6 +806,26 @@ const SEAT_CHOICE_RULES =
   "- At the seat stage, where this section conflicts with the Highlight economy rule against picking which qualifying choices to mark, the soft-preference highlight rules, the decisive-selection section's ask rules, or the brevity section, this section wins.\n" +
   "- Begin the reason field with [seat-choices] when you mark choices this way, and with [seat-recommend] when you pick for a visitor who delegated.";
 
+/**
+ * Demo only. KSEA poster session, 2026-10-24 (dc803c81, 17:59:44–18:00:11):
+ * "오후 10시 이전 종료 조건 때문에 4개 상영이 숨겨져 있어요…" five times in
+ * four turns — on the filter step, again on the respond after it, then on each
+ * yes and on a named start time — and in 73debf02 the 15-mile count instead of
+ * an answer, twice. A quarter of the hall's agent audio was hidden-count and
+ * narration sentences. The Filtered stages rule says "Whenever
+ * hiddenByFilterCount is present, say it", which fires on every planner call
+ * while a filter stands and outranks brevity's "never say it again"; rule (4)
+ * of the decisive-selection section repeats it. Both are kept byte-for-byte;
+ * this section, appended for the booth only after them, says when. The runtime
+ * half (core/repeatLedger.ts) drops a restated count the model writes anyway.
+ */
+const HIDDEN_COUNT_ONCE_RULES =
+  "Hidden options, said once (booth demo):\n" +
+  "- Say how many options a filter is hiding, and which requirement hides them, once per filter: in the turn that applies, changes or removes a filter at this stage, on one step of that turn only (not on the filter step and again on the respond after it), or when the visitor asks what is hidden or whether there are other options.\n" +
+  "- On every other turn at the same stage, do not mention the hidden options or the requirement hiding them, in any wording, unless the count has changed since you last said it. Read history: a count already in agent text or linkedAgentText at this stage has been heard. A yes, a pick, a question about something else or an unclear utterance is answered without it.\n" +
+  "- When rule (4) of the decisive-selection section asks a question and the count was already said at this stage, the question is the whole message.\n" +
+  "- Where this section conflicts with the Filtered stages rule or with the decisive-selection section's instruction to say how many are hidden before the question, this section wins.";
+
 export function buildLanguageSection(language: string | undefined): string | null {
   if (!language || language === "en") return null;
   return LANGUAGE_PROMPTS[language] ?? null;
@@ -828,6 +855,7 @@ export function buildSystemPrompt(
   requirementConflicts?: boolean,
   openingQuestions?: boolean,
   seatChoices?: boolean,
+  hiddenCountOnce?: boolean,
 ): string {
   const cpMemory = hasCpMemoryContext(workflow);
   const guiAdaptation = workflow.guiAdaptationEnabled !== false;
@@ -847,6 +875,8 @@ export function buildSystemPrompt(
   // Marks and selectMultiple are GUI tools; without adaptation there is
   // nothing for it to govern.
   const seats = seatChoices === true && demo && guiAdaptation;
+  // Booth only, and only where the Filtered stages rule it narrows exists.
+  const hiddenOnce = hiddenCountOnce === true && demo && guiAdaptation;
   const narrate = narrateAdaptations === true && guiAdaptation;
   // The two are contradictory by construction — a card wants the adaptation
   // described, a voice session wants it left to the screen. Resolved here so a
@@ -854,7 +884,7 @@ export function buildSystemPrompt(
   const brevity = spokenBrevity === true && !narrate;
   // Language belongs in the key: a visitor may switch mid-session, and the
   // cached prompt would otherwise keep the language they started in.
-  const key = `cp:${cpMemory}|gui:${guiAdaptation}|meta:${stageMeta ? stageMeta.length : 0}|lang:${language ?? "en"}|narrate:${narrate}|brief:${brevity}|preload:${preloaded}|demo:${demo}|decisive:${decisive}|conflicts:${conflicts}|opening:${opening}|seats:${seats}`;
+  const key = `cp:${cpMemory}|gui:${guiAdaptation}|meta:${stageMeta ? stageMeta.length : 0}|lang:${language ?? "en"}|narrate:${narrate}|brief:${brevity}|preload:${preloaded}|demo:${demo}|decisive:${decisive}|conflicts:${conflicts}|opening:${opening}|seats:${seats}|hiddenOnce:${hiddenOnce}`;
 
   if (key === cachedSystemPromptKey && cachedSystemPrompt) {
     return cachedSystemPrompt;
@@ -913,6 +943,12 @@ export function buildSystemPrompt(
   }
   if (seats) {
     sections.push(SEAT_CHOICE_RULES);
+  }
+  // After decisive selection, whose rule (4) it narrows; before the conflict
+  // section (whose two-sentence answer is not a hidden-count restatement) and
+  // the language section.
+  if (hiddenOnce) {
+    sections.push(HIDDEN_COUNT_ONCE_RULES);
   }
   if (conflicts) {
     sections.push(REQUIREMENT_CONFLICT_RULES);
@@ -1496,6 +1532,7 @@ export async function planActionWithOpenAI(
       input.requirementConflicts,
       input.openingQuestions,
       input.seatChoices,
+      input.hiddenCountOnce,
     ) +
     "\n" +
     OPENAI_TOOL_CALLING_RULES;
