@@ -20,6 +20,14 @@
 //   {"wait":  <ms>}             pause
 //   {"shot":  "<path>"}         write a PNG
 //   {"text":  true}             print document.body.innerText, newlines as " | "
+//   {"key":   "Enter"}          a real key press (keyDown + keyUp) through
+//                               Input.dispatchKeyEvent, so the page sees a
+//                               trusted event: Enter, ArrowLeft, ArrowRight,
+//                               Space, Escape, Tab, or a single character
+//   {"when":  "<js>", ...}      run the rest of this step only if <js> is truthy
+//   {"size":  "1080x1920"}      re-emulate the viewport mid-run (same page)
+//   {"type":  "<text>"}         insert text at the focused element, as an IME
+//                               commit would (Input.insertText)
 //
 // Flags: --out= (final screenshot), --size=WxH (default 1280x900),
 //        --wait= (ms after navigation before the first step, default 3500),
@@ -31,6 +39,16 @@ import os from 'node:os';
 import path from 'node:path';
 import process from 'node:process';
 import WebSocket from 'ws';
+
+/** What Input.dispatchKeyEvent needs for the named keys a check presses. */
+const KEYS = {
+  Enter: { key: 'Enter', code: 'Enter', keyCode: 13, text: '\r' },
+  ArrowLeft: { key: 'ArrowLeft', code: 'ArrowLeft', keyCode: 37 },
+  ArrowRight: { key: 'ArrowRight', code: 'ArrowRight', keyCode: 39 },
+  Space: { key: ' ', code: 'Space', keyCode: 32, text: ' ' },
+  Escape: { key: 'Escape', code: 'Escape', keyCode: 27 },
+  Tab: { key: 'Tab', code: 'Tab', keyCode: 9 },
+};
 
 const CHROMIUM = process.env.CHROMIUM_BIN || '/usr/bin/chromium-browser';
 const HOST = process.env.FRONTEND_HOST || '127.0.0.1';
@@ -158,6 +176,13 @@ try {
   await new Promise((resolve) => setTimeout(resolve, Number(flag('wait', '3500'))));
 
   for (const step of steps) {
+    if (step.when) {
+      const go = await evaluate(`Boolean(${step.when})`);
+      if (!go) {
+        console.log(`[drive] skipped (when: ${step.when})`);
+        continue;
+      }
+    }
     if (step.click) {
       /*
         By text, not by selector. React renders no `autofocus` attribute for its
@@ -180,6 +205,33 @@ try {
       if (String(clicked).startsWith('NOT FOUND') || String(clicked).startsWith('DISABLED')) {
         throw new Error(clicked);
       }
+    }
+    if (step.key) {
+      const spec = KEYS[step.key] ?? {
+        key: step.key,
+        code: `Key${step.key.toUpperCase()}`,
+        keyCode: step.key.toUpperCase().charCodeAt(0),
+        text: step.key,
+      };
+      const base = { key: spec.key, code: spec.code, windowsVirtualKeyCode: spec.keyCode };
+      await send('Input.dispatchKeyEvent', {
+        type: spec.text ? 'keyDown' : 'rawKeyDown',
+        ...base,
+        ...(spec.text ? { text: spec.text } : {}),
+      });
+      await send('Input.dispatchKeyEvent', { type: 'keyUp', ...base });
+      console.log(`[drive] key: ${step.key}`);
+    }
+    if (step.size) {
+      const [w, h] = String(step.size).split('x').map(Number);
+      await send('Emulation.setDeviceMetricsOverride', {
+        width: w, height: h, deviceScaleFactor: 1, mobile: w < 700,
+      });
+      console.log(`[drive] size: ${w}x${h}`);
+    }
+    if (step.type) {
+      await send('Input.insertText', { text: step.type });
+      console.log(`[drive] typed: ${step.type}`);
     }
     if (step.eval) console.log(`[drive] ${JSON.stringify(await evaluate(step.eval))}`);
     if (step.text) {
