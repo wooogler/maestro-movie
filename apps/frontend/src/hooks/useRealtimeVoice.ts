@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { PttMachine, pttTranscriptToDeliver, type PttEffect } from '../voice/pushToTalk';
 import { usePushToTalk } from './usePushToTalk';
+import { matchRealtimeError, realtimeErrorClientEventId } from '../voice/realtimeErrors';
 
 /**
  * Voice mode over an OpenAI Realtime WebRTC session.
@@ -979,12 +980,15 @@ export function useRealtimeVoice({
         }
 
         case 'error': {
-          const eventId = readString(event.event_id);
-          // The id of the CLIENT event that failed is `error.event_id`;
-          // `event.event_id` is the server's own id for this error event.
-          const clientEventId =
-            readString((event.error as Record<string, unknown> | undefined)?.event_id) ?? eventId;
-          if (clientEventId?.startsWith('ptt-commit-')) {
+          // The failing CLIENT event's id is `error.event_id`; the top-level
+          // `event_id` is the server's own id for this error (voice/realtimeErrors.ts).
+          const clientEventId = realtimeErrorClientEventId(event);
+          const active = activeRef.current;
+          const match = matchRealtimeError(clientEventId, {
+            bargeInEventIds: bargeInEventIdsRef.current,
+            activeSpeakEventId: active ? `speak-${active.seq}` : null,
+          });
+          if (match === 'ptt-commit' && clientEventId) {
             // Typically "buffer too small": under 100 ms of audio reached the
             // server. Nothing was committed; back to idle.
             onLogEventRef.current?.('chat.voice_input.ignored', {
@@ -996,17 +1000,11 @@ export function useRealtimeVoice({
             return;
           }
           // Clearing an already-empty buffer is not worth a log line.
-          if (clientEventId?.startsWith('ptt-clear-')) return;
-          // A press's own cancel finding nothing to cancel (the server got
-          // there first). Push-to-talk only; the VAD path below is unchanged.
-          if (pttModeRef.current && clientEventId && bargeInEventIdsRef.current.has(clientEventId)) {
-            bargeInEventIdsRef.current.delete(clientEventId);
-            return;
-          }
+          if (match === 'ptt-clear') return;
           // Cancelling an already-cancelled response is expected during
-          // barge-in; the server got there first.
-          if (eventId && bargeInEventIdsRef.current.has(eventId)) {
-            bargeInEventIdsRef.current.delete(eventId);
+          // barge-in (VAD or a push-to-talk press); the server got there first.
+          if (match === 'barge-in' && clientEventId) {
+            bargeInEventIdsRef.current.delete(clientEventId);
             return;
           }
           const message =
@@ -1020,8 +1018,7 @@ export function useRealtimeVoice({
 
           // A rejected response.create never produces response.done, so nothing
           // else would ever close out this utterance.
-          const active = activeRef.current;
-          if (active && eventId === `speak-${active.seq}`) {
+          if (match === 'speak-rejected') {
             completeActive(false, 'speak-rejected');
             setOutputStatusSafe(enabledRef.current ? 'idle' : 'off');
             pumpQueueRef.current?.();
