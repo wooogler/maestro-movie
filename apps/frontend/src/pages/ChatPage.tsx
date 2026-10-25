@@ -95,6 +95,7 @@ import {
   buildTranscriptionPrompt,
   collectStageHintLabels,
   getIgnoredVoiceTranscriptReason,
+  isLowContentTranscript,
   useLanguage,
   type Language,
   type UiStrings,
@@ -2493,11 +2494,13 @@ export function ChatPage({
   }, [voiceModeEnabled, logStudyEvent]);
 
   const submitChatInput = useCallback(
-    (text: string, source: 'text' | 'voice' = 'text') => {
+    (text: string, source: 'text' | 'voice' = 'text', options?: { lowContent?: boolean }) => {
       const trimmed = text.trim();
       if (!trimmed || !isAgentInteractionEnabled) return;
 
-      stopAgentSpeech();
+      // Booth only (handleVoiceTranscript sets it): a fragment or hall noise
+      // must not cut the agent off mid-sentence. It is still delivered below.
+      if (!options?.lowContent) stopAgentSpeech();
       logDerivedEvents(
         buildPreferenceExtractionEvents({
           stage: currentStage,
@@ -2775,6 +2778,9 @@ export function ChatPage({
   );
   const voiceTranscriptionHintsRef = useRef(voiceTranscriptionHints);
   voiceTranscriptionHintsRef.current = voiceTranscriptionHints;
+  /** Booth demo session: the noise rules in handleVoiceTranscript apply. */
+  const isBoothSessionRef = useRef(false);
+  isBoothSessionRef.current = normalizeStudyMode(studyModePreset) === DEMO_STUDY_MODE;
 
   /**
    * Every transcript enters here, whichever device heard it. The filter, the
@@ -2791,6 +2797,8 @@ export function ChatPage({
         shortInputMaxDurationMs: SHORT_VOICE_INPUT_MAX_DURATION_MS,
         shortInputMaxChars: SHORT_VOICE_INPUT_MAX_CHARS,
         hintLabels: voiceTranscriptionHintsRef.current,
+        // Booth only: one augmented label read back is an echo too.
+        ...(isBoothSessionRef.current ? { boothEcho: true } : {}),
       });
       if (ignoredReason) {
         logStudyEvent('chat.voice_input.ignored', {
@@ -2802,6 +2810,23 @@ export function ChatPage({
         return;
       }
 
+      /*
+        Booth only (KSEA poster session, 2026-10-24): 25 of 128 agent sentences
+        were stopped by a transcript arriving, mostly hall noise. A low-content
+        one is still sent, but lets the sentence finish.
+      */
+      const lowContent =
+        isBoothSessionRef.current &&
+        isLowContentTranscript(normalizedTranscript, language, voiceTranscriptionHintsRef.current);
+      if (lowContent) {
+        logStudyEvent('chat.voice_input.low_content', {
+          language,
+          durationMs,
+          text: normalizedTranscript,
+        });
+        submitChatInputRef.current?.(normalizedTranscript, 'voice', { lowContent: true });
+        return;
+      }
       submitChatInputRef.current?.(normalizedTranscript, 'voice');
     },
     [language, logStudyEvent]

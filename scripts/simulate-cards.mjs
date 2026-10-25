@@ -68,6 +68,17 @@
 // sentence). Those turns are marked as follow-ups: they are the driver's
 // words, not the card's.
 //
+// --noise (Round 3, KSEA poster hall): between the card's turns the "hall"
+// speaks too. Each visitor line is followed, while the agent's answer is still
+// playing, by one low-content line, and once the agent has settled by another
+// at the question on the floor — fragments, a bare "what?", the kiosk's own
+// augmented label read back, and a lone "네." (NOISE_LINES). Noise goes in
+// through the voice transcript funnel itself (ChatPage's handleVoiceTranscript,
+// found through the React fiber), not onSubmit, so the booth's echo gate and
+// low-content rule see it exactly as they would a real transcript. The run
+// ends with a tally: questions spoken again at a stage, sentences cut, hidden
+// count sentences, and whether it booked.
+//
 // Other flags: --turn-timeout= (ms per turn before giving up, default 90000),
 // --settle= (ms of relay silence that counts as "the agent is waiting" when
 // the agent sends no status, default 4000), --size=WxH (default 1280x900),
@@ -104,6 +115,7 @@ const [width, height] = flag('size', '1280x900').split('x').map(Number);
 const jsonOut = flag('json', null);
 const voice = process.argv.includes('--voice');
 const eager = process.argv.includes('--eager');
+const noise = process.argv.includes('--noise');
 const STAGE_ORDER = ['movie', 'theater', 'date', 'time', 'seat', 'confirm'];
 const shotOut = flag('shot', null);
 
@@ -192,6 +204,15 @@ const WALK_REPLIES = {
 };
 
 const QUICK_IDS = ['movie', 'theater', 'date', 'time', 'seat'];
+
+// --noise: the hall. Made up in the shape of the poster session's noise (no
+// visitor's words): two fragments, a bare "what?", the kiosk's own augmented
+// label read back ('@echo': one on screen with a "·", or a fragment when there
+// is none), and a lone yes at a question. Used in rotation.
+const NOISE_LINES = {
+  ko: ['저기 그게...', '이걸', '응?', '@echo', '네.'],
+  en: ['wait...', 'that', 'what?', '@echo', 'Yes.'],
+};
 
 // What the visitor says between card lines, keyed on the agent's last
 // sentence: a which-one question gets a pick (on the seat map, "you choose" —
@@ -390,20 +411,138 @@ async function say(browser, text) {
   }
 }
 
+
+// Fibers are double-buffered, and a DOM node's fiber pointer is only refreshed
+// when that node itself re-renders, so walking up from the textarea can land
+// in the stale alternate tree (old props: a composer that is long enabled
+// again still reads disabled). Start from the root's CURRENT fiber instead.
+const CURRENT_FIBERS = `(() => {
+  const container = document.getElementById('root');
+  const key = container && Object.keys(container).find((k) => k.startsWith('__reactContainer'));
+  const root = key ? container[key].stateNode : null;
+  const out = [];
+  const stack = root ? [root.current] : [];
+  while (stack.length) {
+    const fiber = stack.pop();
+    if (!fiber) continue;
+    out.push(fiber);
+    if (fiber.sibling) stack.push(fiber.sibling);
+    if (fiber.child) stack.push(fiber.child);
+  }
+  return out;
+})()`;
+
 async function sayOnce(browser, text) {
   const result = await browser.evaluate(`((text) => {
-    const textarea = document.querySelector('textarea');
-    if (!textarea) return 'no composer';
-    const key = Object.keys(textarea).find((k) => k.startsWith('__reactFiber'));
-    let fiber = textarea[key];
-    while (fiber && !(fiber.memoizedProps && typeof fiber.memoizedProps.onSubmit === 'function'
-      && 'voiceModeAvailable' in fiber.memoizedProps)) fiber = fiber.return;
-    if (!fiber) return 'no ChatInput above the composer';
+    if (!document.querySelector('textarea')) return 'no composer';
+    const fiber = ${CURRENT_FIBERS}.find((f) => f.memoizedProps && typeof f.memoizedProps.onSubmit === 'function'
+      && 'voiceModeAvailable' in f.memoizedProps);
+    if (!fiber) return 'no ChatInput in the tree';
     if (fiber.memoizedProps.disabled) return 'composer disabled';
     fiber.memoizedProps.onSubmit(text);
     return 'ok';
   })(${JSON.stringify(text)})`);
   if (result !== 'ok') throw new Error(`could not submit "${text}": ${result}`);
+}
+
+/*
+  --noise: a transcript, through the funnel every real one ends in. The
+  callback is ChatPage's useCallback whose body logs chat.voice_input.ignored;
+  its hook cell holds [fn, deps]. Dev builds keep the source text, which is how
+  it is told apart from the other callbacks.
+*/
+async function sayVoice(browser, text, durationMs = 1200) {
+  const result = await browser.evaluate(`((text, durationMs) => {
+    if (!document.querySelector('textarea')) return 'no composer';
+    for (const fiber of ${CURRENT_FIBERS}) {
+      for (let hook = fiber.memoizedState; hook && typeof hook === 'object' && 'next' in hook; hook = hook.next) {
+        const cell = hook.memoizedState;
+        const fn = Array.isArray(cell) && typeof cell[0] === 'function' ? cell[0] : null;
+        if (fn && String(fn).includes('chat.voice_input.ignored')) {
+          fn({ text, durationMs });
+          return 'ok';
+        }
+      }
+    }
+    return 'no voice transcript handler';
+  })(${JSON.stringify(text)}, ${durationMs})`);
+  if (result !== 'ok') throw new Error(`could not inject "${text}": ${result}`);
+}
+
+/** An on-screen augmented label ("Clayface · R"), for the echo line. */
+function echoLabel(frames) {
+  const spec = lastUiSpec(frames);
+  const labels = (spec?.visibleItems ?? []).map((item) => (item && typeof item === 'object' ? item.value : item));
+  return labels.find((label) => typeof label === 'string' && label.includes('·')) ?? null;
+}
+
+/** Quiet for `quietMs` after `since` (a noise turn may rightly say nothing). */
+async function waitForQuiet(frames, since, quietMs = 6000, capMs = 45000) {
+  const start = Date.now();
+  while (Date.now() - start < capMs) {
+    const inbound = frames.filter((frame) => frame.at >= since && frame.direction === 'in');
+    const statuses = inbound.filter((frame) => frame.data.type === 'agent.status');
+    const idle = statuses.length === 0 || statuses.at(-1).data.payload?.phase === 'idle';
+    const lastAt = Math.max(since, inbound.at(-1)?.at ?? 0);
+    const said = inbound.filter((frame) => frame.data.type === 'agent.message').length;
+    const played = frames.filter((frame) => frame.at >= since && frame.direction === 'out' && frame.data.type === 'tts.playback.complete').length;
+    if (idle && Date.now() - lastAt >= quietMs && (!voice || played >= said)) return;
+    await sleep(300);
+  }
+}
+
+// The same near-repeat measure as apps/tuning-agent/src/core/repeatLedger.ts.
+const normForRepeat = (text) => text.normalize('NFKC').toLowerCase().replace(/[^\p{L}\p{N}]+/gu, '');
+function bigramDice(a, b) {
+  const x = normForRepeat(a);
+  const y = normForRepeat(b);
+  if (!x || !y) return 0;
+  if (x === y) return 1;
+  const grams = (v) => {
+    const m = new Map();
+    const c = Array.from(v);
+    for (let i = 0; i + 1 < c.length; i += 1) m.set(c[i] + c[i + 1], (m.get(c[i] + c[i + 1]) ?? 0) + 1);
+    return m;
+  };
+  const gx = grams(x);
+  const gy = grams(y);
+  let shared = 0;
+  let tx = 0;
+  let ty = 0;
+  for (const v of gx.values()) tx += v;
+  for (const v of gy.values()) ty += v;
+  for (const [g, v] of gx) shared += Math.min(v, gy.get(g) ?? 0);
+  return tx + ty ? (2 * shared) / (tx + ty) : 0;
+}
+const splitForRepeat = (text) => text.split(/(?<=[?!。？！])\s*|(?<=\.)\s+/u).map((t) => t.trim()).filter((t) => normForRepeat(t));
+
+/** The tally --noise prints: what the visitor heard, from the relay frames. */
+function noiseTally(frames) {
+  const said = [];
+  let stage = null;
+  let spokenHere = [];
+  let repeatedQuestions = 0;
+  let hiddenSentences = 0;
+  let messages = 0;
+  for (const frame of frames) {
+    const spec = frame.direction === 'out' ? (frame.data?.payload?.uiSpec ?? null) : null;
+    if (spec?.stage && spec.stage !== stage) {
+      stage = spec.stage;
+      spokenHere = [];
+    }
+    if (frame.direction !== 'in' || frame.data.type !== 'agent.message') continue;
+    messages += 1;
+    const text = String(frame.data.payload?.text ?? '');
+    for (const sentence of splitForRepeat(text)) {
+      if (/[?？]\s*$/u.test(sentence) && spokenHere.some((earlier) => bigramDice(earlier, sentence) >= 0.8)) repeatedQuestions += 1;
+      if (/숨겨|숨겼|숨긴|\bhidden\b|\bhiding\b/iu.test(sentence)) hiddenSentences += 1;
+      spokenHere.push(sentence);
+      said.push(sentence);
+    }
+  }
+  const completions = frames.filter((frame) => frame.direction === 'out' && frame.data.type === 'tts.playback.complete');
+  const cut = completions.filter((frame) => frame.data.payload?.interrupted === true).length;
+  return { messages, sentences: said.length, repeatedQuestions, hiddenSentences, playbacks: completions.length, interruptedPlaybacks: cut };
 }
 
 // =============================================================================
@@ -625,6 +764,18 @@ async function main() {
     for (const line of report.opening) console.log(`      agent  ${line}`);
 
     const cardLines = lines.map((text, index) => ({ text, stage: full ? full.stages[index] : null }));
+    let noiseIndex = 0;
+    const nextNoise = (allFrames) => {
+      const pool = NOISE_LINES[lang];
+      for (let tries = 0; tries < pool.length; tries += 1) {
+        const line = pool[noiseIndex % pool.length];
+        noiseIndex += 1;
+        if (line !== '@echo') return line;
+        const label = echoLabel(allFrames);
+        if (label) return label;
+      }
+      return pool[0];
+    };
     let followups = 0;
     let lastReply = report.opening.filter((line) => line.startsWith('say ')).at(-1) ?? '';
     for (;;) {
@@ -656,6 +807,16 @@ async function main() {
       const sentAt = Date.now();
       await say(browser, text);
       console.log(`\n[sim] visitor${kind === 'card' ? '' : ' (follow-up)'}: ${text}`);
+      let midNoise = null;
+      if (noise) {
+        // Mid-speech noise: once the agent has started answering, while it plays.
+        const deadline = Date.now() + 20000;
+        while (Date.now() < deadline && !frames.some((frame) => frame.at >= sentAt && frame.direction === 'in' && frame.data.type === 'agent.message')) await sleep(200);
+        await sleep(700);
+        midNoise = nextNoise(frames);
+        await sayVoice(browser, midNoise);
+        console.log(`      ~ hall (mid-speech): ${midNoise}`);
+      }
       const { stalled } = await waitForAgentTurn(browser, frames, sentAt);
       const turnFrames = frames.filter((frame) => frame.at >= sentAt && frame.direction === 'in');
       const actions = turnFrames.map((frame) => ({ ms: frame.at - sentAt, line: describeFrame(frame) })).filter((a) => a.line);
@@ -670,9 +831,20 @@ async function main() {
         secondsToFirstReply: firstSay ? (firstSay.at - sentAt) / 1000 : null,
         secondsToSettle: actions.length ? actions.at(-1).ms / 1000 : null,
         actions, done: gui.done, url: gui.url, sentAt,
+        ...(midNoise ? { noise: [{ when: 'mid-speech', line: midNoise }] } : {}),
       };
       report.turns.push(turn);
       for (const action of actions) console.log(`      +${(action.ms / 1000).toFixed(1)}s ${action.line}`);
+      if (noise && !gui.done && !stalled) {
+        // The settled-turn noise: the question is on the floor.
+        const settledLine = nextNoise(frames);
+        const noiseAt = Date.now();
+        await sayVoice(browser, settledLine);
+        await waitForQuiet(frames, noiseAt);
+        const heard = frames.filter((frame) => frame.at >= noiseAt && frame.direction === 'in' && frame.data.type === 'agent.message').map((frame) => frame.data.payload?.text ?? '');
+        console.log(`      ~ hall (settled): ${settledLine} -> ${heard.length ? heard.map((h) => `"${h}"`).join(' ') : '(agent silent)'}`);
+        turn.noise = [...(turn.noise ?? []), { when: 'settled', line: settledLine, replies: heard }];
+      }
       if (turn.view) console.log(`      = ${turn.view.stage}: ${turn.view.visible.length} shown${turn.view.highlighted.length ? `, ${turn.view.highlighted.length} lit` : ''}${turn.view.selected ? `, selected ${turn.view.selected}` : ''}`);
       if (stalled) console.log(`      !! no settled reply within ${turnTimeout} ms`);
       if (gui.done) { console.log('      ** booking complete'); break; }
@@ -707,6 +879,14 @@ async function main() {
     }
     console.log(`[sim] memory ${JSON.stringify(report.memory?.preferences?.map((p) => `${p.strength}: ${p.description}`) ?? [])}`);
     console.log(`[sim] trace ${report.traceFile ?? '(none — quick cards are not recorded)'}`);
+    if (noise) {
+      report.noiseTally = noiseTally(frames);
+      const t = report.noiseTally;
+      console.log(
+        `[sim] noise tally: ${t.messages} agent messages, ${t.sentences} sentences; questions spoken again at a stage ${t.repeatedQuestions}; ` +
+          `hidden-count sentences ${t.hiddenSentences}; playbacks ${t.playbacks}, reported interrupted ${t.interruptedPlaybacks}; booked ${final.done}`
+      );
+    }
     console.log(`[sim] screen ${final.text.slice(0, 1500)}`);
   } finally {
     /*
@@ -723,6 +903,8 @@ async function main() {
       });
       return response.status;
     })()`).catch((error) => String(error));
+    // A run that died mid-way still leaves its frames for the post-mortem.
+    report.frames ??= frames.map((frame) => ({ at: frame.at, direction: frame.direction, data: frame.data }));
     if (jsonOut) fs.writeFileSync(jsonOut, JSON.stringify(report, null, 2));
     browser.close();
   }

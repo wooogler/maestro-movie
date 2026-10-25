@@ -446,6 +446,68 @@ Rows 5–7 show the driver's visitor refusing to give a number, which a real vis
 
 Traces for the runs above are in the worktree's `logs/demo/trace/` (gitignored). The driver JSONs and replay outputs are scratch.
 
+### Round 3: noise repeats and hidden count (24 Oct 2026)
+
+After the KSEA poster session (eleven booth sessions in a loud hall, analysed in `.notes/ksea-2026-poster-session-analysis.md`, which is not committed), two of its "what to do next" items: noise must not become a repeated turn (item 1), and the hidden count is said once (item 3). On top of `realtime-voice` @ `6ff1c6e`. Every change is booth-only (`AGENT_STUDY_MODE=demo` on the agent, `DEMO_STUDY_MODE` on the frontend). A study session's planner prompt is byte-identical (`plannerPrompt.check.ts`), its transcript gate is the study's (the new echo rule is behind an option only the booth passes), and its runtime loop sends exactly what it sent before: the new code returns its input unchanged when `isDemoMode` is false.
+
+What the poster logs showed, for scale: of 102 visitor turns, 30 were hall noise, bystanders or the kiosk's own voice; of 128 agent messages, 65 were cut off (40 by a VAD barge-in, 25 by a newly arriving transcript stopping the speech); 32 messages were exact and 16 near repeats of one the visitor had just heard at that stage; 7 restated a hidden count already given. `1ec6a31` (Round 2) would have dropped 6 of the 32.
+
+| Change | Where | Gate |
+|---|---|---|
+| **Cross-turn repeat ledger.** Remembers the sentences spoken at the current stage, across visitor turns; cleared on any stage change (forward or a backtrack), a session reset and a language switch. Three rules, on the spoken text only, never on a tool call: (0) within one visitor turn a sentence is said once (repeatGuard compares whole messages, so "…1곳을 숨겼어요. 어느 곳으로 할까요?" and then "어느 곳으로 할까요?" both went out in a card-A run); (1) when the visitor's turn changed nothing (the preference extractor added or changed no preference), a sentence that is an exact or near (char-bigram Dice ≥ 0.8) repeat of one already said at this stage is dropped, and if nothing is left the agent stays silent; (2) a sentence stating how many options a filter hides is dropped when that count was already stated at this stage and no filter changed since, unless the visitor asked about hidden options. | `core/repeatLedger.ts`, wired in `index.ts` at the three places a planner sentence is sent | `isDemoMode` |
+| **Agreements keep their commit.** The ledger filters text only, so a select or next planned on "네" always runs. A bare agreement that agrees to nothing (a "네" to an open "어느 좌석으로 할까요?") falls under rule 1 like any other nothing-new turn; a repeated yes/no question ("Cinema Detroit로 할까요?") after an agreement is kept, because then the planner failed to act on a yes and the visitor should hear it. | `isBareAgreement`, `isClosedQuestion` | — |
+| **Deliberate silence.** When the ledger silenced the turn, an empty respond that follows is accepted instead of being re-planned and answered with the stage question (Round 2's empty-respond guard). | `core/emptyRespond.ts` (`deliberateSilence`) | booth only |
+| **Hidden count, said once (prompt).** A booth section after decisive selection: say how many options a filter hides once per filter, in the turn that applies, changes or removes it (on one step of that turn), or when the visitor asks; not again at that stage unless the count changed, and rule (4)'s question is then the whole message. The Filtered stages rule and rule (4) stay byte-for-byte; this section wins over both. | `HIDDEN_COUNT_ONCE_RULES` (`llmPlanner.ts`), pinned in `plannerPrompt.check.ts` | `hiddenCountOnce` (demo, GUI on) |
+| **Low-content transcripts do not cut the agent off.** A fragment, a bare "뭐?"/"응?", a filler or an exclamation (one token that is not an answer word, does not touch an on-screen label and carries no digit or choice particle; or two or three tokens that trail off or are a bare question) no longer calls `stopAgentSpeech()`. It is still delivered to the agent, and logged as `chat.voice_input.low_content`. | `isLowContentTranscript` (`i18n/voiceInput.ts`), `ChatPage.tsx` | booth only |
+| **One echoed augment label.** A transcript that carries the "·" separator and is nothing but (a run of) one on-screen label that has it ("Clayface · R.") is a prompt echo. Saying "Clayface" or "the R-rated one" still gets through. | `isAugmentLabelEcho` (`i18n/voiceInput.ts`) | `boothEcho` option, booth only |
+| **VAD.** `.env` is unchanged. `.env.example` records the hall numbers and recommends `OPENAI_REALTIME_VAD_THRESHOLD=0.7` for a booth (unmeasured in a hall). `OPENAI_REALTIME_VAD_TYPE=semantic_vad` with `OPENAI_REALTIME_VAD_EAGERNESS=low` is now possible (default off; server_vad is built exactly as before). A barge-in happens at speech start, before any transcript exists, so only the threshold or the VAD type can change the 40 VAD cuts. | `routes/speech.ts` (`buildTurnDetection`) | env, default off |
+
+No protocol field was added. The agent's test is "did this turn change memory", which its own extractor answers, and the host's low-content verdict is only used for the host's own decision (whether to stop playback). The poster logs support that: of the 30 off-task turns the analysis tagged, the extractor changed memory on 1 (a spoken restart, which removed preferences).
+
+**Offline replay on the logged sequences.** `llm/noiseRepeat.regress.ts` parses the three logs of the six conversing poster sessions, labels every agent message with a TypeScript port of the analysis script's rules (it reproduces 128 messages, 32 exact, 16 near, 7 hidden before reporting anything), and feeds the messages in order through what the booth agent now does with them (the ledger plus the existing in-turn dedupe), with each visitor turn's extractor outcome taken from `extraction.completed`:
+
+| Logged repeats | Silenced | Trimmed (repeated sentence or count removed, the rest said) | Still said word for word |
+|---|---|---|---|
+| exact, 32 | **28** | 0 | 4 |
+| near, 16 | 3 | 4 | 9 |
+| hidden-count restatement, 7 | — | **7 of 7** lose the count | 0 |
+
+- The 4 exact repeats left are on turns that changed memory (a new filter, a reset), where the question still standing is asked again. Most of the 9 near repeats left are rewordings below 0.8 ("어떤 영화를 고르실까요?" after "어떤 영화를 보고 싶으세요?").
+- Hidden-count sentences spoken: 14 → 6. Agent sentences spoken overall: 173 → 117.
+- The 9b9d4210 confirm stage, the acceptance case: the read-back is said once on entry, then **0 of the 8 following noise turns** are answered (before: 7 full read-backs and 2 partial ones).
+- Bare agreements: 37 turns. 12 repeated sentences were dropped on them and 11 messages silenced, all open questions or statements; **0 repeated yes/no questions were dropped**. The 39 select/next calls planned on agreement turns are untouched by construction.
+
+**Replay of the planner requests (real API, `gpt-5.6-terra`, 2 runs per side).** The 49 planner requests behind a repeated or hidden-count message, sent again with today's booth prompt (BEFORE) and with `hiddenCountOnce` added (AFTER):
+
+| | BEFORE | AFTER |
+|---|---|---|
+| answers that restate a count already given at the stage | 12/98, 10/98 (two passes) | **0/98, 0/98** |
+| ...on the 7 hidden-count cases (14 answers) | 12, 10 | 0, 0 |
+| restated counts left after the ledger | 2, 0 | 0, 0 |
+| tool mix | respond 83–85, highlight 6–8, select 4, clearModification 2, next 1 | respond 83, highlight 7, select 4, clearModification 2, next 2 |
+
+The prompt alone removes the restatement; the ledger catches what the prompt misses. On the repeat cases the replay mostly shows something the logs could not: today's prompt (Round 2's opening questions) answers a noise turn at stage entry with the stage's preference question ("장르나 관람등급, 러닝타임 중에 중요하게 보는 게 있으세요?") rather than the old "which one?", which is not a repeat of the old build's logged sentence and so is said. Live, the same question has already been asked once, and the ledger drops it (below).
+
+**Live runs** (isolated stack from the worktree: backend :3100 with `NODE_ENV=development`, Vite :5273, access-code batch `noise-fix`, `--voice`, planner `gpt-5.6-terra`). The driver gained `--noise`: after each visitor line, while the agent's answer is playing, one low-content line goes in through the voice-transcript funnel itself (ChatPage's `handleVoiceTranscript`), and once the agent has settled, another at the question on the floor. The lines rotate through two fragments, a bare "응?", an augmented label currently on screen read back, and a lone "네.". Headless Chromium has a silent fake microphone, so there are no VAD barge-ins here; "cut" counts only playback stopped by a transcript.
+
+| Run | Booked | Noise lines (low-content / echo / "네.") | Agent sentences | Sentences cut | Questions spoken again at a stage (≥ 0.8) | Hidden-count sentences | Ledger drops |
+|---|---|---|---|---|---|---|---|
+| card A, no noise (`st_22b3f62b`) | yes, C4 9:30 PM | — | 11 messages | 0 | — | 1 | — |
+| card C, no noise (`st_66427592`) | yes, E2–E4 1:15 PM | — | 11 messages | 0 | — | 1 | 1 (rule 0) |
+| card A `--noise` (`st_b266fdf0`) | **yes**, C4 9:30 PM | 12 (9 / 0 / 3) | 17 | **0** | 1 | 1 | 10 |
+| card C `--noise` (`st_fc84b13b`) | **yes**, F5–F7 1:15 PM | 14 (9 / 2 / 3) | 19 | 1 | 0 | 0 | 4 |
+
+- No low-content line stopped the agent's sentence (18 of 18 that arrived mid-speech or settled); the one cut in card C was a "네." mid-speech, which is an answer and still stops it. Before this change every one of them called `stopAgentSpeech()`.
+- Both on-screen echoes («Wildwood · PG · 1h 46m», «1:15 PM · 3:01 PM 종료») were dropped as `prompt_echo` and never reached the agent.
+- A fragment at a settled question got silence 6 times out of 7. The exception was a reworded re-ask under 0.8 («가까운 곳, 무료 주차, 리클라이너 중 무엇이 더 중요하세요?» after «어느 쪽이 더 중요하세요—가까운 곳, 무료 주차, 아니면 리클라이너 좌석인가요?»). Card A's one "question spoken again" came on a line that DID change memory (the 15-mile filter turn re-asking «어느 영화관으로 할까요?»), which rule 1 deliberately leaves alone.
+- "네." at a yes/no question committed 4 of 4 times (the theater pointer in card A, the 1:15 PM pointer in card C, and both confirm read-backs, which booked). "네." at an open question (the seat stage's opening question) got silence.
+
+**Still open.**
+- Rewordings below the 0.8 threshold: the planner's own in-turn double question in a new wording («어느 영화를 볼까요?» → «어느 쪽이 더 끌리세요?», «어느 자리로 하시겠어요?» → «표시된 자리 중 어느 쪽으로 하시겠어요?», 0.77) gets through; a containment rule was considered and not added unmeasured.
+- The 40 VAD barge-in cuts are untouched in code; 0.7 and `semantic_vad` are recommendations, not measured. A hall-noise WAV through `CHROMIUM_EXTRA_FLAGS` is the way to measure them before the next booth.
+- After a silenced noise turn the visitor hears nothing, which is the point; if a barge-in had cut the question being repeated, they also never hear it in full. The question stays on screen.
+- The driver used to find ChatInput by walking up from the textarea's fiber, which can be the stale alternate (it read a long-enabled composer as disabled after a silent turn and aborted four noise runs). It now walks the root's current fiber tree.
+
 ## Traces and raw run data
 
 The trace files are in the main checkout's `logs/demo/trace/` (gitignored), one per full-card run:
