@@ -311,6 +311,30 @@ export interface UiStrings {
   languagePickerLabel: string;
   languagePickerHint: string;
 
+  // The demo start screen: the preset expander, the one-line consent, the two QR codes
+  /** `{n}`: how many presets the expander holds. */
+  presetsMore: string;
+  presetsFewer: string;
+  consentDetailsShow: string;
+  consentDetailsHide: string;
+  startScreenPhoneMicCaption: string;
+  startScreenTryCaption: string;
+  startScreenQrPreparing: string;
+  startScreenTryNeedsCode: string;
+  startScreenStandbyFailed: string;
+  startScreenStarting: string;
+
+  // The kiosk's reset numbers in Settings
+  boothResetTitle: string;
+  boothResetHint: string;
+  boothReturnAfterLabel: string;
+  boothIdleLabel: string;
+  /** `{n}`: seconds after the completion line. */
+  boothSecondsValue: string;
+  /** `{n}`: minutes without a touch. */
+  boothMinutesValue: string;
+  boothIdleOff: string;
+
   // The booth tablet's one-tap screen and its reset controls
   tabletInvite: string;
   tabletStart: string;
@@ -584,6 +608,24 @@ const EN: UiStrings = {
   languagePickerLabel: 'Language',
   languagePickerHint: 'Pick the language you want to speak with the agent.',
 
+  presetsMore: 'More presets ({n})',
+  presetsFewer: 'Fewer presets',
+  consentDetailsShow: 'Details',
+  consentDetailsHide: 'Hide details',
+  startScreenPhoneMicCaption: 'Use your phone as the mic for this kiosk',
+  startScreenTryCaption: 'Try the demo on your own phone',
+  startScreenQrPreparing: 'Preparing the code...',
+  startScreenTryNeedsCode: 'Needs a booth access code.',
+  startScreenStandbyFailed: 'The session could not be prepared. Start will try again.',
+  startScreenStarting: 'Starting...',
+  boothResetTitle: 'Between visitors',
+  boothResetHint: 'When the kiosk goes back to the start screen for the next visitor.',
+  boothReturnAfterLabel: 'After a booking',
+  boothIdleLabel: 'When nobody is using it',
+  boothSecondsValue: '{n} s after the last line',
+  boothMinutesValue: 'After {n} min',
+  boothIdleOff: 'Never',
+
 
   tabletInvite: "Say what you'd like to see and when",
   tabletStart: 'Start',
@@ -851,6 +893,24 @@ const KO: UiStrings = {
   startBooking: '예매 시작하기',
   languagePickerLabel: '언어',
   languagePickerHint: '에이전트와 대화할 언어를 고르세요.',
+
+  presetsMore: '프리셋 더 보기 ({n})',
+  presetsFewer: '프리셋 접기',
+  consentDetailsShow: '자세히',
+  consentDetailsHide: '간단히',
+  startScreenPhoneMicCaption: '휴대폰을 이 키오스크의 마이크로 쓰기',
+  startScreenTryCaption: '내 휴대폰으로 데모 해보기',
+  startScreenQrPreparing: '코드를 준비하는 중...',
+  startScreenTryNeedsCode: '부스 접속 코드가 필요합니다.',
+  startScreenStandbyFailed: '세션을 준비하지 못했습니다. 시작을 누르면 다시 시도합니다.',
+  startScreenStarting: '시작하는 중...',
+  boothResetTitle: '방문자 사이',
+  boothResetHint: '다음 방문자를 위해 키오스크가 시작 화면으로 돌아가는 시점입니다.',
+  boothReturnAfterLabel: '예매가 끝나면',
+  boothIdleLabel: '아무도 사용하지 않으면',
+  boothSecondsValue: '마지막 안내 후 {n}초',
+  boothMinutesValue: '{n}분 후',
+  boothIdleOff: '사용 안 함',
 
 
   tabletInvite: '보고 싶은 영화와 조건을 말씀해 보세요',
@@ -1137,6 +1197,25 @@ const JA_OVERRIDES: Partial<UiStrings> = {
   languagePickerLabel: '言語',
   languagePickerHint: 'エージェントと話す言語を選んでください。',
 
+  // MACHINE-DRAFTED, like the rest of this table.
+  presetsMore: 'ほかのプリセット ({n})',
+  presetsFewer: 'プリセットを閉じる',
+  consentDetailsShow: '詳細',
+  consentDetailsHide: '詳細を閉じる',
+  startScreenPhoneMicCaption: 'スマートフォンをこのキオスクのマイクにする',
+  startScreenTryCaption: '自分のスマートフォンでデモを試す',
+  startScreenQrPreparing: 'コードを準備しています...',
+  startScreenTryNeedsCode: 'ブースのアクセスコードが必要です。',
+  startScreenStandbyFailed: 'セッションを準備できませんでした。開始を押すともう一度試します。',
+  startScreenStarting: '開始しています...',
+  boothResetTitle: '来場者の入れ替わり',
+  boothResetHint: '次の来場者のためにキオスクが開始画面に戻るタイミングです。',
+  boothReturnAfterLabel: '予約が終わったら',
+  boothIdleLabel: '誰も使っていないとき',
+  boothSecondsValue: '最後の案内から{n}秒後',
+  boothMinutesValue: '{n}分後',
+  boothIdleOff: 'しない',
+
 
   tabletInvite: '観たい映画と条件を話しかけてください',
   tabletStart: 'スタート',
@@ -1407,6 +1486,25 @@ const ZH_HANS_OVERRIDES: Partial<UiStrings> = {
   startBooking: '开始订票',
   languagePickerLabel: '语言',
   languagePickerHint: '请选择您想与智能体对话的语言。',
+
+  // MACHINE-DRAFTED, like the rest of this table.
+  presetsMore: '更多预设 ({n})',
+  presetsFewer: '收起预设',
+  consentDetailsShow: '详情',
+  consentDetailsHide: '收起详情',
+  startScreenPhoneMicCaption: '把手机用作这台自助机的麦克风',
+  startScreenTryCaption: '在自己的手机上试用演示',
+  startScreenQrPreparing: '正在准备二维码...',
+  startScreenTryNeedsCode: '需要展位访问码。',
+  startScreenStandbyFailed: '无法准备会话。点击开始会再试一次。',
+  startScreenStarting: '正在开始...',
+  boothResetTitle: '访客之间',
+  boothResetHint: '自助机何时为下一位访客回到开始画面。',
+  boothReturnAfterLabel: '预订完成后',
+  boothIdleLabel: '无人使用时',
+  boothSecondsValue: '最后一句提示后 {n} 秒',
+  boothMinutesValue: '{n} 分钟后',
+  boothIdleOff: '从不',
 
 
   tabletInvite: '说出您想看的电影和时间',
@@ -1679,6 +1777,25 @@ const ZH_HANT_OVERRIDES: Partial<UiStrings> = {
   startBooking: '開始訂票',
   languagePickerLabel: '語言',
   languagePickerHint: '請選擇您想與代理程式對話的語言。',
+
+  // MACHINE-DRAFTED, like the rest of this table.
+  presetsMore: '更多預設 ({n})',
+  presetsFewer: '收起預設',
+  consentDetailsShow: '詳情',
+  consentDetailsHide: '收起詳情',
+  startScreenPhoneMicCaption: '把手機當作這台自助機的麥克風',
+  startScreenTryCaption: '在自己的手機上試用示範',
+  startScreenQrPreparing: '正在準備條碼...',
+  startScreenTryNeedsCode: '需要攤位存取碼。',
+  startScreenStandbyFailed: '無法準備工作階段。按下開始會再試一次。',
+  startScreenStarting: '正在開始...',
+  boothResetTitle: '訪客之間',
+  boothResetHint: '自助機何時為下一位訪客回到開始畫面。',
+  boothReturnAfterLabel: '訂票完成後',
+  boothIdleLabel: '無人使用時',
+  boothSecondsValue: '最後一句提示後 {n} 秒',
+  boothMinutesValue: '{n} 分鐘後',
+  boothIdleOff: '永不',
 
 
   tabletInvite: '說出您想看的電影和時間',

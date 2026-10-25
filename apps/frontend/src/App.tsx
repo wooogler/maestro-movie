@@ -36,7 +36,10 @@ import {
   getTabletProfile,
   stampTabletActivity,
 } from './study/tabletProfileStorage';
-import type { TabletResetRequest } from './components/tablet/TabletSessionControls';
+import type { BoothResetConfig, BoothResetRequest } from './components/tablet/TabletSessionControls';
+import { TABLET_BOOKING_COMPLETE_RESET_MS } from './study/tabletProfile';
+import { kioskBoothResetTiming } from './study/boothReset';
+import { useBoothResetSettings } from './hooks/useBoothResetSettings';
 import { useScreenWakeLock } from './hooks/useScreenWakeLock';
 import { TabletStartScreen } from './components/tablet/TabletStartScreen';
 import type { VoiceOutputTarget } from './hooks/useVoiceCompanionHost';
@@ -107,6 +110,23 @@ const SESSION_ENDED_MESSAGE =
 // ticked. Both the initial state and every end-of-session reset use this, so the
 // next visitor starts from the default rather than from the last one's choice.
 const DEFAULT_DEMO_RESEARCH_CONSENT = true;
+
+/*
+  Puts the language back for the next visitor at a booth reset: to the one the
+  page was loaded in (a `?lang=` link, the stored choice, or the browser's),
+  which is what the presenter set the booth up with. Inside the provider
+  because App renders it and so cannot read the context itself.
+*/
+function BoothLanguageReset({ serial }: { serial: number }) {
+  const { language, setLanguage } = useLanguage();
+  const [bootLanguage] = useState(language);
+  useEffect(() => {
+    if (serial > 0) setLanguage(bootLanguage);
+    // Only a new reset, never a visitor's own change, moves it.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [serial]);
+  return null;
+}
 
 function DemoModeEntry({ onEnter }: { onEnter: () => void }) {
   useEffect(() => {
@@ -202,8 +222,8 @@ function App() {
     no-op rather than something that could undo a removal made since.
   */
   /*
-    The phone-pairing token, minted here because two screens now show its QR:
-    the "ready to start" screen and the booking rail.
+    The phone-pairing token, minted here because two screens show its QR: the
+    demo start screen (against its standby session) and the booking rail.
 
     Minting rotates the pairing's revocation handle, so a per-screen fetch would
     hand out a code and then kill it the moment the other screen mounted —
@@ -227,6 +247,18 @@ function App() {
   */
   const [voiceTargetPreference, setVoiceTargetPreference] =
     useState<VoiceOutputTarget>('kiosk');
+
+  /*
+    The demo start screen's standby session (`study/demoStandbySession.ts`),
+    reported by the start page so the pairing QR can be minted for it. Start
+    promotes this very session to `studySession`, so the token minted for it is
+    the one the booking rail shows — nothing is re-minted, and a phone that
+    scanned on the start screen stays paired.
+  */
+  const [standbySession, setStandbySession] = useState<StudySessionState | null>(null);
+
+  /** Counts booth resets; each one puts the language back (BoothLanguageReset). */
+  const [visitorSerial, setVisitorSerial] = useState(0);
 
   /*
     The quick-demo card this session was opened by, if any.
@@ -326,7 +358,9 @@ function App() {
     from an effect: a stale token would otherwise be handed to the next
     session's QR for one render, which is long enough to photograph.
   */
-  const demoSessionId = demoMode ? (studySession?.sessionId ?? null) : null;
+  const pairingSession = demoMode ? (studySession ?? standbySession) : null;
+  const demoSessionId = pairingSession?.sessionId ?? null;
+  const pairingStudyToken = pairingSession?.studyToken ?? null;
   const companionToken =
     companionPairing && companionPairing.sessionId === demoSessionId
       ? companionPairing.token
@@ -351,10 +385,11 @@ function App() {
   useEffect(() => {
     // A tablet never shows the pairing QR, so it has nothing to mint.
     if (tabletActive) return;
-    if (!demoSessionId || companionMintedForRef.current === demoSessionId) return;
+    if (!demoSessionId || !pairingStudyToken || companionMintedForRef.current === demoSessionId) return;
     companionMintedForRef.current = demoSessionId;
+    // The token explicitly: a standby session is not in storage until Start.
     api
-      .createCompanionPairing()
+      .createCompanionPairing(pairingStudyToken)
       .then((result) => {
         setCompanionPairing({ sessionId: demoSessionId, token: result.companionToken });
       })
@@ -364,7 +399,7 @@ function App() {
           companionMintedForRef.current = null;
         }
       });
-  }, [demoSessionId, tabletActive]);
+  }, [demoSessionId, pairingStudyToken, tabletActive]);
 
   useEffect(() => {
     document.documentElement.dataset.theme = theme;
@@ -470,8 +505,24 @@ function App() {
   }, [handleStaleStudySession]);
 
   /*
-    A booth tablet starting over: the visitor pressed "Start over", walked
-    away (idle reset), or finished their booking.
+    The next visitor's defaults on the demo start screen: no preset, the box
+    ticked, voice on the kiosk, and the language the booth was set up in.
+  */
+  const resetVisitorDefaults = useCallback(() => {
+    setPreferencePresetId(null);
+    setPreferenceProfileRevision((revision) => revision + 1);
+    setDemoResearchConsent(DEFAULT_DEMO_RESEARCH_CONSENT);
+    setVoiceTargetPreference('kiosk');
+    setVisitorSerial((serial) => serial + 1);
+  }, []);
+
+  const tabletActiveRef = useRef(tabletActive);
+  tabletActiveRef.current = tabletActive;
+
+  /*
+    A booth starting over — the tablet, or the kiosk/desktop demo: the visitor
+    pressed Start over or Done, walked away (idle reset), or finished their
+    booking and the return timer ran out.
 
     The record leaves storage first and synchronously, so an installed-PWA
     relaunch from here on finds nothing to resume. Setting the session to null
@@ -481,23 +532,61 @@ function App() {
     already gone — and after the booking page's last log line, or two seconds,
     whichever comes first. A finish that fails is not retried: the server's own
     idle reaper still ends the session.
+
+    The kiosk then also puts the start screen back to the next visitor's
+    defaults; the tablet's one-tap screen does that itself, from its profile.
   */
-  const handleTabletStartOver = useCallback((request: TabletResetRequest) => {
+  const handleBoothReset = useCallback((request: BoothResetRequest) => {
     const token = currentStudyTokenRef.current;
     clearStoredStudySession({ keepCredentials: true });
     clearTabletActivity();
     handleStudyReset();
+    if (!tabletActiveRef.current) resetVisitorDefaults();
     if (!token) return;
     const settled = new Promise<void>((resolve) => window.setTimeout(resolve, 2000));
     void Promise.race([request.beforeFinish.catch(() => {}), settled]).then(() =>
       finishStudySessionByToken(token).then((ok) => {
-        console.info(`[tablet] start over (${request.reason}): session finish ${ok ? 'ok' : 'failed'}`);
+        console.info(`[booth] start over (${request.reason}): session finish ${ok ? 'ok' : 'failed'}`);
       })
     );
     // handleStudyReset is a plain function that only sets state; it is stable
     // in behaviour, so it is deliberately not a dependency.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [resetVisitorDefaults]);
+
+  /*
+    The booking page's booth reset, or none. The tablet's numbers are its
+    profile's; the kiosk/desktop demo's are in Settings (10 min idle, 12 s
+    after the completion line by default). None for a study condition, and
+    none for a quick-card visitor on their own phone (the "try it on your
+    phone" QR lands there too): that session simply ends on its end page.
+  */
+  const { returnAfterSeconds: kioskReturnAfterSeconds, idleMinutes: kioskIdleMinutes } =
+    useBoothResetSettings();
+  const boothReset = useMemo<BoothResetConfig | null>(() => {
+    if (!demoMode) return null;
+    if (tabletActive && tabletProfile) {
+      return {
+        idleSeconds: tabletProfile.idleSeconds,
+        completeResetMs: TABLET_BOOKING_COMPLETE_RESET_MS,
+        onReset: handleBoothReset,
+        persistActivity: true,
+      };
+    }
+    if (quickDemoCard) return null;
+    return {
+      ...kioskBoothResetTiming({ returnAfterSeconds: kioskReturnAfterSeconds, idleMinutes: kioskIdleMinutes }),
+      onReset: handleBoothReset,
+    };
+  }, [
+    demoMode,
+    handleBoothReset,
+    kioskIdleMinutes,
+    kioskReturnAfterSeconds,
+    quickDemoCard,
+    tabletActive,
+    tabletProfile,
+  ]);
 
   const handleTabletSessionStarted = useCallback((session: StudySessionState) => {
     stampTabletActivity(Date.now(), true);
@@ -621,6 +710,7 @@ function App() {
       {/* Browser-language detection for the booth only; a study condition opens
           in English unless someone chose otherwise, as it always did. */}
       <LanguageProvider detectBrowserLanguage={demoMode}>
+        <BoothLanguageReset serial={visitorSerial} />
         <DevToolsProvider>
           <div className="app-viewport flex">
             <div className="flex-1 overflow-hidden bg-dark text-fg">
@@ -665,6 +755,10 @@ function App() {
                       onResearchConsentChange={setDemoResearchConsent}
                       sessionNotice={sessionNotice}
                       onDismissSessionNotice={() => setSessionNotice(null)}
+                      companionToken={companionToken}
+                      onStandbySessionChange={setStandbySession}
+                      onDemoSessionStarted={handleStudySessionCreated}
+                      onResetVisitorDefaults={resetVisitorDefaults}
                     />
                   )}
                 />
@@ -729,16 +823,16 @@ function App() {
                       // A card visitor tapped "start and talk" one screen ago;
                       // making them find the mic button would undo the point.
                       // The same holds for the full demo: the visitor tapped
-                      // "start booking" on the pairing screen, which is also
-                      // where the audio element is unlocked — a booth visit
-                      // should begin listening and speaking, not with a hunt
-                      // for the mic button. Study conditions keep the toggle.
+                      // Start on the setup page, which is also where the audio
+                      // element is unlocked — a booth visit should begin
+                      // listening and speaking, not with a hunt for the mic
+                      // button. Study conditions keep the toggle.
                       // A card visitor who pressed "start and type" instead
                       // asked for the opposite, so that one starts with voice
                       // off and the composer ready to type.
                       startWithVoice={quickDemoCard ? quickDemoCardVoice : demoMode}
                       tabletProfile={tabletActive ? tabletProfile : null}
-                      onTabletStartOver={handleTabletStartOver}
+                      boothReset={boothReset}
                     />
                   ) : (
                     <Navigate to="/" replace />

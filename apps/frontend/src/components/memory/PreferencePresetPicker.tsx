@@ -1,6 +1,12 @@
+import { useState } from 'react';
 import type React from 'react';
 import { PreferenceChip } from './PreferenceChip';
-import { PREFERENCE_PRESETS, localizePreset, type PreferencePreset } from '../../study/preferenceProfile';
+import {
+  PREFERENCE_PRESETS,
+  groupPreferencePresets,
+  localizePreset,
+  type PreferencePreset,
+} from '../../study/preferenceProfile';
 import { useLanguage } from '../../i18n';
 
 interface PreferencePresetPickerProps {
@@ -24,6 +30,9 @@ interface PreferencePresetPickerProps {
  * to here is literally what they will see on the rail thirty seconds later.
  * Only the preferences: the rail's workflow graph has nothing to say before a
  * session exists.
+ *
+ * Three presets show; the rest wait behind "More presets", which starts open
+ * when the chosen one is among them (`groupPreferencePresets`).
  */
 export function PreferencePresetPicker({
   selectedPresetId,
@@ -33,6 +42,24 @@ export function PreferencePresetPicker({
   const { s, language } = useLanguage();
   const presets = PREFERENCE_PRESETS.map((preset) => localizePreset(preset, language));
   const selected = presets.find((preset) => preset.id === selectedPresetId) ?? null;
+  const groups = groupPreferencePresets(presets, selectedPresetId);
+  const [moreToggled, setMoreToggled] = useState(false);
+  // Never hides the visitor's own choice, whatever the toggle says.
+  const moreOpen = moreToggled || groups.moreOpen;
+
+  const renderPreset = (preset: PreferencePreset) => (
+    <PresetOption
+      key={preset.id}
+      label={preset.label}
+      blurb={preset.blurb}
+      count={preset.preferences.length}
+      isSelected={selectedPresetId === preset.id}
+      disabled={disabled}
+      onSelect={() => onSelect(preset.id)}
+    >
+      {selected?.id === preset.id ? <PresetPreview preset={selected} note={s.presetPreviewNote} /> : null}
+    </PresetOption>
+  );
 
   return (
     <div role="radiogroup" aria-label={s.preferenceMemoryTitle} className="grid gap-2">
@@ -43,19 +70,22 @@ export function PreferencePresetPicker({
         disabled={disabled}
         onSelect={() => onSelect(null)}
       />
-      {presets.map((preset) => (
-        <PresetOption
-          key={preset.id}
-          label={preset.label}
-          blurb={preset.blurb}
-          count={preset.preferences.length}
-          isSelected={selectedPresetId === preset.id}
-          disabled={disabled}
-          onSelect={() => onSelect(preset.id)}
-        >
-          {selected?.id === preset.id ? <PresetPreview preset={selected} note={s.presetPreviewNote} /> : null}
-        </PresetOption>
-      ))}
+      {groups.primary.map(renderPreset)}
+      {groups.more.length > 0 ? (
+        <>
+          {moreOpen ? groups.more.map(renderPreset) : null}
+          {groups.moreOpen ? null : (
+            <button
+              type="button"
+              aria-expanded={moreOpen}
+              onClick={() => setMoreToggled((open) => !open)}
+              className="justify-self-start rounded-lg px-2 py-1.5 text-sm font-medium text-primary-text underline-offset-2 hover:underline"
+            >
+              {moreOpen ? s.presetsFewer : s.presetsMore.replace('{n}', String(groups.more.length))}
+            </button>
+          )}
+        </>
+      ) : null}
     </div>
   );
 }

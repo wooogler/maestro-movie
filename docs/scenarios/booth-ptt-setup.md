@@ -1,5 +1,8 @@
 # Booth setup: push-to-talk
 
+The kiosk's start screen, its two QR codes and the return to start after each
+visitor are in [booth-kiosk-setup.md](booth-kiosk-setup.md).
+
 Use this for a loud hall. At the KSEA poster session (2026-10-24) the default
 server VAD took hall noise, bystanders and the kiosk's own voice as visitor
 turns: 30 of 102 turns were noise, and 40 of the agent's 128 sentences were cut

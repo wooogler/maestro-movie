@@ -274,7 +274,12 @@ export const api = {
       includeStudyToken: false,
       body: JSON.stringify(data),
     }),
-  getCurrentStudySession: () => fetchApi<StudySessionInfo>('/study/sessions/me'),
+  /**
+   * `studyToken` overrides the stored session's: the demo start screen keeps a
+   * standby session that is not in storage until Start promotes it.
+   */
+  getCurrentStudySession: (studyToken?: string) =>
+    fetchApi<StudySessionInfo>('/study/sessions/me', { studyToken }),
   finishStudySession: () =>
     fetchApi<{ sessionId: string; status: 'finished' | 'expired'; finishedAt: string | null }>(
       '/study/sessions/finish',
@@ -440,9 +445,10 @@ export const api = {
    * server-side; a study session gets 403 and the caller must treat that as
    * "this session has no phone voice", not as a session failure.
    */
-  createCompanionPairing: () =>
+  createCompanionPairing: (studyToken?: string) =>
     fetchApi<{ companionToken: string; expiresAt: string }>('/study/companion-token', {
       method: 'POST',
+      studyToken,
     }),
   /**
    * The paired phone's own Realtime credential.

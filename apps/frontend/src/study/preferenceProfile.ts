@@ -452,6 +452,40 @@ export function listPresetTranslationCoverage(): Array<{
   );
 }
 
+/**
+ * The start screen shows three presets and keeps the rest behind "More
+ * presets": six stacked cards pushed the Start button and both QR codes below
+ * the fold on the kiosk, and these three are the ones the booth script uses.
+ * Every preset still exists and still works; this is only the order of the
+ * list. `presetGrouping.check.ts` holds it to that.
+ */
+export const PRIMARY_PRESET_IDS: readonly string[] = ['family_matinee', 'date_night', 'big_screen'];
+
+export interface PresetGroups<T extends { id: string }> {
+  primary: T[];
+  more: T[];
+  /**
+   * The expander must start open when the chosen preset is behind it, or the
+   * visitor's own choice would be hidden from them.
+   */
+  moreOpen: boolean;
+}
+
+export function groupPreferencePresets<T extends { id: string }>(
+  presets: readonly T[],
+  selectedPresetId: string | null
+): PresetGroups<T> {
+  const primary = PRIMARY_PRESET_IDS.map((id) => presets.find((preset) => preset.id === id)).filter(
+    (preset): preset is T => Boolean(preset)
+  );
+  const more = presets.filter((preset) => !PRIMARY_PRESET_IDS.includes(preset.id));
+  return {
+    primary,
+    more,
+    moreOpen: selectedPresetId !== null && more.some((preset) => preset.id === selectedPresetId),
+  };
+}
+
 export function findPreferencePreset(presetId: string): PreferencePreset | null {
   return PREFERENCE_PRESETS.find((preset) => preset.id === presetId) ?? null;
 }

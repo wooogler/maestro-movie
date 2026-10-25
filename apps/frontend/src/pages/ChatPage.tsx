@@ -60,9 +60,9 @@ import {
   TabletCompleteNotice,
   TabletIdleWarning,
   TabletStartOverButton,
-  useTabletIdleReset,
-  type TabletResetReason,
-  type TabletResetRequest,
+  useBoothIdleReset,
+  type BoothResetConfig,
+  type BoothResetReason,
 } from '../components/tablet/TabletSessionControls';
 import type { TabletProfile } from '../study/tabletProfile';
 import { DeviceRosterCard } from '../components/companion/DeviceRosterCard';
@@ -167,8 +167,14 @@ interface ChatPageProps {
    * reset. Null everywhere else, and then nothing below changes.
    */
   tabletProfile?: TabletProfile | null;
-  /** Ends this session and returns the tablet to its one-tap screen. */
-  onTabletStartOver?: (request: TabletResetRequest) => void;
+  /**
+   * The booth reset (demo only): the booth tablet's, or the kiosk/desktop
+   * demo's. Runs the idle clock and the return to the start screen after a
+   * completed booking, and makes Done on the complete screen start over
+   * instead of opening the end page. Null in a study condition and for a
+   * quick-card visitor on their own phone.
+   */
+  boothReset?: BoothResetConfig | null;
 }
 
 const stageInteractionTools: Record<Stage, string[]> = {
@@ -719,7 +725,7 @@ export function ChatPage({
   quickStartCard = null,
   startWithVoice = false,
   tabletProfile = null,
-  onTabletStartOver,
+  boothReset = null,
 }: ChatPageProps) {
   const navigate = useNavigate();
 
@@ -2697,7 +2703,11 @@ export function ChatPage({
 
   // Demo only: the host's "booking complete" sentence, spoken before the
   // voice-off below, which waits on `holdVoiceOn` (at most 6 s).
-  const { holdVoiceOn: holdVoiceForCompletion, handleHostPlaybackResolved } =
+  const {
+    holdVoiceOn: holdVoiceForCompletion,
+    handleHostPlaybackResolved,
+    settledAtMs: bookingCompleteSettledAtMs,
+  } =
     useBookingCompleteAnnouncement({
       enabled: showMemoryPanel,
       bookingComplete: isBookingCompleteSpec(activeSpec),
@@ -2737,18 +2747,20 @@ export function ChatPage({
   const interactionLocked = loading || isAgentTyping;
 
   /*
-    The booth tablet starting over for the next visitor. The page's own
-    teardown (voice, relay, timers) runs when App drops the session and this
-    page unmounts; all this does first is cut the audio at once and write the
-    log line, which the finish request then waits for.
+    A booth (the tablet, or the kiosk/desktop demo) starting over for the next
+    visitor. The page's own teardown (voice, relay, timers) runs when App drops
+    the session and this page unmounts; all this does first is cut the audio
+    at once and write the log line, which the finish request then waits for.
   */
-  const tabletResetFiredRef = useRef(false);
-  const handleTabletStartOver = useCallback(
-    (reason: TabletResetReason) => {
-      if (!onTabletStartOver || tabletResetFiredRef.current) return;
-      tabletResetFiredRef.current = true;
+  const onBoothReset = boothReset?.onReset;
+  const boothResetFiredRef = useRef(false);
+  const handleBoothReset = useCallback(
+    (reason: BoothResetReason) => {
+      if (!onBoothReset || boothResetFiredRef.current) return;
+      boothResetFiredRef.current = true;
       stopAgentSpeech();
-      const beforeFinish = logStudyEventNow('study.control.tablet_reset', {
+      // The tablet's event name is kept so its existing logs stay comparable.
+      const beforeFinish = logStudyEventNow(tabletActive ? 'study.control.tablet_reset' : 'study.control.booth_reset', {
         source: reason === 'idle' || reason === 'booking-complete' ? 'system' : 'participant',
         reason,
         stage: currentStage,
@@ -2761,10 +2773,10 @@ export function ChatPage({
       setError(null);
       setAwaitingAgentResponse(false);
       setUiSpec(null);
-      sendSessionResetToAgent('host-tablet-start-over');
-      onTabletStartOver({ reason, beforeFinish });
+      sendSessionResetToAgent(tabletActive ? 'host-tablet-start-over' : 'host-booth-reset');
+      onBoothReset({ reason, beforeFinish });
     },
-    [currentStage, logStudyEventNow, onTabletStartOver, resetChat, sendSessionResetToAgent, setUiSpec, stopAgentSpeech]
+    [currentStage, logStudyEventNow, onBoothReset, resetChat, sendSessionResetToAgent, setUiSpec, stopAgentSpeech, tabletActive]
   );
 
   useEffect(() => {
@@ -3210,7 +3222,8 @@ export function ChatPage({
   const highlightVoiceToggle =
     voiceModeAvailable && !voiceModeEnabled && effectiveChatInputPlaceholder === ui.tapMicForVoice;
 
-  // The booth tablet's idle reset. Inert (no listeners, no timer) everywhere else.
+  // The booth's idle reset — the tablet's, or the kiosk/desktop demo's. Inert
+  // (no listeners, no timer) everywhere else.
   // The signal counts every change to the conversation or the screen: a
   // message, a stage, any agent GUI action (the store hands out a new spec
   // only when something changed), a sentence starting to play.
@@ -3223,9 +3236,9 @@ export function ChatPage({
   const tabletBookingInProgress =
     !isFinishTaskStep &&
     (currentStage !== 'movie' || messages.some((message) => message.type === 'user'));
-  const tabletIdle = useTabletIdleReset({
-    enabled: tabletActive && Boolean(onTabletStartOver),
-    idleSeconds: tabletProfile?.idleSeconds ?? 0,
+  const tabletIdle = useBoothIdleReset({
+    enabled: Boolean(boothReset),
+    idleSeconds: boothReset?.idleSeconds ?? null,
     busy:
       loading ||
       isAgentTyping ||
@@ -3235,16 +3248,22 @@ export function ChatPage({
       voiceInputStatus === 'capturing' ||
       voiceInputStatus === 'transcribing',
     activitySignal: tabletActivitySignal,
-    bookingComplete: isFinishTaskStep,
-    onReset: handleTabletStartOver,
+    // Counted from when the spoken completion line finished, not from when
+    // the screen appeared: the countdown never runs under the sentence.
+    bookingCompleteAtMs: isFinishTaskStep ? bookingCompleteSettledAtMs : null,
+    completeResetMs: boothReset?.completeResetMs ?? 0,
+    persistActivity: Boolean(boothReset?.persistActivity),
+    onReset: handleBoothReset,
   });
+  // Done on the complete screen: a booth starts over at once; everywhere else
+  // the session ends on the end page, as it always did.
   const finishTaskHandler = useCallback(() => {
-    if (tabletActive && onTabletStartOver) {
-      handleTabletStartOver('finish');
+    if (onBoothReset) {
+      handleBoothReset('finish');
       return;
     }
     void handleFinishStudy();
-  }, [handleFinishStudy, handleTabletStartOver, onTabletStartOver, tabletActive]);
+  }, [handleBoothReset, handleFinishStudy, onBoothReset]);
 
   const stageSpecMap = useMemo(() => {
     const map = new Map<Stage, UISpec>();
@@ -3422,7 +3441,7 @@ export function ChatPage({
       </button>
       <TabletStartOverButton
         needsConfirm={tabletBookingInProgress}
-        onStartOver={() => handleTabletStartOver('start-over')}
+        onStartOver={() => handleBoothReset('start-over')}
       />
     </>
   ) : null;
@@ -3900,11 +3919,26 @@ export function ChatPage({
           plannerModelAvailable={plannerModelAvailable && !tabletActive}
           pushToTalkAvailable={plannerModelAvailable && voiceModeAvailable && !tabletActive}
           layoutOverrideAvailable={layoutMode !== null && !tabletActive}
+          boothResetAvailable={Boolean(boothReset) && !tabletActive}
         />
       ) : null}
 
-      {tabletActive && tabletIdle.state.phase === 'warning' ? (
+      {boothReset && tabletIdle.state.phase === 'warning' ? (
         <TabletIdleWarning deadlineMs={tabletIdle.state.deadlineMs} onStay={tabletIdle.stay} />
+      ) : null}
+
+      {/* The kiosk's return-to-start countdown. The tablet shows it in its own
+          toolbar; the kiosk has none, so it floats at the bottom edge, clear of
+          the confirmation the visitor is reading. */}
+      {boothReset && !tabletActive && tabletIdle.state.phase === 'complete' ? (
+        <div className="pointer-events-none fixed inset-x-0 bottom-6 z-[70] flex justify-center px-4">
+          <div
+            className="rounded-full border border-primary/50 bg-dark-light px-5 py-2.5 shadow-lg"
+            data-testid="booth-return-countdown"
+          >
+            <TabletCompleteNotice deadlineMs={tabletIdle.state.deadlineMs} className="text-sm" />
+          </div>
+        </div>
       ) : null}
     </div>
   );

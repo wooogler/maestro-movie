@@ -67,10 +67,11 @@ export function ScenarioReviewPage({
   const [error, setError] = useState<string | null>(null);
   const [scenarios, setScenarios] = useState<StudyScenarioDetail[]>([]);
   /*
-    The demo used to go straight from "start" into the booking UI. It now stops
-    here once, with the pairing QR: the code is minted with the session, so it
-    cannot exist any earlier than this, and a visitor who is already inside the
-    booking task has stopped looking for a QR to scan.
+    The demo's pairing stop. The demo start screen no longer routes here — it
+    holds a standby session, shows the pairing QR itself and goes straight to
+    /booking (see study/demoStandbySession.ts) — so this branch is reached
+    only by opening /task-review directly in demo mode. The study conditions
+    use the review below, unchanged.
   */
   const [pairedSession, setPairedSession] = useState<StudySessionState | null>(null);
 

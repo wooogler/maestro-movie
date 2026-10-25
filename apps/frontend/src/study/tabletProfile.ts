@@ -21,6 +21,19 @@
  */
 
 import { matchLanguageTag, type Language } from '../i18n/language';
+import {
+  BOOTH_BUSY_HOLD_MAX_MS,
+  BOOTH_IDLE_WARNING_MS,
+  DEFAULT_BOOTH_IDLE_SECONDS,
+  MAX_BOOTH_IDLE_SECONDS,
+  MIN_BOOTH_IDLE_SECONDS,
+  TABLET_COMPLETE_RESET_MS,
+  boothBusyHolds,
+  decideBoothIdle,
+  parseBoothIdleSeconds,
+  type BoothIdleInput,
+  type BoothIdleVerdict,
+} from './boothReset';
 
 export const TABLET_PROFILE_PARAM = 'profile';
 export const TABLET_PROFILE_STORAGE_KEY = 'tuning-movie-tablet-profile';
@@ -29,15 +42,16 @@ export const TABLET_PROFILE_STORAGE_KEY = 'tuning-movie-tablet-profile';
  *  language provider reads (and strips) itself. */
 export const TABLET_PROFILE_URL_PARAMS = ['profile', 'code', 'idle', 'consent', 'motion'] as const;
 
-export const DEFAULT_TABLET_IDLE_SECONDS = 180;
-/** Long enough to hold the 15-second "still there?" countdown and a few seconds before it. */
-export const MIN_TABLET_IDLE_SECONDS = 20;
-export const MAX_TABLET_IDLE_SECONDS = 3600;
-
-/** The countdown shown before an idle reset. */
-export const TABLET_IDLE_WARNING_MS = 15_000;
+/*
+  The idle and completion rules are the booth reset's (`boothReset.ts`), which
+  the kiosk demo shares; these are the tablet's names for its numbers.
+*/
+export const DEFAULT_TABLET_IDLE_SECONDS = DEFAULT_BOOTH_IDLE_SECONDS;
+export const MIN_TABLET_IDLE_SECONDS = MIN_BOOTH_IDLE_SECONDS;
+export const MAX_TABLET_IDLE_SECONDS = MAX_BOOTH_IDLE_SECONDS;
+export const TABLET_IDLE_WARNING_MS = BOOTH_IDLE_WARNING_MS;
 /** How long the booking-complete screen stays up before the tablet starts over. */
-export const TABLET_BOOKING_COMPLETE_RESET_MS = 20_000;
+export const TABLET_BOOKING_COMPLETE_RESET_MS = TABLET_COMPLETE_RESET_MS;
 
 export interface TabletProfile {
   version: 1;
@@ -71,11 +85,7 @@ function normalizeAccessCode(value: unknown): string {
 }
 
 /** Seconds, clamped to [MIN, MAX]; anything unparseable is the default. */
-export function parseIdleSeconds(value: unknown): number {
-  const raw = typeof value === 'number' ? value : typeof value === 'string' ? Number(value.trim()) : NaN;
-  if (!Number.isFinite(raw) || raw <= 0) return DEFAULT_TABLET_IDLE_SECONDS;
-  return Math.min(MAX_TABLET_IDLE_SECONDS, Math.max(MIN_TABLET_IDLE_SECONDS, Math.round(raw)));
-}
+export const parseIdleSeconds = parseBoothIdleSeconds;
 
 /** `on`/`off` style flags; null when absent or unrecognised. */
 export function parseOnOff(value: unknown): boolean | null {
@@ -172,69 +182,14 @@ export function stripTabletProfileFromUrl(pathname: string, search: string, hash
 }
 
 // ---------------------------------------------------------------------------
-// Idle reset
+// Idle reset — the booth reset's rules, under the names the tablet check uses
 // ---------------------------------------------------------------------------
 
-export type TabletIdleVerdict =
-  | { kind: 'active' }
-  /** The "still there?" countdown: any touch, input or agent activity cancels it. */
-  | { kind: 'warning'; secondsLeft: number }
-  /** The booking is done; the tablet starts over for the next visitor shortly. */
-  | { kind: 'complete-countdown'; secondsLeft: number }
-  | { kind: 'reset'; reason: 'idle' | 'booking-complete' };
-
-export interface TabletIdleInput {
-  nowMs: number;
-  /** Last visitor input, touch, or agent activity. */
-  lastActivityMs: number;
-  /**
-   * Something is happening right now: the agent is planning or speaking, the
-   * visitor is mid-utterance, a stage is loading. Never reset under it.
-   */
-  busy: boolean;
-  idleSeconds: number;
-  /** When the booking-complete screen appeared, or null while it is not shown. */
-  bookingCompleteSinceMs: number | null;
-}
-
-export function decideTabletIdle(input: TabletIdleInput): TabletIdleVerdict {
-  if (input.busy) return { kind: 'active' };
-  const idleMs = parseIdleSeconds(input.idleSeconds) * 1000;
-  if (input.bookingCompleteSinceMs !== null) {
-    // Measured from the later of "the screen appeared" and "the agent fell
-    // silent", so the confirmation is never cut off mid-sentence.
-    const since = Math.max(input.bookingCompleteSinceMs, input.lastActivityMs);
-    const shown = input.nowMs - since;
-    if (shown >= TABLET_BOOKING_COMPLETE_RESET_MS) return { kind: 'reset', reason: 'booking-complete' };
-    return {
-      kind: 'complete-countdown',
-      secondsLeft: Math.max(1, Math.ceil((TABLET_BOOKING_COMPLETE_RESET_MS - shown) / 1000)),
-    };
-  }
-  const elapsed = input.nowMs - input.lastActivityMs;
-  if (elapsed >= idleMs) return { kind: 'reset', reason: 'idle' };
-  if (elapsed >= idleMs - TABLET_IDLE_WARNING_MS) {
-    return { kind: 'warning', secondsLeft: Math.max(1, Math.ceil((idleMs - elapsed) / 1000)) };
-  }
-  return { kind: 'active' };
-}
-
-/**
- * How long "busy" may hold off the idle clock with nothing else happening.
- *
- * Busy means the agent is planning or speaking or the visitor is mid-utterance,
- * and none of those lasts a minute and a half on its own. A flag that stays up
- * longer is stuck — a planner request that hung, a voice status that never
- * came back — and an unattended tablet must still reach its next visitor.
- * Any real activity (a touch, a message, a screen change) starts the hold over.
- */
-export const TABLET_BUSY_HOLD_MAX_MS = 90_000;
-
-export function tabletBusyHolds(input: { busy: boolean; busySinceMs: number | null; nowMs: number }): boolean {
-  if (!input.busy) return false;
-  if (input.busySinceMs === null) return true;
-  return input.nowMs - input.busySinceMs < TABLET_BUSY_HOLD_MAX_MS;
-}
+export type TabletIdleVerdict = BoothIdleVerdict;
+export type TabletIdleInput = BoothIdleInput & { idleSeconds: number };
+export const decideTabletIdle: (input: TabletIdleInput) => TabletIdleVerdict = decideBoothIdle;
+export const TABLET_BUSY_HOLD_MAX_MS = BOOTH_BUSY_HOLD_MAX_MS;
+export const tabletBusyHolds = boothBusyHolds;
 
 /**
  * Whether a session record found at launch should be finished rather than
