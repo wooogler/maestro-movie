@@ -16,6 +16,11 @@ import { useEffect, useRef } from 'react';
 import { LANGUAGES, LANGUAGE_LABELS, languagePack, useLanguage } from '../../i18n';
 import { VoiceVerbosityPanel } from '../voice/VoiceVerbosityPanel';
 import { PushToTalkSettings } from './PushToTalkSettings';
+import type { FullTuningLayoutMode } from '../chat/fullTuningLayout';
+import {
+  setFullTuningLayoutOverride,
+  useFullTuningLayoutOverride,
+} from '../chat/useFullTuningLayoutMode';
 import {
   DEFAULT_PLANNER_MODEL,
   PLANNER_MODEL_OPTIONS,
@@ -53,7 +58,22 @@ interface SettingsModalProps {
    * for it anyway.
    */
   pushToTalkAvailable?: boolean;
+  /**
+   * Demo only: pin the screen arrangement (kiosk / desktop / phone) or let it
+   * be detected. The study conditions have one layout and nothing to pick.
+   */
+  layoutOverrideAvailable?: boolean;
 }
+
+const LAYOUT_CHOICES: ReadonlyArray<{
+  key: 'layoutAuto' | 'layoutKiosk' | 'layoutDesktop' | 'layoutCompact';
+  mode: FullTuningLayoutMode | null;
+}> = [
+  { key: 'layoutAuto', mode: null },
+  { key: 'layoutKiosk', mode: 'kiosk' },
+  { key: 'layoutDesktop', mode: 'desktop' },
+  { key: 'layoutCompact', mode: 'compact' },
+];
 
 export function SettingsModal({
   onClose,
@@ -68,8 +88,10 @@ export function SettingsModal({
   onPlannerModelChange,
   plannerTurnStats = [],
   pushToTalkAvailable = false,
+  layoutOverrideAvailable = false,
 }: SettingsModalProps) {
   const { language, setLanguage, s } = useLanguage();
+  const layoutOverride = useFullTuningLayoutOverride();
   const closeRef = useRef<HTMLButtonElement | null>(null);
 
   // Escape closes it, and focus starts on the close button — the modal covers
@@ -146,6 +168,43 @@ export function SettingsModal({
             })}
           </div>
         </section>
+
+        {layoutOverrideAvailable ? (
+          <section className="mb-6">
+            <div className="mb-2">
+              <h3 className="text-xs font-semibold uppercase tracking-wide text-fg-muted">
+                {s.layoutLabel}
+              </h3>
+              <p className="mt-1 text-xs text-fg-muted">{s.layoutHint}</p>
+            </div>
+            {/*
+              The same choice as `?layout=`, and remembered the same way. For
+              the presenter whose rotated monitor reports itself as landscape,
+              or who wants the desktop columns back on a portrait screen.
+            */}
+            <div role="radiogroup" aria-label={s.layoutLabel} className="grid grid-cols-4 gap-2">
+              {LAYOUT_CHOICES.map((choice) => {
+                const selected = choice.mode === layoutOverride;
+                return (
+                  <button
+                    key={choice.key}
+                    type="button"
+                    role="radio"
+                    aria-checked={selected}
+                    onClick={() => setFullTuningLayoutOverride(choice.mode)}
+                    className={`min-h-11 rounded-xl border px-2 py-2 text-sm font-medium transition-colors ${
+                      selected
+                        ? 'border-primary bg-primary text-primary-fg'
+                        : 'border-dark-border bg-dark text-fg hover:border-primary hover:text-fg-strong'
+                    }`}
+                  >
+                    {s[choice.key]}
+                  </button>
+                );
+              })}
+            </div>
+          </section>
+        ) : null}
 
         {plannerModelAvailable ? (
           <section className="mb-6">

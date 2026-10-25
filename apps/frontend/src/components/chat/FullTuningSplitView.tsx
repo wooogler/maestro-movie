@@ -1,5 +1,5 @@
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
-import type { AnimationEvent as ReactAnimationEvent, CSSProperties } from 'react';
+import type { AnimationEvent as ReactAnimationEvent, CSSProperties, ReactNode } from 'react';
 import { StageRenderer, GUI_LIST_SETTLED_EVENT, LIST_MOTION } from '../../renderer';
 import { isBookingCompleteMeta, type UISpec, type Stage } from '../../spec';
 import type {
@@ -22,7 +22,13 @@ import {
   linkedTranscriptText,
   transcriptText,
 } from './voiceTranscript';
-import { guiStageFitScale, splitViewLayout } from './fullTuningLayout';
+import {
+  guiStageFitScale,
+  KIOSK_GUI_CARD_WIDTH_PX,
+  KIOSK_GUI_MAX_SCALE,
+  splitViewLayout,
+  type FullTuningLayoutMode,
+} from './fullTuningLayout';
 import { isCompactViewport } from '../../utils/viewport';
 import { useLanguage } from '../../i18n';
 import type { AgentPreference } from '../../agent/protocol';
@@ -71,6 +77,22 @@ interface FullTuningSplitViewProps {
    * the paper describes at every window width.
    */
   compactLayoutEnabled?: boolean;
+  /**
+   * Demo only: which arrangement to draw (`selectLayoutMode`). Absent, the
+   * `lg` breakpoint picks between compact and desktop as it always did.
+   */
+  layoutMode?: FullTuningLayoutMode;
+  /**
+   * Kiosk only: the memory panel for the bottom band's second column. On a
+   * desktop the page draws it as a rail of its own; in kiosk mode that rail is
+   * gone and the panel lives here, beside the conversation.
+   */
+  memoryPanel?: ReactNode;
+  /**
+   * Kiosk only: the devices roster and the phone-pairing QR, one tap away
+   * behind a button at the foot of the memory column.
+   */
+  devicesPanel?: ReactNode;
   /**
    * Demo only: the agent's preference memory, live and forgotten, so a card
    * the agent changed because of a stored preference can name it. Absent in
@@ -401,6 +423,9 @@ export function FullTuningSplitView({
   onConfirm,
   initialConversationCollapsed,
   compactLayoutEnabled = false,
+  layoutMode,
+  memoryPanel = null,
+  devicesPanel = null,
   memoryPreferences = null,
 }: FullTuningSplitViewProps) {
   const timelineContainerRef = useRef<HTMLDivElement | null>(null);
@@ -432,9 +457,20 @@ export function FullTuningSplitView({
   // the right default on a desktop, where the conversation is a column beside
   // the GUI rather than a sheet on top of it — but on a phone that same default
   // meant arriving at a screen entirely covered by the transcript.
-  const [conversationCollapsed, setConversationCollapsed] = useState(
-    () => initialConversationCollapsed ?? (compactLayoutEnabled && isCompactViewport())
+  const [conversationCollapsedState, setConversationCollapsed] = useState(
+    () =>
+      initialConversationCollapsed ??
+      (compactLayoutEnabled && (layoutMode ? layoutMode === 'compact' : isCompactViewport()))
   );
+  /*
+    The kiosk has no collapsed conversation: it is a band of its own, not a
+    sheet over the GUI. The stored choice is kept rather than reset, so a
+    presenter who flips the screen back to desktop finds it as they left it.
+  */
+  const kioskLayout = compactLayoutEnabled && layoutMode === 'kiosk';
+  const conversationCollapsed = kioskLayout ? false : conversationCollapsedState;
+  const guiCardWidthPx = kioskLayout ? KIOSK_GUI_CARD_WIDTH_PX : GUI_CARD_BASE_WIDTH_PX;
+  const [devicesOpen, setDevicesOpen] = useState(false);
 
   /*
     One pass, because snapshots and timeline rows are now interleaved: a stage
@@ -819,7 +855,12 @@ export function FullTuningSplitView({
     container: containerClass,
     conversationSection: conversationSectionClass,
     showFloatingToggle,
-  } = splitViewLayout(conversationCollapsed, compactLayoutEnabled);
+    stageViewport: stageViewportClass,
+    floatingCluster: floatingClusterClass,
+    stageSection: stageSectionClass,
+    memorySection: memorySectionClass,
+    conversationCollapsible,
+  } = splitViewLayout(conversationCollapsed, compactLayoutEnabled, compactLayoutEnabled ? layoutMode : undefined);
   /*
     Ids to rail words, rebuilt only when memory changes. Unknown ids are
     dropped rather than printed: an id is the agent's, not the visitor's.
@@ -1061,9 +1102,24 @@ export function FullTuningSplitView({
     stage's own height is re-read on each snapshot instead.
   */
   const guiTransitionActive = transitionState !== null;
+  /** Whether the previous fit pass was skipped for a slide; see `endedSlide`. */
+  const fitSkippedForSlideRef = useRef(false);
 
   useLayoutEffect(() => {
-    if (guiTransitionActive || guiTransitionActiveRef.current) return;
+    /*
+      Kiosk only: the first pass after a slide eases to its scale instead of
+      snapping. Every stage is scaled UP to fill the kiosk band, so neighbouring
+      stages differ by a lot more than on a desktop (seat map 1.49, confirm
+      1.68 on a 1080x1920 monitor), and a snap that size at the end of a slide
+      reads as a second jolt. The ease is the same compositor-only transform
+      transition the list re-fit uses.
+    */
+    const endedSlide = fitSkippedForSlideRef.current;
+    if (guiTransitionActive || guiTransitionActiveRef.current) {
+      fitSkippedForSlideRef.current = true;
+      return;
+    }
+    fitSkippedForSlideRef.current = false;
     const viewport = guiViewportRef.current;
     const content = guiContentRef.current;
     if (!viewport || !content) return;
@@ -1071,12 +1127,18 @@ export function FullTuningSplitView({
     // `clientHeight` includes the element's own padding, and the collapsed
     // compact layout pads this viewport to keep the stage clear of the floating
     // conversation button. Padding is not room the stage gets to use.
-    const availableHeight = (): number => {
+    const px = (value: string): number => {
+      const parsed = Number.parseFloat(value);
+      return Number.isFinite(parsed) ? parsed : 0;
+    };
+    const availableBox = (): { height: number; width: number } => {
       const style = window.getComputedStyle(viewport);
-      const top = Number.parseFloat(style.paddingTop);
-      const bottom = Number.parseFloat(style.paddingBottom);
-      const padding = (Number.isFinite(top) ? top : 0) + (Number.isFinite(bottom) ? bottom : 0);
-      return viewport.clientHeight - padding;
+      return {
+        height: viewport.clientHeight - px(style.paddingTop) - px(style.paddingBottom),
+        // Only the kiosk fits to width as well; read in the same pass, so it
+        // costs no second layout.
+        width: viewport.clientWidth - px(style.paddingLeft) - px(style.paddingRight),
+      };
     };
 
     // `eased`: only the re-read after a list settles glides to its new scale
@@ -1089,12 +1151,31 @@ export function FullTuningSplitView({
     // before paint; with the list now settling *after* its snapshot, that was
     // a second full re-render per filter, inside the animation.
     const recalc = (eased = false) => {
+      const box = availableBox();
+      /*
+        Kiosk: the band is wider and much taller than the card, so the stage
+        is fitted to both and allowed to grow. The card's width is a constant
+        (it is set inline), so it is not measured.
+      */
+      const scale = kioskLayout
+        ? guiStageFitScale(box.height, content.scrollHeight, {
+            availableWidth: box.width,
+            naturalWidth: KIOSK_GUI_CARD_WIDTH_PX,
+            maxScale: KIOSK_GUI_MAX_SCALE,
+          })
+        : guiStageFitScale(box.height, content.scrollHeight);
+      const transform = `scale(${scale})`;
+      const unchanged = content.style.transform === transform;
+      // Kiosk: a pass that changes nothing must not strip the ease class off a
+      // running post-slide ease — the ResizeObserver's first callback lands in
+      // the very frame that ease starts, and dropping the transition there
+      // would snap it to the end after all.
+      if (kioskLayout && unchanged) return;
       content.classList.toggle('gui-fit-scale-eased', eased);
-      const transform = `scale(${guiStageFitScale(availableHeight(), content.scrollHeight)})`;
-      if (content.style.transform !== transform) content.style.transform = transform;
+      if (!unchanged) content.style.transform = transform;
     };
 
-    recalc();
+    recalc(kioskLayout && endedSlide);
     guiFitRecalcRef.current = recalc;
     if (typeof ResizeObserver === 'undefined') {
       return () => {
@@ -1107,7 +1188,7 @@ export function FullTuningSplitView({
       guiFitRecalcRef.current = null;
       ro.disconnect();
     };
-  }, [activeSnapshot?.id, guiTransitionActive]);
+  }, [activeSnapshot?.id, guiTransitionActive, kioskLayout]);
 
   /*
     ...and re-read once more when an option list has finished changing height.
@@ -1147,8 +1228,11 @@ export function FullTuningSplitView({
 
   return (
     <div className="min-h-0 flex-1 overflow-hidden px-2 py-2 sm:px-4 sm:py-4">
-      <div className={containerClass}>
-        <section className="relative min-h-0 overflow-hidden rounded-2xl border border-dark-border bg-dark px-4 py-1">
+      <div className={containerClass} data-layout={kioskLayout ? 'kiosk' : undefined}>
+        <section
+          className={`relative min-h-0 overflow-hidden rounded-2xl border border-dark-border bg-dark px-4 py-1 ${stageSectionClass}`}
+          data-testid="gui-stage-section"
+        >
           <div className="flex h-full flex-col gap-0">
             <div className="grid grid-cols-[1fr_auto_1fr] items-center">
               <div />
@@ -1164,9 +1248,7 @@ export function FullTuningSplitView({
 
             <div
               ref={guiViewportRef}
-              className={`flex-1 overflow-hidden flex items-center justify-center px-2 sm:px-4 ${
-                showFloatingToggle ? 'pb-16 lg:pb-0' : ''
-              }`}
+              className={`flex-1 overflow-hidden flex items-center justify-center px-2 sm:px-4 ${stageViewportClass}`}
             >
               {activeSnapshot ? (
                 <div
@@ -1179,6 +1261,9 @@ export function FullTuningSplitView({
                     {
                       transformOrigin: 'center center',
                       '--gui-fit-scale-ms': `${LIST_MOTION.fitScaleMs}ms`,
+                      // Kiosk: the scaled box is the card and nothing wider, so
+                      // an upscaled stage never carries empty panel past the band.
+                      ...(kioskLayout ? { maxWidth: `${guiCardWidthPx}px` } : null),
                     } as CSSProperties
                   }
                 >
@@ -1215,6 +1300,7 @@ export function FullTuningSplitView({
                       snapshot={transitionState.outgoing}
                       voiceModeEnabled={voiceModeEnabled}
                       describePreferences={describePreferences}
+                      cardWidthPx={guiCardWidthPx}
                       interactive={false}
                       agentActive={false}
                       speaking={false}
@@ -1237,6 +1323,7 @@ export function FullTuningSplitView({
                       snapshot={activeSnapshot}
                       voiceModeEnabled={voiceModeEnabled}
                       describePreferences={describePreferences}
+                      cardWidthPx={guiCardWidthPx}
                       interactive={activeSnapshot.isLatest && !interactionLocked}
                       agentActive={Boolean(isAgentTyping && activeSnapshot.isLatest)}
                       speaking={activeSnapshot.linkedAssistantMessageId === speakingMessageId}
@@ -1270,7 +1357,7 @@ export function FullTuningSplitView({
           at the transcript can still tell the agent is doing something.
         */}
         {showFloatingToggle ? (
-          <div className="absolute bottom-3 right-3 z-30 flex items-center gap-2 lg:hidden">
+          <div className={`absolute bottom-3 right-3 z-30 flex items-center gap-2 ${floatingClusterClass}`}>
             {/*
               The mic rides along. Folding the whole conversation behind one
               button would otherwise put voice — the thing this demo is about —
@@ -1329,7 +1416,9 @@ export function FullTuningSplitView({
           </div>
         ) : null}
 
-        <section className={conversationSectionClass}>
+        <section className={`${conversationSectionClass} ${kioskLayout && !memoryPanel ? 'col-span-2' : ''}`}>
+              {/* The kiosk's conversation is a band of its own and cannot be folded away. */}
+              {conversationCollapsible ? (
               <button
                 type="button"
                 onClick={() => setConversationCollapsed((current) => !current)}
@@ -1358,6 +1447,7 @@ export function FullTuningSplitView({
                   {conversationCollapsed ? 'Show' : 'Hide'}
                 </span>
               </button>
+              ) : null}
 
               <div className={conversationCollapsed ? 'hidden' : 'relative min-h-0 flex-1'}>
                 <div
@@ -1410,7 +1500,7 @@ export function FullTuningSplitView({
                 </div>
 
                 {isAgentTyping ? (
-                  <div className="pointer-events-none absolute inset-x-0 bottom-3 z-10 px-4">
+                  <div className={`pointer-events-none absolute inset-x-0 bottom-3 z-10 px-4 ${kioskLayout ? 'kiosk-readable' : ''}`}>
                     <div className="mx-auto flex w-full max-w-5xl justify-center">
                       <AgentActivityOverlay showElapsed={showAgentElapsed} />
                     </div>
@@ -1426,7 +1516,7 @@ export function FullTuningSplitView({
                 session could not be advanced from there at all.
               */}
               {onSubmitInput ? (
-                <div className="shrink-0 border-t border-dark-border">
+                <div className={`shrink-0 border-t border-dark-border ${kioskLayout ? 'kiosk-readable' : ''}`}>
                   <ChatInput
                     chatWidthPx={null}
                     disabled={inputDisabled}
@@ -1445,6 +1535,62 @@ export function FullTuningSplitView({
                 </div>
               ) : null}
         </section>
+
+        {/*
+          Kiosk: the memory panel, beside the conversation in the bottom band.
+          On a desktop the page draws this as a rail of its own; here the rail
+          is gone and the same panel (the page hands it in) lives in the band.
+
+          The devices roster and pairing QR are one tap away behind the button
+          at the foot, not stacked under the chips: a QR below a growing list
+          scrolls out of reach exactly when a visitor reaches for their phone.
+        */}
+        {kioskLayout && memoryPanel ? (
+          <aside className={memorySectionClass} aria-label={s.memory} data-testid="kiosk-memory-column">
+            <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-4 py-3">
+              <div className="kiosk-readable">{memoryPanel}</div>
+            </div>
+            {devicesPanel ? (
+              <div className="kiosk-readable shrink-0 border-t border-dark-border p-2">
+                <button
+                  type="button"
+                  onClick={() => setDevicesOpen(true)}
+                  aria-expanded={devicesOpen}
+                  aria-controls="kiosk-devices-panel"
+                  className="flex min-h-12 w-full items-center justify-center gap-2 rounded-xl border border-dark-border bg-dark px-3 py-2 text-xs font-semibold uppercase tracking-wide text-fg hover:border-primary hover:text-fg-strong"
+                >
+                  <svg className="h-5 w-5 shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden="true">
+                    <path d="M4 4h6v6H4zM14 4h6v6h-6zM4 14h6v6H4z" strokeLinejoin="round" />
+                    <path d="M14 14h2v2h-2zM18 18h2v2h-2zM18 14h2M14 18v2" strokeLinecap="round" />
+                  </svg>
+                  <span className="truncate">{s.pairVoiceTitle}</span>
+                </button>
+              </div>
+            ) : null}
+            {devicesPanel && devicesOpen ? (
+              <div
+                id="kiosk-devices-panel"
+                role="dialog"
+                aria-label={s.devicesTitle}
+                className="absolute inset-0 z-20 flex flex-col bg-dark-light"
+              >
+                <div className="flex shrink-0 items-center justify-between gap-3 border-b border-dark-border px-4 py-2">
+                  <span className="text-sm font-semibold text-fg-strong">{s.devicesTitle}</span>
+                  <button
+                    type="button"
+                    onClick={() => setDevicesOpen(false)}
+                    className="min-h-11 rounded-lg border border-dark-border px-4 text-sm font-medium text-fg hover:border-primary hover:text-fg-strong"
+                  >
+                    {s.close}
+                  </button>
+                </div>
+                <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-4 py-3">
+                  <div className="kiosk-readable">{devicesPanel}</div>
+                </div>
+              </div>
+            ) : null}
+          </aside>
+        ) : null}
       </div>
     </div>
   );
@@ -1461,6 +1607,8 @@ interface GuiSnapshotCardProps {
    * not re-rendered by anything else. Absent outside the demo.
    */
   describePreferences?: (ids: string[]) => AdaptationPreferenceLabel[];
+  /** The card's width at scale 1: the desktop's 440px, or the kiosk's wider card. */
+  cardWidthPx?: number;
   agentActive?: boolean;
   speaking?: boolean;
   onSelect?: (id: string) => void;
@@ -1488,6 +1636,7 @@ const GuiSnapshotCard = memo(function GuiSnapshotCard({
   interactive,
   voiceModeEnabled = false,
   describePreferences,
+  cardWidthPx = GUI_CARD_BASE_WIDTH_PX,
   agentActive = false,
   speaking = false,
   onSelect,
@@ -1520,7 +1669,7 @@ const GuiSnapshotCard = memo(function GuiSnapshotCard({
       : () => {};
 
   return (
-    <div className="w-full max-w-full" style={{ width: `${GUI_CARD_BASE_WIDTH_PX}px` }}>
+    <div className="w-full max-w-full" style={{ width: `${cardWidthPx}px` }} data-testid="gui-snapshot-card">
       <SelectionBreadcrumb spec={snapshot.spec} stage={snapshot.stage} subdued={!interactive} />
       <div
         className={`rounded-2xl border bg-dark p-4 transition-colors ${frameClass}`}

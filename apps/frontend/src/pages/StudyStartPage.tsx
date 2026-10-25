@@ -971,6 +971,7 @@ export function StudyStartPage({
           plannerModel={plannerModelSetting.model}
           onPlannerModelChange={plannerModelSetting.handleChange}
           pushToTalkAvailable={demoMode}
+          layoutOverrideAvailable={demoMode}
         />
       ) : null}
 
